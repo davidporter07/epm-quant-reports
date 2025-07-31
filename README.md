@@ -18,7 +18,7 @@ Each report includes:
 
 ## Live Report Access
 
-- [View latest report](https://davidporter07.github.io/epm-quant-reports/) *(active once GitHub Pages is set up)*
+- [View latest report](https://davidporter07.github.io/epm-quant-reports/)
 
 ## PDF Version
 
