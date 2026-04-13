@@ -32,7 +32,7 @@ SERVER_HOST = "192.168.1.145"
 SERVER_PATH = "/opt/epm-market-intelligence"
 SSH_KEY = str(Path.home() / ".ssh" / "epm_server")
 
-SYNC_DIRS = ["charts", "data", "epm-quant-reports", "static", "services", "feature_store", "config"]
+SYNC_DIRS = ["charts", "data", "epm-quant-reports", "static", "services", "feature_store", "config", "providers"]
 
 # Individual Python files at root level that are part of the app
 SYNC_PY_FILES = [

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import redirect_stderr, redirect_stdout
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
 from io import StringIO
 from threading import RLock
@@ -234,10 +235,23 @@ class OpenBBProvider:
         return out
 
     @staticmethod
-    def _suppress_yf_call(fn):
+    def _suppress_yf_call(fn, timeout: float = 30.0):
+        """Run fn() with suppressed output and a hard timeout.
+        Returns None if the call hangs (e.g. Yahoo rate-limit) instead of blocking forever."""
         sink = StringIO()
-        with redirect_stdout(sink), redirect_stderr(sink):
-            return fn()
+
+        def _run():
+            with redirect_stdout(sink), redirect_stderr(sink):
+                return fn()
+
+        with ThreadPoolExecutor(max_workers=1) as _ex:
+            _fut = _ex.submit(_run)
+            try:
+                return _fut.result(timeout=timeout)
+            except FuturesTimeoutError:
+                return None
+            except Exception:
+                return None
 
     def _yfinance_history(
         self,

@@ -51,6 +51,46 @@ DEV_MODE = "--dev" in sys.argv
 if DEV_MODE:
     print("  DEV MODE: skipping YCharts scrape, charts, PDF, and server sync.")
 
+# ---------------------------------------------------------------------------
+# Background service pause — freeze MiroFish + Kronos during the pipeline so
+# they don't compete for GPU/VRAM with DL training and commentary generation.
+# SIGSTOP freezes a process in-place (port stays bound, no restart needed).
+# SIGCONT resumes it. atexit ensures thaw runs even if the pipeline crashes.
+# ---------------------------------------------------------------------------
+import signal as _signal
+import atexit as _atexit
+
+_FREEZE_PATTERNS = ["mirofish", "kronos"]
+
+def _freeze_background_services() -> None:
+    if DEV_MODE:
+        return
+    import subprocess as _sp
+    for pattern in _FREEZE_PATTERNS:
+        try:
+            result = _sp.run(["pgrep", "-f", pattern], capture_output=True, text=True)
+            pids = [p.strip() for p in result.stdout.strip().split() if p.strip()]
+            for pid in pids:
+                os.kill(int(pid), _signal.SIGSTOP)
+                print(f"  [pipeline] Froze PID {pid} ({pattern})")
+        except Exception as exc:
+            print(f"  [pipeline] Could not freeze {pattern}: {exc}")
+
+def _thaw_background_services() -> None:
+    import subprocess as _sp
+    for pattern in _FREEZE_PATTERNS:
+        try:
+            result = _sp.run(["pgrep", "-f", pattern], capture_output=True, text=True)
+            pids = [p.strip() for p in result.stdout.strip().split() if p.strip()]
+            for pid in pids:
+                os.kill(int(pid), _signal.SIGCONT)
+                print(f"  [pipeline] Resumed PID {pid} ({pattern})")
+        except Exception as exc:
+            print(f"  [pipeline] Could not resume {pattern}: {exc}")
+
+_atexit.register(_thaw_background_services)
+_freeze_background_services()
+
 # --- Setup paths ---
 os.makedirs("archive", exist_ok=True)
 today_str = datetime.today().strftime("%Y-%m-%d")

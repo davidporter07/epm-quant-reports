@@ -1318,6 +1318,17 @@ def main() -> int:
     bonds_tbl        = fetch_bonds_table()
     print(f"  [OK] Bonds: {len(bonds_tbl)} instruments")
 
+    # Sync the 10-Yr Yield in the snapshot to the authoritative Treasury.gov value
+    # so the market snapshot table and the yield table always agree on level/direction.
+    _tsy_10y = bonds_tbl.get("10-Year Yield")
+    if _tsy_10y and _tsy_10y.get("level") is not None:
+        snapshot["10-Yr Yield"] = {
+            "level":      _tsy_10y["level"],
+            "change":     _tsy_10y.get("change"),
+            "pct_change": _tsy_10y.get("pct_change"),
+        }
+        print(f"  [OK] Snapshot 10-Yr synced to Treasury.gov: {_tsy_10y['level']:.3f}%")
+
     tech_levels      = fetch_technical_levels()
     print(f"  [OK] Technical levels: {len(tech_levels)} assets")
 
@@ -1418,12 +1429,28 @@ def main() -> int:
         "oecd_cli":   oecd_cli,
     }
 
+    # Derive authoritative DXY direction so the LLM writes consistent currency commentary.
+    # Individual pair tickers (EURUSD=X etc.) can have stale/misaligned timestamps vs DXY.
+    # We tell the LLM explicitly what direction the dollar moved and what that implies.
+    _dxy_pct = (snapshot.get("U.S. Dollar (DXY)") or {}).get("pct_change") or 0.0
+    if _dxy_pct > 0.05:
+        _dollar_direction = "strengthened"
+        _major_pairs_direction = "EUR/USD, GBP/USD, AUD/USD fell (dollar strengthened)"
+    elif _dxy_pct < -0.05:
+        _dollar_direction = "weakened"
+        _major_pairs_direction = "EUR/USD, GBP/USD, AUD/USD rose (dollar weakened)"
+    else:
+        _dollar_direction = "flat"
+        _major_pairs_direction = "Major pairs were little changed"
+
     # Build a concise summary of key data for the LLM
     key_data_summary = {
         "us_equities": {k: snapshot[k] for k in ["S&P 500", "Nasdaq 100"] if k in snapshot},
         "rates":       {k: snapshot[k] for k in ["10-Yr Yield"] if k in snapshot},
         "commodities": {k: snapshot[k] for k in ["Gold", "WTI Crude"] if k in snapshot},
         "dollar":      {k: snapshot[k] for k in ["U.S. Dollar (DXY)"] if k in snapshot},
+        "dollar_direction":      _dollar_direction,
+        "major_pairs_direction": _major_pairs_direction,
         "global_equities_highlights": {
             k: v for k, v in list(global_markets.items())[:6]
         },
