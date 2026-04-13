@@ -1,0 +1,58 @@
+# Secrets
+epm_secrets.py
+config/ycharts_creds.json
+config/*.key
+config/*.secret
+
+# Virtual env
+.venv/
+venv/
+.venv_openbb/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Generated outputs
+archive/
+charts/
+report.html
+report.pdf
+email_log.txt
+email_sent.log
+
+# Generated data outputs — exclude entire data/ directory
+data/
+
+# Feature store data
+feature_store/
+
+# Extracted assets / debug
+epm_logos_extracted/
+commentary_debug/
+portfolios.png
+
+# Playwright
+.playwright-cli/
+
+# Claude Code / GitNexus session data
+memory/
+.claude/
+
+# Nested git repo (report publisher — retired)
+epm-quant-reports/
+
+# Model backups and experiments (keep only active models)
+models/experiment/
+models/*_backup.pt
+models/*_pre_*.pt
+
+# Empty placeholder files
+python
+ssh
+
+# Packages/zips/patches
+*.zip
+*.diff
+.gitnexus
+static/js/plotly-2.35.2.min.js

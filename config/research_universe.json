@@ -1,0 +1,22 @@
+{
+  "_comment": "Curated large-cap US equity research universe. Used for broad-universe feature testing and shadow DL model training. NOT the published MAG7 forecast universe. Edit this list to adjust scope; re-run build_training_dataset.py --tickers $(python -c \"import json; print(','.join(json.load(open('config/research_universe.json'))['tickers']))\") --out data/research_panel.parquet",
+  "version": "1.0",
+  "created": "2026-04-01",
+  "tickers": [
+    "AAPL", "MSFT", "AMZN", "NVDA", "GOOG", "META", "TSLA",
+    "GOOGL", "NFLX", "AMD", "QCOM", "AVGO", "TXN", "CRM", "ADBE", "ORCL", "CSCO", "INTC",
+    "JNJ", "UNH", "LLY", "MRK", "ABBV", "PFE", "AMGN",
+    "JPM", "BAC", "GS", "MS", "V", "MA", "WFC",
+    "WMT", "COST", "HD", "MCD", "NKE", "PG", "KO", "SBUX", "DIS",
+    "XOM", "CVX",
+    "CAT", "GE", "HON", "RTX", "UNP",
+    "BRK-B", "PYPL"
+  ],
+  "notes": {
+    "size": "50 tickers — MAG7 + large-cap US equities across 7 sectors",
+    "sectors": "Tech (18), Healthcare (7), Financials (7), Consumer (9), Energy (2), Industrials (5), Other (2)",
+    "excluded": "Full S&P 500 intentionally excluded — too many illiquid/small-cap names that add noise without improving feature signal",
+    "institutional_features": "momentum_z/quality_z/value_z will be NaN for non-MAG7 tickers (institutional_features.parquet is MAG7-only). Price-derived features work for all tickers.",
+    "published_universe": "MAG7 only — monitor.py and report outputs are unchanged"
+  }
+}

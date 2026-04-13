@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Deep Analysis Report — AAPL | EPM</title>
+  <style>
+    :root {
+      --bg: #030a16;
+      --bg-2: #050e1c;
+      --panel: rgba(8,18,40,0.93);
+      --panel-2: #09152a;
+      --panel-3: #0e1e38;
+      --text: #e8eeff;
+      --muted: #7d94c0;
+      --border: rgba(28,52,96,0.62);
+      --accent: #d4a84b;
+      --accent-2: #1b4e98;
+      --accent-live: #38bdf8;
+      --green: #22c55e;
+      --red: #ef4444;
+      --radius: 10px;
+      --shadow: 0 2px 16px rgba(0,0,0,0.32);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+      font-size: 14px;
+    }
+    .page { max-width: 960px; margin: 0 auto; padding: 32px 24px 80px; }
+
+    /* ── REPORT HEADER ── */
+    .report-header {
+      background: linear-gradient(160deg, #07112a, rgba(5,12,28,0.95));
+      border: 1px solid rgba(212,168,75,0.35);
+      border-radius: 14px;
+      padding: 28px 32px;
+      margin-bottom: 20px;
+      position: relative;
+      overflow: hidden;
+    }
+    .report-header::before {
+      content: '';
+      position: absolute; top: 0; left: 0; right: 0; height: 4px;
+      background: linear-gradient(90deg, #d4a84b 0%, #f0c878 50%, #d4a84b 100%);
+    }
+    .report-type-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.12em;
+      background: rgba(212,168,75,0.12);
+      color: var(--accent); border: 1px solid rgba(212,168,75,0.3);
+      padding: 4px 12px; border-radius: 20px;
+      margin-bottom: 14px;
+    }
+    .report-ticker { font-size: 42px; font-weight: 900; color: var(--accent); line-height: 1; }
+    .report-name { font-size: 16px; color: var(--text); margin-top: 4px; opacity: 0.85; }
+    .report-meta { font-size: 11px; color: var(--muted); margin-top: 6px; }
+    .report-header-right { position: absolute; right: 32px; top: 50%; transform: translateY(-50%); text-align: right; }
+    .signal-badge {
+      font-size: 24px; font-weight: 900;
+      padding: 10px 22px; border-radius: 10px;
+      margin-bottom: 6px; display: inline-block;
+    }
+    .signal-bearish { background: rgba(239,68,68,0.15); color: #ef4444; border: 2px solid rgba(239,68,68,0.35); }
+    .signal-bullish { background: rgba(34,197,94,0.15); color: #22c55e; border: 2px solid rgba(34,197,94,0.35); }
+    .signal-neutral { background: rgba(125,148,192,0.15); color: var(--muted); border: 2px solid rgba(125,148,192,0.3); }
+    .signal-confidence { font-size: 12px; color: var(--muted); }
+
+    /* ── CARDS ── */
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px 22px;
+      margin-bottom: 16px;
+    }
+    .card-accent { border-left: 3px solid var(--accent); }
+    .card-blue { border-left: 3px solid var(--accent-live); }
+    .card-green { border-left: 3px solid var(--green); }
+    .card-red { border-left: 3px solid var(--red); }
+    .section-label {
+      font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.12em;
+      color: var(--muted); margin-bottom: 12px; display: flex; align-items: center; gap: 8px;
+    }
+    .section-label::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+    h2 { font-size: 16px; font-weight: 800; color: var(--text); margin-bottom: 14px; }
+    h3 { font-size: 14px; font-weight: 700; color: var(--accent); margin-bottom: 10px; }
+    p { font-size: 13px; color: var(--muted); line-height: 1.7; }
+
+    /* ── GRID ── */
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+    .grid-7 { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; margin-bottom: 16px; }
+
+    /* ── HERO METRICS ── */
+    .metric-hero { text-align: center; padding: 12px 8px; }
+    .metric-hero-val { font-size: 22px; font-weight: 800; }
+    .metric-hero-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-top: 2px; }
+    .metric-hero-change { font-size: 12px; margin-top: 2px; }
+
+    /* ── KV TABLE ── */
+    .kv-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid rgba(28,52,96,0.3); }
+    .kv-row:last-child { border-bottom: none; }
+    .kv-label { font-size: 12px; color: var(--muted); }
+    .kv-val { font-size: 12px; font-weight: 600; color: var(--text); }
+    .green { color: var(--green); }
+    .red { color: var(--red); }
+    .gold { color: var(--accent); }
+    .blue { color: var(--accent-live); }
+
+    /* ── RETURNS TABLE ── */
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th { text-align: left; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--border); }
+    td { padding: 7px 8px; border-bottom: 1px solid rgba(28,52,96,0.2); color: var(--text); }
+    tr:last-child td { border-bottom: none; }
+    .td-positive { color: var(--green); font-weight: 600; }
+    .td-negative { color: var(--red); font-weight: 600; }
+    .td-neutral { color: var(--muted); }
+
+    /* ── KRONOS SECTION ── */
+    .candle-chart {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      height: 180px;
+      position: relative;
+      display: flex; align-items: flex-end; gap: 6px;
+      overflow: hidden;
+    }
+    .candle-wrap { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+    .candle { width: 10px; border-radius: 2px; }
+    .candle-wick { width: 1px; height: 8px; border-radius: 1px; }
+    .candle-up { background: rgba(34,197,94,0.7); }
+    .candle-down { background: rgba(239,68,68,0.7); }
+    .candle-wick-up { background: #22c55e; }
+    .candle-wick-down { background: #ef4444; }
+    .kronos-forecast {
+      border: 2px dashed rgba(212,168,75,0.5);
+      border-radius: 8px;
+      padding: 4px 8px;
+      margin-left: 8px;
+      position: relative;
+    }
+    .kronos-label {
+      position: absolute; top: -10px; left: 8px;
+      font-size: 9px; font-weight: 700; color: var(--accent);
+      text-transform: uppercase; letter-spacing: 0.1em;
+      background: var(--panel-2); padding: 0 4px;
+    }
+
+    /* ── PROBABILITY BAR ── */
+    .prob-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+    .prob-label { font-size: 11px; color: var(--muted); width: 100px; flex-shrink: 0; }
+    .prob-bar-wrap { flex: 1; background: var(--panel-3); border-radius: 4px; height: 8px; overflow: hidden; }
+    .prob-bar { height: 100%; border-radius: 4px; }
+    .prob-pct { font-size: 11px; font-weight: 700; width: 36px; text-align: right; }
+
+    /* ── SWARM / MIROFISH ── */
+    .swarm-consensus {
+      display: flex; align-items: center; gap: 0;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      margin-bottom: 14px;
+    }
+    .swarm-bull {
+      flex: 38; padding: 14px 16px;
+      background: rgba(239,68,68,0.08);
+      border-right: 1px solid var(--border);
+    }
+    .swarm-bear {
+      flex: 62; padding: 14px 16px;
+      background: rgba(34,197,94,0.04);
+    }
+    .swarm-pct { font-size: 28px; font-weight: 900; }
+    .swarm-side-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; font-weight: 700; margin-bottom: 2px; }
+
+    .strand-card {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin-bottom: 8px;
+    }
+    .strand-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .strand-tag { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; padding: 2px 7px; border-radius: 3px; }
+    .strand-tag-bear { background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3); }
+    .strand-tag-bull { background: rgba(34,197,94,0.15); color: #22c55e; border: 1px solid rgba(34,197,94,0.3); }
+    .strand-agents { font-size: 10px; color: var(--muted); margin-left: auto; }
+    .strand-text { font-size: 12px; color: var(--text); line-height: 1.6; }
+    .strand-weight { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+    /* ── MODEL ENSEMBLE TABLE ── */
+    .model-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid rgba(28,52,96,0.2); }
+    .model-row:last-child { border-bottom: none; }
+    .model-name { font-size: 12px; color: var(--text); width: 140px; flex-shrink: 0; }
+    .model-signal { font-size: 11px; font-weight: 700; padding: 2px 10px; border-radius: 4px; min-width: 70px; text-align: center; }
+    .signal-up { background: rgba(34,197,94,0.12); color: #22c55e; border: 1px solid rgba(34,197,94,0.25); }
+    .signal-down { background: rgba(239,68,68,0.12); color: #ef4444; border: 1px solid rgba(239,68,68,0.25); }
+    .signal-hold { background: rgba(125,148,192,0.12); color: var(--muted); border: 1px solid rgba(125,148,192,0.2); }
+    .model-conf { flex: 1; }
+    .conf-bar-wrap { background: var(--panel-3); border-radius: 3px; height: 5px; overflow: hidden; }
+    .conf-bar { height: 100%; border-radius: 3px; }
+    .conf-val { font-size: 10px; color: var(--muted); text-align: right; margin-top: 2px; }
+
+    /* ── UNIFIED OUTLOOK ── */
+    .outlook-box {
+      background: linear-gradient(160deg, #07112a, rgba(5,12,28,0.9));
+      border: 1px solid rgba(239,68,68,0.3);
+      border-radius: 12px;
+      padding: 22px 24px;
+      margin-bottom: 16px;
+    }
+    .outlook-box.bullish { border-color: rgba(34,197,94,0.3); }
+    .outlook-box.neutral { border-color: rgba(125,148,192,0.3); }
+
+    .outlook-signal-row { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; }
+    .big-signal { font-size: 32px; font-weight: 900; padding: 10px 24px; border-radius: 10px; }
+    .big-signal-bearish { background: rgba(239,68,68,0.12); color: #ef4444; border: 2px solid rgba(239,68,68,0.3); }
+    .outlook-meta { font-size: 12px; color: var(--muted); line-height: 1.7; }
+    .conf-pct { font-size: 20px; font-weight: 800; color: var(--text); }
+
+    .catalyst-list { list-style: none; }
+    .catalyst-item {
+      display: flex; align-items: flex-start; gap: 10px;
+      padding: 8px 0; border-bottom: 1px solid rgba(28,52,96,0.2);
+      font-size: 12px; color: var(--muted); line-height: 1.5;
+    }
+    .catalyst-item:last-child { border-bottom: none; }
+    .catalyst-icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
+
+    /* ── QUICK REPORT ALTERNATE HEADER ── */
+    .quick-header {
+      background: linear-gradient(160deg, #061525, rgba(5,12,28,0.95));
+      border: 1px solid rgba(56,189,248,0.3);
+      border-radius: 14px;
+      padding: 24px 28px;
+      margin-bottom: 20px;
+      position: relative;
+      overflow: hidden;
+    }
+    .quick-header::before {
+      content: '';
+      position: absolute; top: 0; left: 0; right: 0; height: 3px;
+      background: linear-gradient(90deg, #38bdf8, #7dd3fc);
+    }
+
+    /* ── EXPORT BAR ── */
+    .export-bar {
+      display: flex; align-items: center; justify-content: space-between;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 18px;
+      margin-bottom: 28px;
+    }
+    .btn { padding: 8px 18px; border-radius: 8px; border: none; font-size: 13px; font-weight: 600; cursor: pointer; }
+    .btn-primary { background: var(--accent-2); color: #fff; }
+    .btn-gold { background: linear-gradient(135deg, #d4a84b, #a07828); color: #0a1928; }
+    .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--muted); }
+
+    .divider-label {
+      text-align: center;
+      font-size: 22px; font-weight: 900;
+      padding: 36px 0 8px;
+      color: var(--accent);
+    }
+    .divider-sub { text-align: center; font-size: 13px; color: var(--muted); margin-bottom: 32px; }
+    hr { border: none; border-top: 2px dashed var(--border); margin: 40px 0; }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ══════════════════════════════════════════
+       ① QUICK PERFORMANCE REPORT
+       ══════════════════════════════════════════ -->
+
+  <div class="divider-label">Report Type A</div>
+  <div class="divider-sub">Performance Snapshot &nbsp;·&nbsp; ~1 minute &nbsp;·&nbsp; EPM pipeline data only</div>
+
+  <div class="export-bar">
+    <div>
+      <div style="font-size:13px;font-weight:700">AAPL — Performance Snapshot</div>
+      <div style="font-size:11px;color:var(--muted)">Generated April 10, 2026 · 9:48 AM CST · EPM Market Intelligence</div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-ghost">Share</button>
+      <button class="btn btn-primary">Export PDF</button>
+    </div>
+  </div>
+
+  <!-- QUICK HEADER -->
+  <div class="quick-header">
+    <div style="display:inline-flex;align-items:center;gap:6px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.12em;color:var(--accent-live);background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.25);padding:4px 12px;border-radius:20px;margin-bottom:12px">
+      ⚡ Performance Snapshot
+    </div>
+    <div style="display:flex;align-items:flex-start;justify-content:space-between">
+      <div>
+        <div style="font-size:38px;font-weight:900;color:var(--accent-live);line-height:1">AAPL</div>
+        <div style="font-size:15px;color:var(--text);margin-top:4px">Apple Inc. &nbsp;·&nbsp; NASDAQ &nbsp;·&nbsp; Technology</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">Generated April 10, 2026 · 9:48 AM CST</div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:32px;font-weight:800">$195.82</div>
+        <div style="font-size:13px;color:var(--red)">−1.43 (−0.72%) today</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">YTD: <span class="red">−14.1%</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- HERO METRICS -->
+  <div class="grid-3" style="margin-bottom:16px">
+    <div class="card" style="padding:14px 8px">
+      <div class="grid-3" style="gap:0;margin:0">
+        <div class="metric-hero" style="border-right:1px solid var(--border)">
+          <div class="metric-hero-val red">−14.1%</div>
+          <div class="metric-hero-label">YTD</div>
+        </div>
+        <div class="metric-hero" style="border-right:1px solid var(--border)">
+          <div class="metric-hero-val">1.23</div>
+          <div class="metric-hero-label">Beta</div>
+        </div>
+        <div class="metric-hero">
+          <div class="metric-hero-val">0.84</div>
+          <div class="metric-hero-label">Sharpe 1Y</div>
+        </div>
+      </div>
+    </div>
+    <div class="card" style="grid-column:span 2;padding:14px 8px">
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:0">
+        <div class="metric-hero" style="border-right:1px solid var(--border)"><div class="metric-hero-val red">−0.72%</div><div class="metric-hero-label">1D</div></div>
+        <div class="metric-hero" style="border-right:1px solid var(--border)"><div class="metric-hero-val red">−3.1%</div><div class="metric-hero-label">1W</div></div>
+        <div class="metric-hero" style="border-right:1px solid var(--border)"><div class="metric-hero-val red">−8.2%</div><div class="metric-hero-label">1M</div></div>
+        <div class="metric-hero" style="border-right:1px solid var(--border)"><div class="metric-hero-val red">−14.1%</div><div class="metric-hero-label">YTD</div></div>
+        <div class="metric-hero"><div class="metric-hero-val green">+4.8%</div><div class="metric-hero-label">1Y</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RISK + TECHNICAL -->
+  <div class="grid-2">
+    <div class="card card-blue">
+      <div class="section-label">Risk Metrics</div>
+      <div class="kv-row"><span class="kv-label">Sharpe Ratio (1Y)</span><span class="kv-val">0.84</span></div>
+      <div class="kv-row"><span class="kv-label">Sortino Ratio (1Y)</span><span class="kv-val">1.12</span></div>
+      <div class="kv-row"><span class="kv-label">Max Drawdown</span><span class="kv-val red">−28.4%</span></div>
+      <div class="kv-row"><span class="kv-label">Std Dev (Ann.)</span><span class="kv-val">22.1%</span></div>
+      <div class="kv-row"><span class="kv-label">VaR 95% (1D)</span><span class="kv-val red">−2.3%</span></div>
+      <div class="kv-row"><span class="kv-label">Beta vs S&amp;P</span><span class="kv-val">1.23</span></div>
+      <div class="kv-row"><span class="kv-label">Alpha (1Y)</span><span class="kv-val red">−3.2%</span></div>
+    </div>
+    <div class="card card-blue">
+      <div class="section-label">Technical Levels</div>
+      <div class="kv-row"><span class="kv-label">Price vs MA20</span><span class="kv-val red">−4.8% below</span></div>
+      <div class="kv-row"><span class="kv-label">Price vs MA50</span><span class="kv-val red">−9.2% below</span></div>
+      <div class="kv-row"><span class="kv-label">Price vs MA200</span><span class="kv-val red">−7.1% below</span></div>
+      <div class="kv-row"><span class="kv-label">Key Support</span><span class="kv-val">$188.50</span></div>
+      <div class="kv-row"><span class="kv-label">Key Resistance</span><span class="kv-val">$205.00</span></div>
+      <div class="kv-row"><span class="kv-label">52W High</span><span class="kv-val">$237.23</span></div>
+      <div class="kv-row"><span class="kv-label">52W Low</span><span class="kv-val">$164.08</span></div>
+    </div>
+  </div>
+
+  <!-- EPM MODEL CONSENSUS (Quick) -->
+  <div class="card" style="margin-top:0">
+    <div class="section-label">EPM 7-Model Ensemble</div>
+    <div class="model-row">
+      <span class="model-name">Linear Regression</span>
+      <span class="model-signal signal-down">BEARISH</span>
+      <div class="model-conf"><div class="conf-bar-wrap"><div class="conf-bar" style="width:72%;background:#ef4444"></div></div><div class="conf-val">72% confidence</div></div>
+    </div>
+    <div class="model-row">
+      <span class="model-name">Fama-French</span>
+      <span class="model-signal signal-down">BEARISH</span>
+      <div class="model-conf"><div class="conf-bar-wrap"><div class="conf-bar" style="width:65%;background:#ef4444"></div></div><div class="conf-val">65% confidence</div></div>
+    </div>
+    <div class="model-row">
+      <span class="model-name">Institutional Flow</span>
+      <span class="model-signal signal-hold">NEUTRAL</span>
+      <div class="model-conf"><div class="conf-bar-wrap"><div class="conf-bar" style="width:48%;background:#7d94c0"></div></div><div class="conf-val">48% confidence</div></div>
+    </div>
+    <div class="model-row">
+      <span class="model-name">ML (XGBoost)</span>
+      <span class="model-signal signal-down">BEARISH</span>
+      <div class="model-conf"><div class="conf-bar-wrap"><div class="conf-bar" style="width:78%;background:#ef4444"></div></div><div class="conf-val">78% confidence</div></div>
+    </div>
+    <div class="model-row">
+      <span class="model-name">Deep Learning</span>
+      <span class="model-signal signal-down">BEARISH</span>
+      <div class="model-conf"><div class="conf-bar-wrap"><div class="conf-bar" style="width:81%;background:#ef4444"></div></div><div class="conf-val">81% confidence</div></div>
+    </div>
+    <div class="model-row">
+      <span class="model-name">ARIMAX</span>
+      <span class="model-signal signal-hold">NEUTRAL</span>
+      <div class="model-conf"><div class="conf-bar-wrap"><div class="conf-bar" style="width:44%;background:#7d94c0"></div></div><div class="conf-val">44% confidence</div></div>
+    </div>
+    <div class="model-row">
+      <span class="model-name">QuantConnect</span>
+      <span class="model-signal signal-down">BEARISH</span>
+      <div class="model-conf"><div class="conf-bar-wrap"><div class="conf-bar" style="width:69%;background:#ef4444"></div></div><div class="conf-val">69% confidence</div></div>
+    </div>
+    <div style="margin-top:12px;padding:10px 14px;background:rgba(239,68,68,0.07);border-radius:8px;border:1px solid rgba(239,68,68,0.2)">
+      <div style="font-size:12px;font-weight:700;color:#ef4444">Ensemble Consensus: BEARISH &nbsp;·&nbsp; 5/7 models aligned &nbsp;·&nbsp; Avg confidence 68%</div>
+    </div>
+  </div>
+
+  <!-- AI NARRATIVE -->
+  <div class="card card-accent">
+    <div class="section-label">AI Analysis Summary</div>
+    <p style="margin-bottom:12px">
+      Apple Inc. (AAPL) is exhibiting near-term technical weakness, currently trading 7.1% below its 200-day moving average and 14.1% underwater year-to-date — a significant underperformance relative to the broader market. The bearish trifecta of below-MA price action, deteriorating momentum, and elevated beta (1.23) suggests continued headwinds in a risk-off environment.
+    </p>
+    <p style="margin-bottom:12px">
+      The EPM model ensemble is 5/7 bearish with the highest-conviction signals coming from the Deep Learning model (81%) and XGBoost (78%). ARIMAX and Institutional Flow models show muted conviction, suggesting the macro/flow environment has not yet decisively turned — the bearish thesis is primarily technically and momentum-driven.
+    </p>
+    <p>
+      <strong style="color:var(--text)">Near-term outlook:</strong> Key support at $188.50 is being tested. A close below this level would open the path toward the 52-week low region ($164). Resistance sits at the $205 level (prior support-turned-resistance). The risk/reward for new long positions is unfavorable in the 1–5 day window based on current model consensus.
+    </p>
+  </div>
+
+  <hr />
+
+  <!-- ══════════════════════════════════════════
+       ② DEEP SWARM ANALYSIS REPORT
+       ══════════════════════════════════════════ -->
+
+  <div class="divider-label">Report Type B</div>
+  <div class="divider-sub">Deep Swarm Analysis &nbsp;·&nbsp; 5–10 minutes &nbsp;·&nbsp; Kronos + MiroFish + EPM Ensemble</div>
+
+  <div class="export-bar">
+    <div>
+      <div style="font-size:13px;font-weight:700">AAPL — Deep Swarm Analysis</div>
+      <div style="font-size:11px;color:var(--muted)">Generated April 10, 2026 · 9:58 AM CST · 40 agent rounds · Kronos-mini + MiroFish + qwen2.5:14b</div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-ghost">Share</button>
+      <button class="btn btn-gold">Export Deep Report PDF</button>
+    </div>
+  </div>
+
+  <!-- DEEP HEADER -->
+  <div class="report-header">
+    <div style="display:inline-flex;align-items:center;gap:6px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.12em;color:var(--accent);background:rgba(212,168,75,0.1);border:1px solid rgba(212,168,75,0.28);padding:4px 12px;border-radius:20px;margin-bottom:14px">
+      ◈ Deep Swarm Analysis
+    </div>
+    <div style="display:flex;align-items:flex-start;justify-content:space-between">
+      <div>
+        <div class="report-ticker">AAPL</div>
+        <div class="report-name">Apple Inc. &nbsp;·&nbsp; NASDAQ &nbsp;·&nbsp; Technology</div>
+        <div class="report-meta">April 10, 2026 · 9:58 AM CST &nbsp;·&nbsp; Kronos-mini (4.1M params) + MiroFish 40-agent swarm (qwen2.5:7b) + EPM 7-model ensemble + qwen2.5:14b synthesis</div>
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <div style="font-size:11px;padding:3px 10px;border-radius:4px;background:rgba(239,68,68,0.1);color:#ef4444;border:1px solid rgba(239,68,68,0.25)">Kronos: BEARISH BIAS</div>
+          <div style="font-size:11px;padding:3px 10px;border-radius:4px;background:rgba(239,68,68,0.1);color:#ef4444;border:1px solid rgba(239,68,68,0.25)">Swarm: 62% BEARISH</div>
+          <div style="font-size:11px;padding:3px 10px;border-radius:4px;background:rgba(239,68,68,0.1);color:#ef4444;border:1px solid rgba(239,68,68,0.25)">EPM: 5/7 BEARISH</div>
+        </div>
+      </div>
+      <div style="text-align:right;min-width:160px">
+        <div class="signal-badge signal-bearish">BEARISH</div>
+        <div class="signal-confidence">72% confidence &nbsp;·&nbsp; 1–5 day horizon</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:8px">$195.82 &nbsp;·&nbsp; −0.72% today</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- EXECUTIVE SUMMARY -->
+  <div class="card card-accent" style="margin-bottom:16px">
+    <div class="section-label">Executive Summary</div>
+    <p>
+      Three independent analytical frameworks — Kronos price-pattern forecasting, MiroFish swarm simulation, and the EPM 7-model ensemble — have converged on a near-term bearish signal for AAPL with 72% composite confidence.
+      Kronos identifies a distribution compression pattern in recent OHLCV data suggesting high probability of a downward resolution.
+      The MiroFish swarm (40-agent, 40-round simulation seeded with 14 recent headlines and EPM model outputs) reached 62% bearish consensus, with the dominant narrative strand centered on tariff impact on supply chain and deteriorating consumer sentiment.
+      The EPM ensemble (5/7 bearish) corroborates this view from a quantitative momentum angle.
+      Key near-term levels: support $188.50 (critical), resistance $205.00.
+      <strong style="color:var(--text)"> No position recommended without a catalyst reversal or a close above $201.</strong>
+    </p>
+  </div>
+
+  <!-- ── SECTION 1: KRONOS ── -->
+  <div class="card">
+    <div class="section-label">Section 1 — Kronos OHLCV Pattern Analysis</div>
+    <h2>Price Pattern Forecast</h2>
+    <p style="margin-bottom:16px">Kronos-mini analyzed 1,260 daily OHLCV candles and generated a probabilistic distribution over the next 5 trading sessions. Output below is the modal forecast trajectory with confidence intervals.</p>
+
+    <!-- Simulated candle chart -->
+    <div class="candle-chart" style="height:160px;align-items:flex-end;padding:12px 16px">
+      <!-- Historical candles (simplified visual) -->
+      <div style="display:flex;gap:5px;align-items:flex-end;height:100%;padding-right:12px;border-right:2px dashed rgba(212,168,75,0.3)">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:2px"><div style="width:1px;height:8px;background:#22c55e"></div><div style="width:10px;height:30px;background:rgba(34,197,94,0.6);border-radius:2px"></div></div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:2px"><div style="width:1px;height:12px;background:#ef4444"></div><div style="width:10px;height:22px;background:rgba(239,68,68,0.6);border-radius:2px"></div></div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:2px"><div style="width:1px;height:6px;background:#22c55e"></div><div style="width:10px;height:18px;background:rgba(34,197,94,0.6);border-radius:2px"></div></div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:2px"><div style="width:1px;height:14px;background:#ef4444"></div><div style="width:10px;height:28px;background:rgba(239,68,68,0.6);border-radius:2px"></div></div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:2px"><div style="width:1px;height:9px;background:#ef4444"></div><div style="width:10px;height:35px;background:rgba(239,68,68,0.6);border-radius:2px"></div></div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:2px"><div style="width:1px;height:5px;background:#22c55e"></div><div style="width:10px;height:14px;background:rgba(34,197,94,0.6);border-radius:2px"></div></div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:2px"><div style="width:1px;height:11px;background:#ef4444"></div><div style="width:10px;height:32px;background:rgba(239,68,68,0.6);border-radius:2px"></div></div>
+      </div>
+      <!-- Kronos forecast (dashed box) -->
+      <div style="border:2px dashed rgba(212,168,75,0.5);border-radius:8px;padding:8px 12px;position:relative;flex:1;display:flex;align-items:flex-end;gap:8px;height:85%">
+        <div style="position:absolute;top:-10px;left:8px;font-size:9px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:0.1em;background:var(--panel-2);padding:0 5px">Kronos Forecast →</div>
+        <!-- Projected candles with uncertainty bands -->
+        <div style="display:flex;flex-direction:column;align-items:center;gap:2px">
+          <div style="width:14px;height:16px;background:rgba(239,68,68,0.5);border-radius:2px;border:1px solid rgba(239,68,68,0.4)"></div>
+          <div style="font-size:9px;color:var(--muted)">D+1</div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:2px">
+          <div style="width:14px;height:20px;background:rgba(239,68,68,0.4);border-radius:2px;border:1px dashed rgba(239,68,68,0.4)"></div>
+          <div style="font-size:9px;color:var(--muted)">D+2</div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:2px">
+          <div style="width:14px;height:24px;background:rgba(239,68,68,0.3);border-radius:2px;border:1px dashed rgba(239,68,68,0.3)"></div>
+          <div style="font-size:9px;color:var(--muted)">D+3</div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:2px">
+          <div style="width:14px;height:18px;background:rgba(125,148,192,0.3);border-radius:2px;border:1px dashed rgba(125,148,192,0.3)"></div>
+          <div style="font-size:9px;color:var(--muted)">D+4</div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:2px">
+          <div style="width:14px;height:12px;background:rgba(125,148,192,0.2);border-radius:2px;border:1px dashed rgba(125,148,192,0.25)"></div>
+          <div style="font-size:9px;color:var(--muted)">D+5</div>
+        </div>
+        <div style="margin-left:auto;font-size:10px;color:var(--muted)">Opacity = confidence<br>Dashed = widening uncertainty</div>
+      </div>
+    </div>
+
+    <div style="margin-top:14px">
+      <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:10px">Next-Session Outcome Probabilities</div>
+      <div class="prob-row">
+        <span class="prob-label">Strong down (&gt;2%)</span>
+        <div class="prob-bar-wrap"><div class="prob-bar" style="width:24%;background:#ef4444"></div></div>
+        <span class="prob-pct red">24%</span>
+      </div>
+      <div class="prob-row">
+        <span class="prob-label">Mild down (0–2%)</span>
+        <div class="prob-bar-wrap"><div class="prob-bar" style="width:38%;background:#f87171"></div></div>
+        <span class="prob-pct red">38%</span>
+      </div>
+      <div class="prob-row">
+        <span class="prob-label">Flat (±0.5%)</span>
+        <div class="prob-bar-wrap"><div class="prob-bar" style="width:18%;background:#7d94c0"></div></div>
+        <span class="prob-pct" style="color:var(--muted)">18%</span>
+      </div>
+      <div class="prob-row">
+        <span class="prob-label">Mild up (0–2%)</span>
+        <div class="prob-bar-wrap"><div class="prob-bar" style="width:14%;background:#4ade80"></div></div>
+        <span class="prob-pct green">14%</span>
+      </div>
+      <div class="prob-row">
+        <span class="prob-label">Strong up (&gt;2%)</span>
+        <div class="prob-bar-wrap"><div class="prob-bar" style="width:6%;background:#22c55e"></div></div>
+        <span class="prob-pct green">6%</span>
+      </div>
+    </div>
+
+    <div class="grid-2" style="margin-top:14px;margin-bottom:0">
+      <div style="background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:12px 14px">
+        <div class="kv-row"><span class="kv-label">Kronos signal</span><span class="kv-val red">Bearish bias (62% down probability)</span></div>
+        <div class="kv-row"><span class="kv-label">Pattern type</span><span class="kv-val">Distribution compression → breakdown</span></div>
+        <div class="kv-row"><span class="kv-label">5-day range (modal)</span><span class="kv-val">$183 – $198</span></div>
+      </div>
+      <div style="background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:12px 14px">
+        <div class="kv-row"><span class="kv-label">Model used</span><span class="kv-val">Kronos-mini (4.1M params)</span></div>
+        <div class="kv-row"><span class="kv-label">Input context</span><span class="kv-val">1,260 daily OHLCV candles</span></div>
+        <div class="kv-row"><span class="kv-label">Inference time</span><span class="kv-val">44 seconds</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── SECTION 2: MIROFISH SWARM ── -->
+  <div class="card">
+    <div class="section-label">Section 2 — MiroFish Swarm Intelligence</div>
+    <h2>40-Agent Simulation Consensus</h2>
+    <p style="margin-bottom:16px">MiroFish ran 40 simulation rounds with 12 active agents. Seeded with: 14 recent AAPL news headlines, EPM model forecasts, Kronos output, and 90-day price/feature data. Agents evolve independent theses through interaction and voting.</p>
+
+    <!-- BULL/BEAR SPLIT -->
+    <div class="swarm-consensus">
+      <div class="swarm-bull">
+        <div class="swarm-side-label" style="color:#ef4444">Bearish agents</div>
+        <div class="swarm-pct red">62%</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">7.4 avg confidence</div>
+      </div>
+      <div class="swarm-bear">
+        <div class="swarm-side-label" style="color:#22c55e">Bullish agents</div>
+        <div class="swarm-pct green">28%</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">5.1 avg confidence</div>
+      </div>
+      <div style="padding:14px 16px;border-left:1px solid var(--border)">
+        <div class="swarm-side-label" style="color:var(--muted)">Neutral</div>
+        <div class="swarm-pct" style="color:var(--muted)">10%</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">undecided</div>
+      </div>
+    </div>
+    <div style="margin-bottom:14px;font-size:11px;color:var(--muted);text-align:center">
+      12 agents · 40 rounds · 6m 22s elapsed · qwen2.5:7b on A2000 6GB
+    </div>
+
+    <!-- DOMINANT NARRATIVE STRANDS -->
+    <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:10px">Dominant Narrative Strands</div>
+
+    <div class="strand-card">
+      <div class="strand-header">
+        <span class="strand-tag strand-tag-bear">Bearish</span>
+        <span style="font-size:12px;color:var(--text);font-weight:600">Tariff headwinds on hardware supply chain</span>
+        <span class="strand-agents">8 / 12 agents</span>
+      </div>
+      <div class="strand-text">
+        Agents repeatedly converged on Apple's supply chain exposure to Chinese manufacturing amid escalating tariff pressures. The 54% China-origin tariff on electronic components creates a binary risk: margin compression if not passed through, or demand destruction if prices rise. This narrative dominated early rounds and persisted through the final simulation state.
+      </div>
+      <div class="strand-weight">Strand weight: 0.68 &nbsp;·&nbsp; Emerged round 4 &nbsp;·&nbsp; Persistent through round 40</div>
+    </div>
+
+    <div class="strand-card">
+      <div class="strand-header">
+        <span class="strand-tag strand-tag-bear">Bearish</span>
+        <span style="font-size:12px;color:var(--text);font-weight:600">Consumer discretionary weakness in high-rate environment</span>
+        <span class="strand-agents">6 / 12 agents</span>
+      </div>
+      <div class="strand-text">
+        Premium hardware faces demand elasticity risk as consumer credit tightens. Agents noted iPhone upgrade cycle slowing in recent quarters, with AI features not yet delivering the "killer app" inflection needed to drive a supercycle. Near-term demand outlook is cautious.
+      </div>
+      <div class="strand-weight">Strand weight: 0.52 &nbsp;·&nbsp; Emerged round 8 &nbsp;·&nbsp; Reinforced through round 35</div>
+    </div>
+
+    <div class="strand-card">
+      <div class="strand-header">
+        <span class="strand-tag strand-tag-bull">Bullish dissent</span>
+        <span style="font-size:12px;color:var(--text);font-weight:600">Services revenue insulation + India manufacturing pivot</span>
+        <span class="strand-agents">4 / 12 agents</span>
+      </div>
+      <div class="strand-text">
+        Minority position. Bullish agents argued Apple's growing services segment (App Store, Apple TV+, iCloud) provides meaningful revenue insulation from hardware tariff risk. Additionally, the India manufacturing ramp-up could partially offset China exposure within 12–18 months. This thesis was unable to overcome the near-term momentum evidence in the majority.
+      </div>
+      <div class="strand-weight">Strand weight: 0.31 &nbsp;·&nbsp; Emerged round 12 &nbsp;·&nbsp; Minority dissent through round 40</div>
+    </div>
+
+    <div style="background:var(--panel-2);border:1px solid rgba(212,168,75,0.2);border-radius:8px;padding:12px 14px;margin-top:4px">
+      <div style="font-size:11px;font-weight:700;color:var(--accent);margin-bottom:6px">Swarm Key Insight</div>
+      <div style="font-size:12px;color:var(--text);line-height:1.6">
+        Swarm convergence was unusually rapid (final consensus by round 32 vs typical round 38), suggesting high-conviction alignment. The tariff narrative was the single most repeated theme across all 12 agents, appearing in 94% of agent-to-agent interactions.
+      </div>
+    </div>
+  </div>
+
+  <!-- ── SECTION 3: EPM ENSEMBLE (same as quick but condensed) ── -->
+  <div class="card">
+    <div class="section-label">Section 3 — EPM 7-Model Ensemble</div>
+    <h2>Quantitative Model Consensus</h2>
+    <div class="model-row"><span class="model-name">Linear Regression</span><span class="model-signal signal-down">BEARISH</span><div class="model-conf"><div class="conf-bar-wrap"><div class="conf-bar" style="width:72%;background:#ef4444"></div></div><div class="conf-val">72%</div></div></div>
+    <div class="model-row"><span class="model-name">Fama-French</span><span class="model-signal signal-down">BEARISH</span><div class="model-conf"><div class="conf-bar-wrap"><div class="conf-bar" style="width:65%;background:#ef4444"></div></div><div class="conf-val">65%</div></div></div>
+    <div class="model-row"><span class="model-name">Institutional Flow</span><span class="model-signal signal-hold">NEUTRAL</span><div class="model-conf"><div class="conf-bar-wrap"><div class="conf-bar" style="width:48%;background:#7d94c0"></div></div><div class="conf-val">48%</div></div></div>
+    <div class="model-row"><span class="model-name">ML (XGBoost)</span><span class="model-signal signal-down">BEARISH</span><div class="model-conf"><div class="conf-bar-wrap"><div class="conf-bar" style="width:78%;background:#ef4444"></div></div><div class="conf-val">78%</div></div></div>
+    <div class="model-row"><span class="model-name">Deep Learning</span><span class="model-signal signal-down">BEARISH</span><div class="model-conf"><div class="conf-bar-wrap"><div class="conf-bar" style="width:81%;background:#ef4444"></div></div><div class="conf-val">81%</div></div></div>
+    <div class="model-row"><span class="model-name">ARIMAX</span><span class="model-signal signal-hold">NEUTRAL</span><div class="model-conf"><div class="conf-bar-wrap"><div class="conf-bar" style="width:44%;background:#7d94c0"></div></div><div class="conf-val">44%</div></div></div>
+    <div class="model-row"><span class="model-name">QuantConnect</span><span class="model-signal signal-down">BEARISH</span><div class="model-conf"><div class="conf-bar-wrap"><div class="conf-bar" style="width:69%;background:#ef4444"></div></div><div class="conf-val">69%</div></div></div>
+  </div>
+
+  <!-- ── SECTION 4: UNIFIED OUTLOOK ── -->
+  <div class="card outlook-box">
+    <div class="section-label">Section 4 — Unified Signal</div>
+    <h2>Synthesized Outlook</h2>
+
+    <div class="outlook-signal-row">
+      <div class="big-signal big-signal-bearish">BEARISH</div>
+      <div>
+        <div class="conf-pct">72% composite confidence</div>
+        <div class="outlook-meta">
+          Time horizon: 1–5 trading days<br>
+          3 frameworks aligned: Kronos (62%) + MiroFish swarm (62%) + EPM ensemble (5/7)
+        </div>
+      </div>
+    </div>
+
+    <!-- CATALYST LIST -->
+    <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:8px;margin-top:4px">Key Catalysts Identified</div>
+    <ul class="catalyst-list">
+      <li class="catalyst-item"><span class="catalyst-icon">⬇</span><div><strong style="color:var(--text)">Tariff pressure on hardware margins</strong> — China-origin tariffs create binary margin/demand risk. Near-term unresolved.</div></li>
+      <li class="catalyst-item"><span class="catalyst-icon">⬇</span><div><strong style="color:var(--text)">Price action below all major MAs</strong> — Technical structure is bearish; no reversal signal confirmed.</div></li>
+      <li class="catalyst-item"><span class="catalyst-icon">⬇</span><div><strong style="color:var(--text)">Consumer discretionary slowdown</strong> — Premium hardware demand sensitivity in current macro regime.</div></li>
+      <li class="catalyst-item"><span class="catalyst-icon">⬆</span><div><strong style="color:var(--text)">Services revenue buffer (bullish risk)</strong> — Structural shift toward software offsets hardware cyclicality. Upside catalyst if services beat expectations.</div></li>
+      <li class="catalyst-item"><span class="catalyst-icon">⬆</span><div><strong style="color:var(--text)">India manufacturing optionality (bullish risk)</strong> — Long-term supply chain diversification reduces tariff exposure. Not a near-term catalyst.</div></li>
+    </ul>
+
+    <!-- AI SYNTHESIS NARRATIVE -->
+    <div style="margin-top:16px">
+      <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:10px">AI Synthesis (qwen2.5:14b)</div>
+      <p style="margin-bottom:10px">
+        The convergence of three independent analytical frameworks — price-pattern (Kronos), narrative intelligence (MiroFish), and quantitative factor models (EPM ensemble) — on the same bearish signal increases conviction meaningfully. When qualitative and quantitative systems independently arrive at the same conclusion, the probability of a false signal decreases.
+      </p>
+      <p style="margin-bottom:10px">
+        The MiroFish swarm adds a dimension no quant model captures: the narrative acceleration around tariff policy. The speed of consensus formation (round 32 vs typical round 38) signals that bearish agents found strong logical support for their thesis in the seed material — specifically the news headlines. This is not panic-driven bearishness but structurally-reasoned pressure.
+      </p>
+      <p>
+        <strong style="color:var(--text)">Watch levels:</strong> A close below $188.50 (key support) confirms the bearish thesis and opens downside toward $178–$182. A recovery above $201 with volume would invalidate the near-term bearish case and warrants re-evaluation.
+        <strong style="color:var(--accent)"> This report does not constitute investment advice.</strong>
+      </p>
+    </div>
+  </div>
+
+  <!-- DISCLAIMER -->
+  <div style="margin-top:20px;padding:12px 16px;background:rgba(28,52,96,0.15);border:1px solid var(--border);border-radius:8px;font-size:11px;color:var(--muted);line-height:1.6">
+    <strong style="color:var(--text)">Disclaimer:</strong>
+    This report is generated by AI systems (Kronos foundation model, MiroFish swarm engine, EPM quant ensemble, qwen2.5 LLM) and is intended for research and informational purposes only.
+    It does not constitute financial advice, investment recommendations, or an offer to buy or sell securities.
+    AI-generated analysis may contain errors or reflect model biases. Always conduct your own due diligence.
+    &nbsp;·&nbsp; EPM Market Intelligence &nbsp;·&nbsp; April 10, 2026
+  </div>
+
+</div>
+</body>
+</html>

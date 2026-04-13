@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <defs>
+    <linearGradient id="dg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e8eef8"/>
+      <stop offset="40%" stop-color="#d4a84b"/>
+      <stop offset="100%" stop-color="#a07830"/>
+    </linearGradient>
+    <linearGradient id="dg2" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#c8d8f0" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#8898b8" stop-opacity="0.6"/>
+    </linearGradient>
+  </defs>
+  <!-- Diamond shape: top, right, bottom, left -->
+  <polygon points="16,2 30,14 16,30 2,14" fill="url(#dg)"/>
+  <!-- Inner facet top-left -->
+  <polygon points="16,2 2,14 16,14" fill="url(#dg2)" opacity="0.5"/>
+  <!-- Inner facet top-right -->
+  <polygon points="16,2 30,14 16,14" fill="#ffffff" opacity="0.18"/>
+</svg>

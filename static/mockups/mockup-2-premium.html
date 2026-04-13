@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Mockup 2 — Premium Dashboard</title>
+<style>
+  :root {
+    --bg:#030a16; --bg2:#05101f; --panel:rgba(10,20,44,0.92); --panel2:#0a1a38;
+    --panel3:#0f2040; --text:#e8eeff; --muted:#6b84b8; --border:rgba(30,55,110,0.5);
+    --accent:#d4a84b; --live:#60a5fa; --up:#4ade80; --dn:#fb7185;
+    --gold:#fbbf24; --mono:'Courier New',monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:'Georgia',serif;line-height:1.5;
+    background-image:radial-gradient(ellipse at 20% 0%,rgba(30,58,138,0.12) 0%,transparent 50%),
+    radial-gradient(ellipse at 80% 100%,rgba(120,53,15,0.06) 0%,transparent 50%)}
+
+  /* ── NAV ── */
+  .nav{background:rgba(3,8,22,0.96);border-bottom:1px solid var(--border);
+    padding:0 32px;display:flex;align-items:center;height:56px;gap:32px;
+    position:sticky;top:0;z-index:100;backdrop-filter:blur(12px)}
+  .logo{font-size:15px;font-weight:700;color:var(--accent);letter-spacing:.06em;
+    font-family:'Georgia',serif}
+  .logo span{color:var(--muted);font-weight:400}
+  .nav-links{display:flex;gap:0;margin-left:auto}
+  .nav-links a{padding:6px 16px;font-size:13px;color:var(--muted);font-family:Arial,sans-serif;
+    border-bottom:2px solid transparent;transition:.2s;letter-spacing:.02em}
+  .nav-links a.active{color:var(--text);border-color:var(--accent)}
+  .nav-links a:hover{color:var(--text)}
+  .live-chip{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--up);
+    padding:4px 10px;border:1px solid rgba(74,222,128,.2);border-radius:20px;font-family:Arial,sans-serif}
+  .live-dot{width:6px;height:6px;border-radius:50%;background:var(--up);animation:blink 1.5s infinite}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+
+  /* ── HERO STRIP ── */
+  .hero{background:linear-gradient(135deg,rgba(12,24,54,0.98),rgba(7,15,36,0.98));
+    border-bottom:1px solid var(--border);padding:20px 32px;
+    display:flex;gap:0;overflow-x:auto}
+  .hero-stat{padding:0 28px;border-right:1px solid var(--border);flex-shrink:0}
+  .hero-stat:first-child{padding-left:0}
+  .hero-stat:last-child{border-right:none}
+  .hs-label{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);
+    font-family:Arial,sans-serif;margin-bottom:4px}
+  .hs-val{font-size:24px;font-weight:700;font-family:var(--mono);line-height:1}
+  .hs-chg{font-size:12px;margin-top:3px;font-family:Arial,sans-serif}
+  .up{color:var(--up)} .dn{color:var(--dn)}
+
+  /* ── SHELL ── */
+  .shell{max-width:1680px;margin:0 auto;padding:28px 32px 60px}
+
+  /* ── PAGE TITLE ── */
+  .page-title{margin-bottom:24px}
+  .page-title h1{font-size:22px;font-weight:400;letter-spacing:.02em;color:var(--text)}
+  .page-title p{font-size:13px;color:var(--muted);margin-top:4px;font-family:Arial,sans-serif}
+
+  /* ── SECTION RULE ── */
+  .section-rule{display:flex;align-items:center;gap:12px;margin:28px 0 16px}
+  .section-rule-line{flex:1;height:1px;background:var(--border)}
+  .section-rule-label{font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--accent);font-family:Arial,sans-serif;font-weight:600}
+
+  /* ── CARD ── */
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:16px;
+    padding:22px 24px;box-shadow:0 2px 24px rgba(0,0,0,.3)}
+  .card-title{font-size:14px;font-weight:600;color:var(--text);font-family:Arial,sans-serif;
+    display:flex;align-items:center;gap:10px}
+  .card-sub{font-size:12px;color:var(--muted);margin-top:4px;font-family:Arial,sans-serif}
+  .tag{font-size:10px;padding:2px 8px;border-radius:8px;font-weight:600;letter-spacing:.04em;
+    font-family:Arial,sans-serif}
+  .tag-blue{background:rgba(96,165,250,.1);color:var(--live);border:1px solid rgba(96,165,250,.2)}
+  .tag-gold{background:rgba(212,168,75,.1);color:var(--accent);border:1px solid rgba(212,168,75,.2)}
+  .tag-green{background:rgba(74,222,128,.1);color:var(--up);border:1px solid rgba(74,222,128,.2)}
+  .tag-red{background:rgba(251,113,133,.1);color:var(--dn);border:1px solid rgba(251,113,133,.2)}
+
+  /* ── SENTIMENT ROW ── */
+  .sentiment-row{display:grid;grid-template-columns:280px 1fr;gap:20px;margin-bottom:20px}
+
+  /* Gauge */
+  .gauge-card{padding:24px 26px}
+  .gauge-wrap{display:flex;flex-direction:column;align-items:center;margin:12px 0 16px}
+  .gauge-sub{font-size:11px;color:var(--muted);font-family:Arial,sans-serif;text-align:center;margin-top:6px}
+  .gauge-num{font-size:48px;font-weight:700;font-family:var(--mono);line-height:1;color:var(--dn);margin-top:-8px}
+  .gauge-rating{font-size:13px;color:var(--dn);font-weight:600;font-family:Arial,sans-serif;
+    text-transform:uppercase;letter-spacing:.08em;margin-top:4px}
+  .gauge-components{display:flex;flex-direction:column;gap:8px}
+  .gc-row{display:flex;align-items:center;gap:10px;font-family:Arial,sans-serif}
+  .gc-label{font-size:11px;color:var(--muted);width:110px;flex-shrink:0}
+  .gc-bar-wrap{flex:1;height:4px;background:rgba(255,255,255,.08);border-radius:3px;overflow:hidden}
+  .gc-bar{height:100%;border-radius:3px;transition:.4s}
+  .gc-val{font-size:11px;font-family:var(--mono);width:36px;text-align:right}
+  .gc-expand{font-size:11px;color:var(--accent);cursor:pointer;text-align:center;margin-top:10px;
+    font-family:Arial,sans-serif;padding:6px;border:1px solid rgba(212,168,75,.2);border-radius:8px}
+  .gc-expand:hover{background:rgba(212,168,75,.06)}
+
+  /* Macro overview */
+  .macro-overview{display:flex;flex-direction:column;gap:12px}
+  .macro-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  .kpi{background:rgba(15,32,64,0.7);border:1px solid var(--border);border-radius:12px;
+    padding:14px 16px;transition:.2s}
+  .kpi:hover{border-color:rgba(96,165,250,.3);background:rgba(15,32,64,0.9)}
+  .kpi-label{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);
+    font-family:Arial,sans-serif}
+  .kpi-val{font-size:22px;font-weight:700;font-family:var(--mono);margin:4px 0 2px;line-height:1}
+  .kpi-detail{font-size:11px;font-family:Arial,sans-serif}
+  .kpi-badge{display:inline-block;font-size:9px;padding:2px 7px;border-radius:6px;
+    font-weight:700;font-family:Arial,sans-serif;margin-top:6px;letter-spacing:.04em}
+
+  /* ── CHART GRID ── */
+  .chart-grid{display:grid;grid-template-columns:3fr 2fr;gap:20px;margin-bottom:20px}
+  .chart-full{display:grid;grid-template-columns:repeat(2,1fr);gap:20px;margin-bottom:20px}
+  .chart-ph{background:rgba(10,24,54,0.6);border-radius:10px;border:1px dashed var(--border);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:6px;color:var(--muted);font-size:11px;font-family:Arial,sans-serif;letter-spacing:.06em;text-transform:uppercase}
+
+  /* ── RISK ON/OFF ── */
+  .risk-row{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px}
+  .etf-list{display:flex;flex-direction:column;gap:8px;margin-top:14px}
+  .etf{background:rgba(15,32,64,0.6);border:1px solid var(--border);border-radius:10px;
+    padding:12px 14px;display:flex;justify-content:space-between;align-items:center;
+    transition:.15s}
+  .etf:hover{border-color:rgba(96,165,250,.25);background:rgba(15,32,64,0.85)}
+  .etf-left{display:flex;gap:12px;align-items:center}
+  .etf-tick{font-size:15px;font-weight:700;font-family:var(--mono)}
+  .etf-name{font-size:11px;color:var(--muted);font-family:Arial,sans-serif}
+  .etf-rank{font-size:10px;color:var(--muted);background:rgba(255,255,255,.05);
+    border-radius:4px;padding:1px 6px;font-family:var(--mono)}
+  .etf-ret{font-size:16px;font-weight:700;font-family:var(--mono)}
+  .etf-1d{font-size:11px;font-family:Arial,sans-serif}
+
+  /* ── DATA TABLE ── */
+  .tbl{width:100%;border-collapse:collapse;font-family:Arial,sans-serif}
+  .tbl th{font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);
+    padding:8px 10px;border-bottom:1px solid var(--border);text-align:left;font-weight:600}
+  .tbl td{padding:9px 10px;border-bottom:1px solid rgba(30,55,110,.2);font-size:12px;font-family:var(--mono)}
+  .tbl tr:last-child td{border-bottom:none}
+  .tbl tr:hover td{background:rgba(15,32,64,.5)}
+  .tbl td:first-child{font-weight:700}
+  .tbl td.name{color:var(--muted);font-family:Arial,sans-serif;font-size:11px}
+
+  /* ── THREE COL LOWER ── */
+  .three-col{display:grid;grid-template-columns:2fr 1.5fr 1.5fr;gap:20px;margin-bottom:20px}
+
+  /* News */
+  .news-item{display:flex;gap:10px;padding:10px 0;border-bottom:1px solid rgba(30,55,110,.2)}
+  .news-item:last-child{border-bottom:none}
+  .news-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:4px}
+  .news-body{flex:1}
+  .news-hl{font-size:12px;color:var(--text);line-height:1.5;font-family:Arial,sans-serif}
+  .news-meta{font-size:10px;color:var(--muted);margin-top:3px;font-family:Arial,sans-serif}
+
+  /* Calendar */
+  .cal-item{padding:10px 0;border-bottom:1px solid rgba(30,55,110,.2);font-family:Arial,sans-serif}
+  .cal-item:last-child{border-bottom:none}
+  .cal-event{font-size:12px;font-weight:600;margin-bottom:2px}
+  .cal-meta{font-size:10px;color:var(--muted);display:flex;gap:8px;align-items:center}
+  .cal-chip{padding:1px 6px;border-radius:4px;font-size:9px;font-weight:700;letter-spacing:.04em}
+  .chip-h{background:rgba(251,113,133,.12);color:var(--dn);border:1px solid rgba(251,113,133,.2)}
+  .chip-m{background:rgba(251,191,36,.1);color:var(--gold);border:1px solid rgba(251,191,36,.2)}
+
+  /* OECD */
+  .cli-item{padding:10px 0;border-bottom:1px solid rgba(30,55,110,.2);font-family:Arial,sans-serif}
+  .cli-item:last-child{border-bottom:none}
+  .cli-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+  .cli-country{font-size:12px;font-weight:600}
+  .cli-score{font-size:14px;font-weight:700;font-family:var(--mono)}
+  .cli-bar-wrap{height:3px;background:rgba(255,255,255,.06);border-radius:2px;overflow:hidden}
+  .cli-bar-fill{height:100%;border-radius:2px}
+  .cli-meta{font-size:10px;color:var(--muted);margin-top:3px;display:flex;gap:8px}
+
+  @media(max-width:1400px){.three-col{grid-template-columns:1fr 1fr}}
+  @media(max-width:1100px){.sentiment-row,.chart-grid,.risk-row,.three-col{grid-template-columns:1fr}.macro-grid{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:600px){.macro-grid,.chart-full{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav class="nav">
+  <div class="logo">EPM <span>Market Intelligence</span></div>
+  <div class="nav-links">
+    <a href="#">Home</a>
+    <a href="#" class="active">Markets</a>
+    <a href="#">Forecasting</a>
+    <a href="#">Portfolios</a>
+  </div>
+  <div class="live-chip" style="margin-left:16px"><div class="live-dot"></div>Live · Apr 7, 2026</div>
+</nav>
+
+<!-- HERO STRIP -->
+<div class="hero">
+  <div class="hero-stat"><div class="hs-label">S&P 500</div><div class="hs-val dn">5,202.39</div><div class="hs-chg dn">▼ −3.46% · −186.04 pts</div></div>
+  <div class="hero-stat"><div class="hs-label">Nasdaq 100</div><div class="hs-val dn">17,888.40</div><div class="hs-chg dn">▼ −4.13%</div></div>
+  <div class="hero-stat"><div class="hs-label">VIX</div><div class="hs-val" style="color:#f97316">45.31</div><div class="hs-chg dn">▲ +31.2% · Elevated</div></div>
+  <div class="hero-stat"><div class="hs-label">10-Year Yield</div><div class="hs-val" style="color:var(--live)">4.343%</div><div class="hs-chg up">▼ −8bps · Risk-off bid</div></div>
+  <div class="hero-stat"><div class="hs-label">Gold (oz)</div><div class="hs-val up">$3,039</div><div class="hs-chg up">▲ +1.17% · Record</div></div>
+  <div class="hero-stat"><div class="hs-label">WTI Crude</div><div class="hs-val dn">$60.42</div><div class="hs-chg dn">▼ −7.38% · Demand fears</div></div>
+  <div class="hero-stat"><div class="hs-label">DXY</div><div class="hs-val dn">103.21</div><div class="hs-chg dn">▼ −0.74%</div></div>
+</div>
+
+<div class="shell">
+  <div class="page-title">
+    <h1>Markets &amp; Cross-Asset Dashboard</h1>
+    <p style="font-family:Arial,sans-serif">Global indexes · Risk posture · Sector rotation · Macro context · OECD economic momentum</p>
+  </div>
+
+  <!-- SENTIMENT + KPIs -->
+  <div class="section-rule"><div class="section-rule-line"></div><div class="section-rule-label">Sentiment &amp; Risk Posture</div><div class="section-rule-line"></div></div>
+  <div class="sentiment-row">
+
+    <!-- GAUGE -->
+    <div class="card gauge-card">
+      <div class="card-title">EPM Sentiment Index <span class="tag tag-red">Extreme Fear</span></div>
+      <div class="card-sub">Composite: CNN S/G · Crypto F&amp;G · News · WSB · StockTwits</div>
+      <div class="gauge-wrap">
+        <svg width="220" height="120" viewBox="0 0 220 120">
+          <defs>
+            <linearGradient id="g2" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stop-color="#fb7185"/>
+              <stop offset="30%" stop-color="#f97316"/>
+              <stop offset="50%" stop-color="#fbbf24"/>
+              <stop offset="70%" stop-color="#86efac"/>
+              <stop offset="100%" stop-color="#4ade80"/>
+            </linearGradient>
+          </defs>
+          <path d="M20 110 A90 90 0 0 1 200 110" fill="none" stroke="rgba(255,255,255,0.05)" stroke-width="16" stroke-linecap="round"/>
+          <path d="M20 110 A90 90 0 0 1 200 110" fill="none" stroke="url(#g2)" stroke-width="16" stroke-linecap="round" opacity=".25"/>
+          <!-- Score 22: dasharray 283, active = 22/100*283 = 62.3 -->
+          <path d="M20 110 A90 90 0 0 1 200 110" fill="none" stroke="#fb7185" stroke-width="16" stroke-linecap="round" stroke-dasharray="63 220"/>
+          <!-- Needle at 22% -->
+          <line x1="110" y1="110" x2="46" y2="60" stroke="white" stroke-width="2.5" stroke-linecap="round" opacity=".85"/>
+          <circle cx="110" cy="110" r="6" fill="var(--panel2)" stroke="white" stroke-width="2" opacity=".85"/>
+          <text x="18" y="128" fill="rgba(251,113,133,.6)" font-size="9" font-family="monospace">Fear</text>
+          <text x="105" y="18" fill="rgba(251,191,36,.6)" font-size="9" font-family="monospace" text-anchor="middle">Neutral</text>
+          <text x="202" y="128" fill="rgba(74,222,128,.6)" font-size="9" font-family="monospace" text-anchor="end">Greed</text>
+        </svg>
+        <div class="gauge-num">22</div>
+        <div class="gauge-rating">Extreme Fear</div>
+        <div class="gauge-sub">Composite of 5 weighted signals</div>
+      </div>
+      <div class="gauge-components">
+        <div class="gc-row"><span class="gc-label">CNN Stock S/G</span><div class="gc-bar-wrap"><div class="gc-bar" style="width:22%;background:#fb7185"></div></div><span class="gc-val dn">22.2</span></div>
+        <div class="gc-row"><span class="gc-label">Crypto F&amp;G</span><div class="gc-bar-wrap"><div class="gc-bar" style="width:38%;background:#f97316"></div></div><span class="gc-val" style="color:#f97316">38</span></div>
+        <div class="gc-row"><span class="gc-label">News Sentiment</span><div class="gc-bar-wrap"><div class="gc-bar" style="width:46%;background:#6b7280"></div></div><span class="gc-val" style="color:#6b7280">−0.02</span></div>
+        <div class="gc-row"><span class="gc-label">WSB Reddit</span><div class="gc-bar-wrap"><div class="gc-bar" style="width:28%;background:#fb7185"></div></div><span class="gc-val dn">28</span></div>
+        <div class="gc-row"><span class="gc-label">StockTwits</span><div class="gc-bar-wrap"><div class="gc-bar" style="width:32%;background:#f97316"></div></div><span class="gc-val" style="color:#f97316">32</span></div>
+      </div>
+      <div class="gc-expand">▼ Expand component detail &amp; methodology</div>
+    </div>
+
+    <!-- KPIs -->
+    <div class="macro-overview">
+      <div class="macro-grid">
+        <div class="kpi">
+          <div class="kpi-label">S&amp;P 500</div>
+          <div class="kpi-val dn">5,202</div>
+          <div class="kpi-detail dn">▼ −3.46% today</div>
+          <div class="kpi-badge" style="background:rgba(251,113,133,.1);color:var(--dn);border:1px solid rgba(251,113,133,.2)">Below 200-Day MA</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">VIX (Fear Index)</div>
+          <div class="kpi-val" style="color:#f97316">45.3</div>
+          <div class="kpi-detail dn">▲ +31.2% — Elevated fear</div>
+          <div class="kpi-badge" style="background:rgba(249,115,22,.1);color:#f97316;border:1px solid rgba(249,115,22,.2)">Spike Zone</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">10-Year Treasury</div>
+          <div class="kpi-val" style="color:var(--live)">4.343%</div>
+          <div class="kpi-detail up">▼ −8bps (risk-off)</div>
+          <div class="kpi-badge" style="background:rgba(96,165,250,.1);color:var(--live);border:1px solid rgba(96,165,250,.2)">Flight to Safety</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Gold (oz)</div>
+          <div class="kpi-val up">$3,039</div>
+          <div class="kpi-detail up">▲ +1.17% — Safe haven bid</div>
+          <div class="kpi-badge" style="background:rgba(74,222,128,.1);color:var(--up);border:1px solid rgba(74,222,128,.2)">All-Time High</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">DXY (Dollar)</div>
+          <div class="kpi-val dn">103.21</div>
+          <div class="kpi-detail dn">▼ −0.74% — Weakening</div>
+          <div class="kpi-badge" style="background:rgba(251,113,133,.1);color:var(--dn);border:1px solid rgba(251,113,133,.2)">Multi-Month Low</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">WTI Crude</div>
+          <div class="kpi-val dn">$60.42</div>
+          <div class="kpi-detail dn">▼ −7.38% — Demand fears</div>
+          <div class="kpi-badge" style="background:rgba(251,113,133,.1);color:var(--dn);border:1px solid rgba(251,113,133,.2)">Recessionary Signal</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">EUR/USD</div>
+          <div class="kpi-val up">1.0934</div>
+          <div class="kpi-detail up">▲ +0.81% — USD weakness</div>
+          <div class="kpi-badge" style="background:rgba(74,222,128,.1);color:var(--up);border:1px solid rgba(74,222,128,.2)">2-Month High</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">10s–2s Spread</div>
+          <div class="kpi-val" style="color:var(--accent)">+18 bps</div>
+          <div class="kpi-detail" style="color:var(--accent)">Steepening — normal curve</div>
+          <div class="kpi-badge" style="background:rgba(212,168,75,.1);color:var(--accent);border:1px solid rgba(212,168,75,.2)">Un-Inverting</div>
+        </div>
+      </div>
+      <!-- Market Posture -->
+      <div class="card" style="padding:16px 20px">
+        <div class="card-title" style="margin-bottom:12px">Overall Market Posture <span class="tag tag-red" style="margin-left:auto">RISK-OFF</span></div>
+        <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;font-family:Arial,sans-serif">
+          <div style="text-align:center">
+            <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Equities</div>
+            <div style="padding:8px 4px;border-radius:8px;background:rgba(251,113,133,.1);border:1px solid rgba(251,113,133,.25);font-size:11px;font-weight:700;color:var(--dn)">BEAR</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Bonds</div>
+            <div style="padding:8px 4px;border-radius:8px;background:rgba(74,222,128,.1);border:1px solid rgba(74,222,128,.25);font-size:11px;font-weight:700;color:var(--up)">BULL</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Gold</div>
+            <div style="padding:8px 4px;border-radius:8px;background:rgba(74,222,128,.1);border:1px solid rgba(74,222,128,.25);font-size:11px;font-weight:700;color:var(--up)">BULL</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Oil</div>
+            <div style="padding:8px 4px;border-radius:8px;background:rgba(251,113,133,.1);border:1px solid rgba(251,113,133,.25);font-size:11px;font-weight:700;color:var(--dn)">BEAR</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Dollar</div>
+            <div style="padding:8px 4px;border-radius:8px;background:rgba(251,113,133,.1);border:1px solid rgba(251,113,133,.25);font-size:11px;font-weight:700;color:var(--dn)">WEAK</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Volatility</div>
+            <div style="padding:8px 4px;border-radius:8px;background:rgba(249,115,22,.1);border:1px solid rgba(249,115,22,.25);font-size:11px;font-weight:700;color:#f97316">HIGH</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CHARTS -->
+  <div class="section-rule"><div class="section-rule-line"></div><div class="section-rule-label">Charts</div><div class="section-rule-line"></div></div>
+  <div class="chart-grid" style="margin-bottom:20px">
+    <div class="card">
+      <div class="card-title">Global Index Comparison <span class="tag tag-blue" style="margin-left:auto">3Y Returns</span></div>
+      <div class="card-sub">Normalized total-return path for tracked benchmark indexes</div>
+      <div class="chart-ph" style="height:240px;margin-top:14px">[ Plotly · Global Index Chart ]</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Sector Rotation <span class="tag tag-gold" style="margin-left:auto">YTD</span></div>
+      <div class="card-sub">U.S. sector ETFs — leaders &amp; laggards</div>
+      <div class="chart-ph" style="height:240px;margin-top:14px">[ Plotly · Sector Chart ]</div>
+    </div>
+  </div>
+  <div class="chart-full">
+    <div class="card">
+      <div class="card-title">Equity Risk <span class="tag tag-blue" style="margin-left:auto">SPY vs VIX</span></div>
+      <div class="card-sub">Price direction vs implied volatility</div>
+      <div class="chart-ph" style="height:180px;margin-top:12px">[ Plotly · Risk Chart ]</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Dollar vs Commodities <span class="tag tag-gold" style="margin-left:auto">Macro Lens</span></div>
+      <div class="card-sub">DXY vs Gold, Silver, Copper, Oil</div>
+      <div class="chart-ph" style="height:180px;margin-top:12px">[ Plotly · Macro Chart ]</div>
+    </div>
+  </div>
+
+  <!-- RISK ON/OFF -->
+  <div class="section-rule"><div class="section-rule-line"></div><div class="section-rule-label">Tactical Posture</div><div class="section-rule-line"></div></div>
+  <div class="risk-row">
+    <div class="card">
+      <div class="card-title">▲ Risk On — Offense Basket <span class="tag tag-green" style="margin-left:auto">Ranked 1M Return</span></div>
+      <div class="card-sub">Top cyclical &amp; growth ETFs from the curated offense universe</div>
+      <div class="etf-list">
+        <div class="etf"><div class="etf-left"><span class="etf-rank">#1</span><div><div class="etf-tick">QQQ</div><div class="etf-name">Nasdaq 100 ETF</div></div></div><div style="text-align:right"><div class="etf-ret up">+8.4%</div><div class="etf-1d dn">▼ −4.1% today</div></div></div>
+        <div class="etf"><div class="etf-left"><span class="etf-rank">#2</span><div><div class="etf-tick">SMH</div><div class="etf-name">VanEck Semiconductors</div></div></div><div style="text-align:right"><div class="etf-ret up">+6.9%</div><div class="etf-1d dn">▼ −5.2% today</div></div></div>
+        <div class="etf"><div class="etf-left"><span class="etf-rank">#3</span><div><div class="etf-tick">XLE</div><div class="etf-name">Energy Select SPDR</div></div></div><div style="text-align:right"><div class="etf-ret up">+5.2%</div><div class="etf-1d dn">▼ −5.1% today</div></div></div>
+        <div class="etf"><div class="etf-left"><span class="etf-rank">#4</span><div><div class="etf-tick">IWM</div><div class="etf-name">Russell 2000 ETF</div></div></div><div style="text-align:right"><div class="etf-ret up">+4.7%</div><div class="etf-1d dn">▼ −4.6% today</div></div></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">▼ Risk Off — Defense Basket <span class="tag tag-red" style="margin-left:auto">Ranked 1M Return</span></div>
+      <div class="card-sub">Top defensive &amp; quality ETFs from the curated defense universe</div>
+      <div class="etf-list">
+        <div class="etf"><div class="etf-left"><span class="etf-rank">#1</span><div><div class="etf-tick">GLD</div><div class="etf-name">SPDR Gold Shares</div></div></div><div style="text-align:right"><div class="etf-ret up">+9.1%</div><div class="etf-1d up">▲ +1.2% today</div></div></div>
+        <div class="etf"><div class="etf-left"><span class="etf-rank">#2</span><div><div class="etf-tick">TLT</div><div class="etf-name">20Y+ Treasury Bond</div></div></div><div style="text-align:right"><div class="etf-ret up">+3.8%</div><div class="etf-1d up">▲ +1.8% today</div></div></div>
+        <div class="etf"><div class="etf-left"><span class="etf-rank">#3</span><div><div class="etf-tick">XLU</div><div class="etf-name">Utilities Select SPDR</div></div></div><div style="text-align:right"><div class="etf-ret dn">−1.2%</div><div class="etf-1d dn">▼ −1.4% today</div></div></div>
+        <div class="etf"><div class="etf-left"><span class="etf-rank">#4</span><div><div class="etf-tick">XLV</div><div class="etf-name">Health Care Select</div></div></div><div style="text-align:right"><div class="etf-ret dn">−2.4%</div><div class="etf-1d dn">▼ −2.1% today</div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TREND TABLE + NEWS + CAL -->
+  <div class="section-rule"><div class="section-rule-line"></div><div class="section-rule-label">Data Suite</div><div class="section-rule-line"></div></div>
+  <div class="three-col">
+    <div class="card">
+      <div class="card-title">Trend Table <span class="tag tag-blue" style="margin-left:auto">Cross-Market</span></div>
+      <div class="card-sub">Ranked by trend state · daily, 1M, YTD context</div>
+      <table class="tbl" style="margin-top:14px">
+        <thead><tr><th>ETF</th><th class="name">Name</th><th>Price</th><th>1D</th><th>1M</th><th>YTD</th><th>Trend</th></tr></thead>
+        <tbody>
+          <tr><td>SPY</td><td class="name">S&P 500</td><td>520.24</td><td class="dn">−3.46%</td><td class="dn">−12.1%</td><td class="dn">−14.2%</td><td class="dn">▼ Bear</td></tr>
+          <tr><td>GLD</td><td class="name">Gold ETF</td><td>286.44</td><td class="up">+1.17%</td><td class="up">+8.2%</td><td class="up">+19.4%</td><td class="up">▲ Bull</td></tr>
+          <tr><td>TLT</td><td class="name">20Y Treasury</td><td>92.34</td><td class="up">+1.84%</td><td class="up">+3.1%</td><td class="dn">−2.4%</td><td style="color:var(--muted)">→ Neutral</td></tr>
+          <tr><td>QQQ</td><td class="name">Nasdaq 100</td><td>437.12</td><td class="dn">−4.13%</td><td class="dn">−15.3%</td><td class="dn">−18.1%</td><td class="dn">▼ Bear</td></tr>
+          <tr><td>XLE</td><td class="name">Energy</td><td>82.14</td><td class="dn">−5.12%</td><td class="dn">−9.3%</td><td class="dn">−11.4%</td><td class="dn">▼ Bear</td></tr>
+          <tr><td>XLF</td><td class="name">Financials</td><td>41.82</td><td class="dn">−3.87%</td><td class="dn">−8.7%</td><td class="dn">−10.2%</td><td class="dn">▼ Bear</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Market Intelligence <span class="tag tag-blue" style="margin-left:auto">Scored</span></div>
+      <div class="card-sub">Ranked by sentiment signal strength</div>
+      <div style="margin-top:14px">
+        <div class="news-item"><div class="news-dot" style="background:var(--dn)"></div><div class="news-body"><div class="news-hl">S&P 500 falls 3.5% on tariff escalation fears, worst session since 2020</div><div class="news-meta">Reuters · Bearish −0.82 · 2h ago</div></div></div>
+        <div class="news-item"><div class="news-dot" style="background:var(--up)"></div><div class="news-body"><div class="news-hl">Gold surges to record as investors seek safety amid equity selloff</div><div class="news-meta">Bloomberg · Bullish +0.74 · 3h ago</div></div></div>
+        <div class="news-item"><div class="news-dot" style="background:var(--dn)"></div><div class="news-body"><div class="news-hl">Oil drops 7% on demand destruction fears and OPEC+ supply hike</div><div class="news-meta">WSJ · Bearish −0.68 · 4h ago</div></div></div>
+        <div class="news-item"><div class="news-dot" style="background:#6b7280"></div><div class="news-body"><div class="news-hl">Fed officials maintain patient stance; watching tariff inflation pass-through</div><div class="news-meta">FT · Neutral −0.02 · 5h ago</div></div></div>
+        <div class="news-item"><div class="news-dot" style="background:var(--dn)"></div><div class="news-body"><div class="news-hl">Treasury Secretary warns tariff negotiations could take months to resolve</div><div class="news-meta">CNBC · Bearish −0.44 · 6h ago</div></div></div>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:20px">
+      <div class="card" style="flex:1">
+        <div class="card-title">Economic Calendar <span class="tag tag-gold" style="margin-left:auto">7-Day</span></div>
+        <div class="card-sub">Upcoming high-impact macro events</div>
+        <div style="margin-top:12px">
+          <div class="cal-item"><div class="cal-event">CPI (MoM)</div><div class="cal-meta"><span>Apr 10 · 8:30 AM ET</span><span class="cal-chip chip-h">HIGH</span></div></div>
+          <div class="cal-item"><div class="cal-event">FOMC Minutes</div><div class="cal-meta"><span>Apr 9 · 2:00 PM ET</span><span class="cal-chip chip-h">HIGH</span></div></div>
+          <div class="cal-item"><div class="cal-event">Initial Jobless Claims</div><div class="cal-meta"><span>Apr 10 · 8:30 AM ET</span><span class="cal-chip chip-m">MED</span></div></div>
+          <div class="cal-item"><div class="cal-event">PPI Final Demand</div><div class="cal-meta"><span>Apr 11 · 8:30 AM ET</span><span class="cal-chip chip-m">MED</span></div></div>
+        </div>
+      </div>
+      <div class="card" style="flex:1">
+        <div class="card-title">OECD Economic Momentum <span class="tag tag-blue" style="margin-left:auto">CLI Feb 2026</span></div>
+        <div style="margin-top:12px">
+          <div class="cli-item"><div class="cli-row"><span class="cli-country">United States</span><span class="cli-score up">100.85</span></div><div class="cli-bar-wrap"><div class="cli-bar-fill" style="width:52%;background:var(--up)"></div></div><div class="cli-meta"><span class="up">↑ Improving</span><span>Expanding above trend</span></div></div>
+          <div class="cli-item"><div class="cli-row"><span class="cli-country">Germany</span><span class="cli-score up">101.59</span></div><div class="cli-bar-wrap"><div class="cli-bar-fill" style="width:58%;background:var(--up)"></div></div><div class="cli-meta"><span class="up">↑ Improving</span><span>Expanding above trend</span></div></div>
+          <div class="cli-item"><div class="cli-row"><span class="cli-country">China</span><span class="cli-score dn">98.54</span></div><div class="cli-bar-wrap"><div class="cli-bar-fill" style="width:40%;background:var(--dn)"></div></div><div class="cli-meta"><span class="dn">↓ Deteriorating</span><span>Below trend</span></div></div>
+          <div class="cli-item"><div class="cli-row"><span class="cli-country">Japan</span><span class="cli-score" style="color:var(--muted)">100.12</span></div><div class="cli-bar-wrap"><div class="cli-bar-fill" style="width:50%;background:var(--muted)"></div></div><div class="cli-meta"><span style="color:var(--muted)">→ Flat</span><span>At trend</span></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+<div style="text-align:center;padding:20px;font-size:11px;color:var(--muted);border-top:1px solid var(--border);font-family:Arial,sans-serif">
+  MOCKUP 2 — Premium Dashboard · All data simulated · EPM Market Intelligence
+</div>
+</body>
+</html>

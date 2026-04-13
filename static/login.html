@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#061326" id="themeColorMeta" />
+  <title>Sign In | EPM Market Intelligence</title>
+  <link rel="stylesheet" href="/static/css/fonts.css" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #030a16;
+      --bg-2:      #050e1c;
+      --bg-card:   rgba(8, 20, 44, 0.85);
+      --border:    rgba(28, 52, 96, 0.65);
+      --border-hi: rgba(74, 140, 255, 0.45);
+      --text:      #e8eef8;
+      --text-2:    #8ba3c7;
+      --text-3:    #526886;
+      --gold:      #c8a84b;
+      --gold-2:    #f0c96a;
+      --accent:    #3b82f6;
+      --accent-2:  #60a5fa;
+      --green:     #22c55e;
+      --red:       #ef4444;
+      --radius:    14px;
+      --radius-sm: 8px;
+    }
+
+    [data-theme="light"] {
+      --bg:        #f0f4fa;
+      --bg-2:      #e6ecf5;
+      --bg-card:   rgba(255, 255, 255, 0.92);
+      --border:    rgba(20, 44, 90, 0.14);
+      --border-hi: rgba(59, 130, 246, 0.4);
+      --text:      #0d1c2e;
+      --text-2:    #3a5070;
+      --text-3:    #7a94b4;
+      --gold:      #b8862a;
+      --gold-2:    #d4a030;
+      --accent:    #2563eb;
+      --accent-2:  #3b82f6;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Inter", system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ---- animated background ---- */
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 80% 60% at 20% 10%, rgba(59,130,246,0.07) 0%, transparent 60%),
+        radial-gradient(ellipse 60% 50% at 80% 90%, rgba(200,168,75,0.05) 0%, transparent 55%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ---- page layout ---- */
+    .login-shell {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* ---- brand header ---- */
+    .login-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 36px;
+    }
+    .login-brand-logo {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      object-fit: contain;
+    }
+    .login-brand-name {
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      color: var(--text);
+    }
+    .login-brand-name span {
+      display: block;
+      font-size: 11px;
+      font-weight: 400;
+      color: var(--text-3);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-top: 1px;
+    }
+
+    /* ---- card ---- */
+    .login-card {
+      width: 100%;
+      max-width: 420px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 36px 32px;
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      box-shadow:
+        0 2px 4px rgba(0,0,0,0.12),
+        0 8px 32px rgba(0,0,0,0.22),
+        0 0 0 1px rgba(255,255,255,0.03) inset;
+    }
+
+    .login-heading {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 4px;
+      letter-spacing: -0.01em;
+    }
+    .login-subheading {
+      font-size: 13px;
+      color: var(--text-2);
+      margin-bottom: 28px;
+      line-height: 1.5;
+    }
+
+    /* ---- form ---- */
+    .form-group {
+      margin-bottom: 16px;
+    }
+    .form-label {
+      display: block;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-2);
+      margin-bottom: 6px;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+    .form-input {
+      width: 100%;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 11px 14px;
+      font-size: 14px;
+      font-family: inherit;
+      color: var(--text);
+      outline: none;
+      transition: border-color 0.18s, box-shadow 0.18s;
+      caret-color: var(--accent-2);
+    }
+    [data-theme="light"] .form-input {
+      background: rgba(255,255,255,0.7);
+    }
+    .form-input:focus {
+      border-color: var(--border-hi);
+      box-shadow: 0 0 0 3px rgba(59,130,246,0.15);
+    }
+    .form-input::placeholder { color: var(--text-3); }
+
+    /* ---- remember me row ---- */
+    .remember-row {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      margin: 6px 0 22px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .remember-check {
+      width: 16px;
+      height: 16px;
+      border-radius: 4px;
+      border: 1px solid var(--border-hi);
+      background: transparent;
+      appearance: none;
+      -webkit-appearance: none;
+      cursor: pointer;
+      flex-shrink: 0;
+      position: relative;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .remember-check:checked {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+    .remember-check:checked::after {
+      content: "";
+      position: absolute;
+      top: 2px; left: 5px;
+      width: 4px; height: 7px;
+      border: 2px solid #fff;
+      border-top: none; border-left: none;
+      transform: rotate(45deg);
+    }
+    .remember-label {
+      font-size: 13px;
+      color: var(--text-2);
+    }
+    .remember-hint {
+      font-size: 11px;
+      color: var(--text-3);
+      margin-left: auto;
+    }
+
+    /* ---- submit button ---- */
+    .btn-login {
+      width: 100%;
+      padding: 12px 20px;
+      background: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%);
+      border: none;
+      border-radius: var(--radius-sm);
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      letter-spacing: 0.01em;
+      transition: opacity 0.15s, transform 0.1s, box-shadow 0.15s;
+      box-shadow: 0 2px 12px rgba(59,130,246,0.30);
+    }
+    .btn-login:hover:not(:disabled) {
+      opacity: 0.92;
+      box-shadow: 0 4px 20px rgba(59,130,246,0.40);
+    }
+    .btn-login:active:not(:disabled) { transform: scale(0.985); }
+    .btn-login:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* ---- toggle register/login ---- */
+    .mode-toggle {
+      text-align: center;
+      margin-top: 20px;
+      font-size: 13px;
+      color: var(--text-3);
+    }
+    .mode-toggle a {
+      color: var(--accent-2);
+      text-decoration: none;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .mode-toggle a:hover { text-decoration: underline; }
+
+    /* ---- error / info message ---- */
+    .form-message {
+      font-size: 13px;
+      padding: 10px 14px;
+      border-radius: var(--radius-sm);
+      margin-bottom: 16px;
+      display: none;
+      line-height: 1.5;
+    }
+    .form-message.error {
+      background: rgba(239,68,68,0.12);
+      border: 1px solid rgba(239,68,68,0.3);
+      color: #fca5a5;
+      display: block;
+    }
+    .form-message.info {
+      background: rgba(34,197,94,0.10);
+      border: 1px solid rgba(34,197,94,0.25);
+      color: #86efac;
+      display: block;
+    }
+
+    /* ---- loading splash (shown post-auth) ---- */
+    #loadingSplash {
+      position: fixed;
+      inset: 0;
+      background: var(--bg);
+      z-index: 9999;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 28px;
+    }
+    #loadingSplash.visible { display: flex; }
+
+    .splash-logo-wrap {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .splash-logo {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      object-fit: contain;
+      animation: splashPulse 1.8s ease-in-out infinite;
+    }
+    @keyframes splashPulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.75; transform: scale(0.96); }
+    }
+    .splash-name {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: -0.01em;
+    }
+    .splash-name span {
+      display: block;
+      font-size: 11px;
+      font-weight: 400;
+      color: var(--text-3);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-top: 2px;
+    }
+    .splash-progress-shell {
+      width: 220px;
+      height: 3px;
+      background: var(--border);
+      border-radius: 99px;
+      overflow: hidden;
+    }
+    .splash-progress-bar {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--accent) 0%, var(--accent-2) 100%);
+      border-radius: 99px;
+      transition: width 0.22s ease;
+    }
+    .splash-status {
+      font-size: 12px;
+      color: var(--text-3);
+      letter-spacing: 0.04em;
+      min-height: 18px;
+    }
+
+    /* ---- divider ---- */
+    .divider {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 24px 0;
+    }
+
+    /* ---- footer ---- */
+    .login-footer {
+      margin-top: 28px;
+      font-size: 11px;
+      color: var(--text-3);
+      text-align: center;
+      letter-spacing: 0.02em;
+    }
+  </style>
+  <link rel="icon" type="image/png" href="/static/epm_logo_sq.png">
+  <link rel="apple-touch-icon" href="/static/epm_logo_sq.png">
+  <meta property="og:image" content="/static/epm_logo.png">
+</head>
+<body>
+  <!-- Post-auth loading splash -->
+  <div id="loadingSplash">
+    <div class="splash-logo-wrap">
+      <img class="splash-logo" src="/static/epm_logo.png?v=20260322f" alt="EPM" />
+      <div class="splash-name">
+        EPM Market Intelligence
+        <span>Initializing dashboard</span>
+      </div>
+    </div>
+    <div class="splash-progress-shell">
+      <div class="splash-progress-bar" id="splashBar"></div>
+    </div>
+    <div class="splash-status" id="splashStatus">Authenticating&hellip;</div>
+  </div>
+
+  <div class="login-shell" id="loginShell">
+    <div class="login-brand">
+      <img class="login-brand-logo" src="/static/epm_logo.png?v=20260322f" alt="EPM" />
+      <div class="login-brand-name">
+        EPM Market Intelligence
+        <span>Quantitative research platform</span>
+      </div>
+    </div>
+
+    <div class="login-card">
+      <h1 class="login-heading" id="formHeading">Welcome back</h1>
+      <p class="login-subheading" id="formSubheading">Sign in to access your dashboard and personalized watchlists.</p>
+
+      <div class="form-message" id="formMessage"></div>
+
+      <form id="authForm" autocomplete="on" novalidate>
+        <div class="form-group">
+          <label class="form-label" for="usernameInput">Username</label>
+          <input class="form-input" type="text" id="usernameInput" name="username"
+                 placeholder="Enter your username" autocomplete="username" required />
+        </div>
+
+        <div class="form-group" id="emailGroup" style="display:none;">
+          <label class="form-label" for="emailInput">Email Address</label>
+          <input class="form-input" type="email" id="emailInput" name="email"
+                 placeholder="you@example.com" autocomplete="email" />
+          <div style="font-size:11px;color:var(--text-3,#526886);margin-top:5px;">
+            Required for password recovery. Never shared.
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="passwordInput">Password</label>
+          <input class="form-input" type="password" id="passwordInput" name="password"
+                 placeholder="Enter your password" autocomplete="current-password" required />
+        </div>
+
+        <label class="remember-row" id="rememberRow">
+          <input type="checkbox" class="remember-check" id="rememberMe" name="remember_me" />
+          <span class="remember-label">Remember me on this device</span>
+          <span class="remember-hint" id="rememberHint">30 days</span>
+        </label>
+
+        <button class="btn-login" type="submit" id="submitBtn">Sign In</button>
+      </form>
+
+      <div id="forgotRow" style="text-align:right;margin-top:10px;">
+        <a id="forgotLink" style="font-size:12px;color:var(--text-3,#526886);cursor:pointer;text-decoration:none;">
+          Forgot password?
+        </a>
+      </div>
+
+      <!-- Forgot password inline form (hidden until link clicked) -->
+      <div id="forgotForm" style="display:none;margin-top:16px;padding:16px;
+           border:1px solid var(--border-hi,rgba(74,140,255,0.45));border-radius:10px;
+           background:rgba(59,130,246,0.06);">
+        <p style="font-size:13px;color:var(--text-2,#8ba3c7);margin-bottom:12px;line-height:1.5;">
+          Enter your email and we'll send a reset link if an account exists.
+        </p>
+        <input class="form-input" type="email" id="forgotEmailInput" placeholder="your@email.com"
+               style="margin-bottom:10px;" />
+        <div style="display:flex;gap:8px;">
+          <button class="btn-login" id="forgotSubmitBtn" type="button"
+                  style="flex:1;padding:10px 14px;font-size:13px;">Send Reset Link</button>
+          <button id="forgotCancelBtn" type="button"
+                  style="padding:10px 14px;font-size:13px;background:transparent;
+                         border:1px solid var(--border,rgba(28,52,96,0.65));border-radius:8px;
+                         color:var(--text-2,#8ba3c7);cursor:pointer;font-family:inherit;">
+            Cancel
+          </button>
+        </div>
+        <div id="forgotMsg" style="font-size:12px;margin-top:10px;min-height:16px;"></div>
+      </div>
+
+      <div class="mode-toggle">
+        <span id="modeToggleText">Don't have an account?</span>
+        <a id="modeToggleLink">Create one</a>
+      </div>
+    </div>
+
+    <div class="login-footer">
+      EPM Financial &mdash; internal research platform
+    </div>
+  </div>
+
+  <script>
+    // -----------------------------------------------------------------------
+    // Theme sync (before paint)
+    // -----------------------------------------------------------------------
+    (function () {
+      try {
+        var pref = localStorage.getItem('epm_theme_pref') || 'dark';
+        var resolved = pref === 'system' ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : pref;
+        document.documentElement.dataset.theme = resolved;
+        document.body.dataset.theme = resolved;
+        document.body.style.backgroundColor = resolved === 'light' ? '#f0f4fa' : '#030a16';
+      } catch (e) {}
+    })();
+
+    // -----------------------------------------------------------------------
+    // Auto-auth: if a valid token is already stored, skip login form entirely
+    // -----------------------------------------------------------------------
+    const TOKEN_KEY   = 'epm_auth_token';
+    const STORAGE_KEY = 'epm_token_storage'; // 'local' | 'session'
+
+    function getStoredToken() {
+      try {
+        const where = localStorage.getItem(STORAGE_KEY) || 'session';
+        const store = where === 'local' ? localStorage : sessionStorage;
+        return store.getItem(TOKEN_KEY) || null;
+      } catch (e) { return null; }
+    }
+
+    function storeToken(token, rememberMe) {
+      try {
+        const store = rememberMe ? localStorage : sessionStorage;
+        store.setItem(TOKEN_KEY, token);
+        localStorage.setItem(STORAGE_KEY, rememberMe ? 'local' : 'session');
+      } catch (e) {}
+    }
+
+    function clearToken() {
+      try {
+        localStorage.removeItem(TOKEN_KEY);
+        sessionStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem(STORAGE_KEY);
+      } catch (e) {}
+    }
+
+    function redirectTarget() {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const next = params.get('next') || '/';
+        // Only allow same-origin paths
+        if (next.startsWith('/') && !next.startsWith('//')) return next;
+      } catch (e) {}
+      return '/';
+    }
+
+    // ---- loading splash controller ----
+    const SPLASH_STEPS = [
+      { pct: 18, label: 'Authenticating\u2026' },
+      { pct: 40, label: 'Loading market data\u2026' },
+      { pct: 62, label: 'Warming forecast cache\u2026' },
+      { pct: 82, label: 'Preparing dashboard\u2026' },
+      { pct: 100, label: 'Ready' },
+    ];
+
+    function showSplash() {
+      document.getElementById('loadingSplash').classList.add('visible');
+      document.getElementById('loginShell').style.display = 'none';
+    }
+
+    function runSplash(onComplete) {
+      showSplash();
+      const bar    = document.getElementById('splashBar');
+      const status = document.getElementById('splashStatus');
+      let i = 0;
+      const STEP_MS = 480;
+      function advance() {
+        if (i >= SPLASH_STEPS.length) { onComplete(); return; }
+        const step = SPLASH_STEPS[i++];
+        bar.style.width    = step.pct + '%';
+        status.textContent = step.label;
+        setTimeout(advance, STEP_MS);
+      }
+      advance();
+    }
+
+    // Check for an existing valid token on page load
+    (async function checkExistingAuth() {
+      const token = getStoredToken();
+      if (!token) return; // no token — show login form normally
+
+      try {
+        const res = await fetch('/api/auth/me', {
+          headers: { 'Authorization': 'Bearer ' + token }
+        });
+        if (res.ok) {
+          // Token still valid — run splash then redirect
+          runSplash(() => { window.location.href = redirectTarget(); });
+          return;
+        }
+      } catch (e) {}
+      // Token invalid or expired — clear it and show the form
+      clearToken();
+    })();
+
+    // -----------------------------------------------------------------------
+    // Login / Register form logic
+    // -----------------------------------------------------------------------
+    let isRegisterMode = false;
+
+    const form         = document.getElementById('authForm');
+    const submitBtn    = document.getElementById('submitBtn');
+    const msgEl        = document.getElementById('formMessage');
+    const rememberRow  = document.getElementById('rememberRow');
+    const rememberHint = document.getElementById('rememberHint');
+    const rememberBox  = document.getElementById('rememberMe');
+
+    // Update hint text dynamically
+    rememberBox.addEventListener('change', () => {
+      rememberHint.textContent = rememberBox.checked ? '30 days' : '3 days (this session)';
+    });
+
+    document.getElementById('modeToggleLink').addEventListener('click', () => {
+      isRegisterMode = !isRegisterMode;
+      msgEl.className = 'form-message';
+      msgEl.textContent = '';
+      // Hide forgot form when switching modes
+      document.getElementById('forgotForm').style.display = 'none';
+      document.getElementById('forgotRow').style.display = isRegisterMode ? 'none' : '';
+      if (isRegisterMode) {
+        document.getElementById('formHeading').textContent     = 'Create account';
+        document.getElementById('formSubheading').textContent  = 'Choose a username, email, and password to get started.';
+        submitBtn.textContent                                   = 'Create Account';
+        document.getElementById('modeToggleText').textContent  = 'Already have an account?';
+        document.getElementById('modeToggleLink').textContent  = 'Sign in';
+        document.getElementById('emailGroup').style.display    = '';
+        rememberRow.style.display = 'none';
+        document.getElementById('passwordInput').autocomplete  = 'new-password';
+      } else {
+        document.getElementById('formHeading').textContent     = 'Welcome back';
+        document.getElementById('formSubheading').textContent  = 'Sign in to access your dashboard and personalized watchlists.';
+        submitBtn.textContent                                   = 'Sign In';
+        document.getElementById('modeToggleText').textContent  = "Don't have an account?";
+        document.getElementById('modeToggleLink').textContent  = 'Create one';
+        document.getElementById('emailGroup').style.display    = 'none';
+        rememberRow.style.display = '';
+        document.getElementById('passwordInput').autocomplete  = 'current-password';
+      }
+    });
+
+    // Forgot password flow
+    document.getElementById('forgotLink').addEventListener('click', () => {
+      document.getElementById('forgotForm').style.display = '';
+      document.getElementById('forgotLink').style.display = 'none';
+    });
+    document.getElementById('forgotCancelBtn').addEventListener('click', () => {
+      document.getElementById('forgotForm').style.display = 'none';
+      document.getElementById('forgotLink').style.display = '';
+      document.getElementById('forgotMsg').textContent = '';
+      document.getElementById('forgotEmailInput').value = '';
+    });
+    document.getElementById('forgotSubmitBtn').addEventListener('click', async () => {
+      const email   = document.getElementById('forgotEmailInput').value.trim();
+      const msgDiv  = document.getElementById('forgotMsg');
+      const sendBtn = document.getElementById('forgotSubmitBtn');
+      if (!email) { msgDiv.textContent = 'Please enter your email address.'; msgDiv.style.color = '#fca5a5'; return; }
+      sendBtn.disabled = true; sendBtn.textContent = 'Sending\u2026';
+      try {
+        const res  = await fetch('/api/auth/forgot-password', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ email }),
+        });
+        const data = await res.json();
+        msgDiv.textContent  = data.message || 'If that email is registered, a reset link has been sent.';
+        msgDiv.style.color  = '#86efac';
+      } catch (_) {
+        msgDiv.textContent = 'Network error. Please try again.';
+        msgDiv.style.color = '#fca5a5';
+      }
+      sendBtn.disabled = false; sendBtn.textContent = 'Send Reset Link';
+    });
+
+    function showMessage(text, type) {
+      msgEl.textContent  = text;
+      msgEl.className    = 'form-message ' + type;
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username   = document.getElementById('usernameInput').value.trim();
+      const password   = document.getElementById('passwordInput').value;
+      const email      = document.getElementById('emailInput').value.trim();
+      const rememberMe = !isRegisterMode && rememberBox.checked;
+
+      if (!username || !password) {
+        showMessage('Please enter both username and password.', 'error');
+        return;
+      }
+      if (isRegisterMode && !email) {
+        showMessage('Please enter your email address.', 'error');
+        return;
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = isRegisterMode ? 'Creating\u2026' : 'Signing in\u2026';
+      msgEl.className = 'form-message';
+
+      const endpoint = isRegisterMode ? '/api/auth/register' : '/api/auth/login';
+      const payload  = isRegisterMode
+        ? { username, password, email }
+        : { username, password, remember_me: rememberMe };
+
+      try {
+        const res  = await fetch(endpoint, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify(payload),
+        });
+        const data = await res.json();
+
+        if (!res.ok || !data.ok) {
+          showMessage(data.detail || data.message || 'Authentication failed.', 'error');
+          submitBtn.disabled    = false;
+          submitBtn.textContent = isRegisterMode ? 'Create Account' : 'Sign In';
+          return;
+        }
+
+        // Store token based on remember-me preference
+        storeToken(data.token, data.remember_me);
+
+        // Store username for topbar display
+        try { localStorage.setItem('epm_username', data.user.username); } catch (ex) {}
+
+        if (isRegisterMode) {
+          showMessage('Account created! Loading your dashboard\u2026', 'info');
+        }
+
+        // Run splash then redirect
+        runSplash(() => { window.location.href = redirectTarget(); });
+
+      } catch (err) {
+        showMessage('Network error. Is the server running?', 'error');
+        submitBtn.disabled    = false;
+        submitBtn.textContent = isRegisterMode ? 'Create Account' : 'Sign In';
+      }
+    });
+  </script>
+</body>
+</html>

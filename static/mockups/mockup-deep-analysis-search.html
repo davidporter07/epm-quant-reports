@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Deep Analysis Lab — Search Page Mockup | EPM</title>
+  <style>
+    :root {
+      --bg: #030a16;
+      --bg-2: #050e1c;
+      --panel: rgba(8,18,40,0.93);
+      --panel-2: #09152a;
+      --panel-3: #0e1e38;
+      --text: #e8eeff;
+      --muted: #7d94c0;
+      --border: rgba(28,52,96,0.62);
+      --accent: #d4a84b;
+      --accent-2: #1b4e98;
+      --accent-live: #38bdf8;
+      --green: #22c55e;
+      --red: #ef4444;
+      --radius: 10px;
+      --shadow: 0 2px 16px rgba(0,0,0,0.32);
+      --shadow-lg: 0 8px 40px rgba(0,0,0,0.48);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+      font-size: 14px;
+    }
+
+    /* ── TOPBAR ── */
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      padding: 14px 32px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; z-index: 50;
+    }
+    .brand-logo { height: 36px; border-radius: 6px; background: var(--accent); padding: 4px 10px; font-size: 13px; font-weight: 700; color: #0a1928; display: flex; align-items: center; }
+    .brand-name { font-size: 15px; font-weight: 700; color: var(--text); }
+    .brand-sub { font-size: 11px; color: var(--muted); }
+    nav { display: flex; gap: 4px; margin-left: auto; }
+    .nav-link { padding: 6px 14px; border-radius: 6px; font-size: 13px; color: var(--muted); text-decoration: none; transition: color 0.15s, background 0.15s; }
+    .nav-link:hover { color: var(--text); background: rgba(255,255,255,0.04); }
+    .nav-link.active { color: var(--accent); }
+
+    /* ── LAYOUT ── */
+    .page-shell { max-width: 1200px; margin: 0 auto; padding: 24px 24px 60px; }
+
+    /* ── SEARCH BAR ── */
+    .search-bar {
+      display: flex; align-items: center; gap: 12px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px 16px;
+      margin-bottom: 20px;
+    }
+    .search-input {
+      flex: 1; background: var(--panel-2); border: 1px solid var(--border);
+      border-radius: 8px; padding: 8px 14px; font-size: 14px; color: var(--text);
+      outline: none;
+    }
+    .btn { padding: 8px 18px; border-radius: 8px; border: none; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s; }
+    .btn-primary { background: var(--accent-2); color: #fff; }
+    .btn-primary:hover { background: #2560b8; }
+    .btn-gold { background: linear-gradient(135deg, #d4a84b, #a07828); color: #0a1928; }
+    .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--muted); }
+    .badge { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.08em; }
+    .badge-blue { background: rgba(27,78,152,0.25); color: var(--accent-live); border: 1px solid rgba(27,78,152,0.4); }
+    .badge-gold { background: rgba(212,168,75,0.15); color: var(--accent); border: 1px solid rgba(212,168,75,0.3); }
+    .badge-green { background: rgba(34,197,94,0.15); color: #22c55e; border: 1px solid rgba(34,197,94,0.3); }
+
+    /* ── CARDS ── */
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+      box-shadow: var(--shadow);
+    }
+    .card-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 16px; }
+    .card-grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+    .section-title { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 12px; }
+    .card-title { font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+    .card h3 { font-size: 13px; font-weight: 700; color: var(--accent); margin-bottom: 12px; }
+    .kv-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-bottom: 1px solid rgba(28,52,96,0.3); }
+    .kv-row:last-child { border-bottom: none; }
+    .kv-label { font-size: 12px; color: var(--muted); }
+    .kv-val { font-size: 12px; font-weight: 600; color: var(--text); }
+    .green { color: var(--green); }
+    .red { color: var(--red); }
+    .gold { color: var(--accent); }
+
+    /* ── SUMMARY HEADER ── */
+    .summary-header {
+      margin-bottom: 16px;
+      background: linear-gradient(160deg, var(--panel-2), rgba(5,12,28,0.9));
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px 22px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .ticker-hero { display: flex; align-items: baseline; gap: 12px; }
+    .ticker-sym { font-size: 28px; font-weight: 800; color: var(--accent); }
+    .ticker-name { font-size: 14px; color: var(--muted); }
+    .ticker-price { font-size: 26px; font-weight: 700; }
+    .ticker-change { font-size: 14px; }
+
+    /* ── CHART PLACEHOLDER ── */
+    .chart-placeholder {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      height: 240px;
+      display: flex; align-items: center; justify-content: center;
+      color: var(--muted); font-size: 13px;
+      position: relative;
+      overflow: hidden;
+    }
+    .chart-line {
+      position: absolute; bottom: 0; left: 0; width: 100%; height: 100%;
+    }
+
+    /* ── DEEP ANALYSIS LAB ── */
+    .deep-analysis-lab {
+      margin-top: 28px;
+    }
+    .lab-header {
+      display: flex; align-items: center; gap: 12px;
+      margin-bottom: 16px;
+    }
+    .lab-title {
+      font-size: 18px; font-weight: 800;
+      background: linear-gradient(135deg, #d4a84b, #f0c878);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    .lab-subtitle { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+    .report-type-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .report-type-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 22px 24px;
+      position: relative;
+      overflow: hidden;
+      transition: border-color 0.2s, transform 0.15s;
+      cursor: pointer;
+    }
+    .report-type-card:hover { border-color: rgba(100,140,220,0.5); transform: translateY(-1px); }
+    .report-type-card.quick-card { border-color: rgba(56,189,248,0.25); }
+    .report-type-card.deep-card { border-color: rgba(212,168,75,0.35); }
+    .report-type-card.quick-card:hover { border-color: rgba(56,189,248,0.6); }
+    .report-type-card.deep-card:hover { border-color: rgba(212,168,75,0.7); }
+
+    .report-type-card::before {
+      content: '';
+      position: absolute; top: 0; left: 0; right: 0; height: 3px;
+    }
+    .quick-card::before { background: linear-gradient(90deg, #38bdf8, #7dd3fc); }
+    .deep-card::before { background: linear-gradient(90deg, #d4a84b, #f0c878); }
+
+    .rt-icon {
+      width: 42px; height: 42px;
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      margin-bottom: 14px;
+      font-size: 20px;
+    }
+    .rt-icon-blue { background: rgba(56,189,248,0.12); color: #38bdf8; border: 1px solid rgba(56,189,248,0.25); }
+    .rt-icon-gold { background: rgba(212,168,75,0.12); color: #d4a84b; border: 1px solid rgba(212,168,75,0.25); }
+
+    .rt-type-name { font-size: 17px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+    .rt-time { font-size: 11px; color: var(--muted); margin-bottom: 10px; display: flex; align-items: center; gap: 5px; }
+    .rt-time-dot { width: 6px; height: 6px; border-radius: 50%; }
+    .rt-time-dot-blue { background: #38bdf8; }
+    .rt-time-dot-gold { background: #d4a84b; }
+    .rt-desc { font-size: 12px; color: var(--muted); line-height: 1.6; margin-bottom: 16px; }
+
+    .rt-features { list-style: none; margin-bottom: 18px; }
+    .rt-features li {
+      font-size: 12px; color: var(--muted);
+      padding: 3px 0;
+      display: flex; align-items: center; gap: 7px;
+    }
+    .rt-features li::before { content: ''; width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+    .quick-card .rt-features li::before { background: #38bdf8; }
+    .deep-card .rt-features li::before { background: #d4a84b; }
+
+    .rt-btn {
+      width: 100%; padding: 10px; border-radius: 8px; border: none;
+      font-size: 13px; font-weight: 700; cursor: pointer;
+      transition: all 0.15s;
+    }
+    .rt-btn-blue { background: rgba(27,78,152,0.9); color: #fff; border: 1px solid rgba(56,189,248,0.3); }
+    .rt-btn-blue:hover { background: #2560b8; }
+    .rt-btn-gold { background: linear-gradient(135deg, #d4a84b 0%, #a07828 100%); color: #0a1928; }
+    .rt-btn-gold:hover { background: linear-gradient(135deg, #e0b85e 0%, #b08832 100%); }
+
+    .rt-badge {
+      position: absolute; top: 16px; right: 16px;
+      font-size: 10px; font-weight: 700; padding: 3px 8px;
+      border-radius: 4px; text-transform: uppercase; letter-spacing: 0.08em;
+    }
+    .rt-badge-premium { background: rgba(212,168,75,0.18); color: var(--accent); border: 1px solid rgba(212,168,75,0.3); }
+
+    /* ── POWERED BY BAR ── */
+    .powered-by {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 16px;
+      display: flex; align-items: center; gap: 16px;
+      font-size: 11px; color: var(--muted);
+    }
+    .powered-by strong { color: var(--text); }
+    .powered-chip {
+      display: flex; align-items: center; gap: 6px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 3px 10px;
+      font-size: 11px; font-weight: 600;
+    }
+    .chip-dot { width: 6px; height: 6px; border-radius: 50%; }
+
+    /* ── PROGRESS STATE (shown when running) ── */
+    .analysis-progress {
+      background: var(--panel);
+      border: 1px solid rgba(212,168,75,0.3);
+      border-radius: 12px;
+      padding: 20px 22px;
+      margin-top: 0;
+    }
+    .progress-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+    .progress-title { font-size: 14px; font-weight: 700; color: var(--text); }
+    .progress-eta { font-size: 11px; color: var(--muted); }
+    .progress-stages { display: flex; flex-direction: column; gap: 8px; }
+    .stage-row { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-radius: 8px; font-size: 12px; }
+    .stage-row.done { background: rgba(34,197,94,0.07); color: var(--text); }
+    .stage-row.active { background: rgba(212,168,75,0.09); color: var(--accent); border: 1px solid rgba(212,168,75,0.2); }
+    .stage-row.waiting { color: var(--muted); }
+    .stage-icon { width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; flex-shrink: 0; }
+    .stage-icon-done { background: #22c55e; color: #000; }
+    .stage-icon-active { background: #d4a84b; color: #000; animation: pulse 1.5s ease-in-out infinite; }
+    .stage-icon-wait { background: rgba(28,52,96,0.6); color: var(--muted); }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+    .progress-bar-wrap { margin-top: 14px; background: var(--border); border-radius: 4px; height: 4px; overflow: hidden; }
+    .progress-bar-fill { height: 100%; background: linear-gradient(90deg, #d4a84b, #f0c878); border-radius: 4px; width: 45%; transition: width 0.5s ease; }
+
+    /* ── ANNOTATION CALLOUTS ── */
+    .annotation {
+      position: relative;
+      border-left: 3px solid;
+      padding: 8px 12px;
+      border-radius: 0 6px 6px 0;
+      margin-bottom: 10px;
+      font-size: 12px;
+    }
+    .annotation-gold { border-color: var(--accent); background: rgba(212,168,75,0.07); color: var(--text); }
+    .annotation-blue { border-color: #38bdf8; background: rgba(56,189,248,0.07); color: var(--text); }
+    .annotation-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 3px; }
+    .annotation-gold .annotation-label { color: var(--accent); }
+    .annotation-blue .annotation-label { color: #38bdf8; }
+
+    /* ── DIVIDER ── */
+    .divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+
+    /* ── SVG chart sparkline ── */
+    svg.sparkline { width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+
+  <!-- TOPBAR -->
+  <header class="topbar">
+    <div class="brand-logo">EPM</div>
+    <div style="margin-left:8px">
+      <div class="brand-name">EPM Market Intelligence</div>
+      <div class="brand-sub">Fund Search — live ticker analysis + deep research tools</div>
+    </div>
+    <nav>
+      <a class="nav-link" href="#">Home</a>
+      <a class="nav-link" href="#">Markets</a>
+      <a class="nav-link" href="#">Forecasting</a>
+      <a class="nav-link" href="#">Portfolios</a>
+      <a class="nav-link active" href="#">Fund Search</a>
+    </nav>
+  </header>
+
+  <div class="page-shell">
+
+    <!-- SEARCH BAR -->
+    <div class="search-bar" style="margin-bottom:16px">
+      <input class="search-input" type="text" value="AAPL" />
+      <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);white-space:nowrap">
+        <input type="checkbox" checked /> Include news
+      </label>
+      <button class="btn btn-primary">Analyze</button>
+    </div>
+
+    <!-- SUMMARY HEADER -->
+    <div class="summary-header">
+      <div>
+        <div class="ticker-hero">
+          <span class="ticker-sym">AAPL</span>
+          <span class="ticker-name">Apple Inc. &nbsp;·&nbsp; NASDAQ &nbsp;·&nbsp; Technology</span>
+        </div>
+        <div style="margin-top:4px;font-size:12px;color:var(--muted)">Live Ticker Snapshot &nbsp;·&nbsp; Last updated 9:47 AM CST</div>
+      </div>
+      <div style="text-align:right">
+        <div class="ticker-price">$195.82</div>
+        <div class="ticker-change red">−1.43 (−0.72%) today</div>
+      </div>
+    </div>
+
+    <!-- MAIN GRID: CHART + SNAPSHOT DETAILS -->
+    <div class="card-grid" style="margin-bottom:14px">
+      <div class="card" style="padding:14px">
+        <h3>Price Chart</h3>
+        <div class="chart-placeholder">
+          <svg class="sparkline" viewBox="0 0 600 200" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="cg" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#d4a84b" stop-opacity="0.25"/>
+                <stop offset="100%" stop-color="#d4a84b" stop-opacity="0"/>
+              </linearGradient>
+            </defs>
+            <path d="M0,140 C30,130 60,120 90,100 C120,80 150,70 180,85 C210,100 240,120 270,110 C300,100 330,80 360,70 C390,60 420,75 450,65 C480,55 510,50 540,45 C570,40 590,42 600,40" stroke="#d4a84b" stroke-width="2" fill="none"/>
+            <path d="M0,140 C30,130 60,120 90,100 C120,80 150,70 180,85 C210,100 240,120 270,110 C300,100 330,80 360,70 C390,60 420,75 450,65 C480,55 510,50 540,45 C570,40 590,42 600,40 L600,200 L0,200 Z" fill="url(#cg)"/>
+          </svg>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Snapshot Details</h3>
+        <div class="kv-row"><span class="kv-label">Sector</span><span class="kv-val">Technology</span></div>
+        <div class="kv-row"><span class="kv-label">Market Cap</span><span class="kv-val">$2.98T</span></div>
+        <div class="kv-row"><span class="kv-label">P/E Ratio</span><span class="kv-val">30.4x</span></div>
+        <div class="kv-row"><span class="kv-label">52W High</span><span class="kv-val green">$237.23</span></div>
+        <div class="kv-row"><span class="kv-label">52W Low</span><span class="kv-val red">$164.08</span></div>
+        <div class="kv-row"><span class="kv-label">Beta</span><span class="kv-val">1.23</span></div>
+        <div class="kv-row"><span class="kv-label">Sharpe (1Y)</span><span class="kv-val">0.84</span></div>
+      </div>
+    </div>
+
+    <!-- DATA CARDS ROW -->
+    <div class="card-grid" style="margin-bottom:14px">
+      <div class="card">
+        <h3>Returns</h3>
+        <div class="kv-row"><span class="kv-label">1D</span><span class="kv-val red">−0.72%</span></div>
+        <div class="kv-row"><span class="kv-label">1W</span><span class="kv-val red">−3.14%</span></div>
+        <div class="kv-row"><span class="kv-label">1M</span><span class="kv-val red">−8.20%</span></div>
+        <div class="kv-row"><span class="kv-label">YTD</span><span class="kv-val red">−14.1%</span></div>
+        <div class="kv-row"><span class="kv-label">1Y</span><span class="kv-val green">+4.8%</span></div>
+      </div>
+      <div class="card">
+        <h3>Risk</h3>
+        <div class="kv-row"><span class="kv-label">Beta</span><span class="kv-val">1.23</span></div>
+        <div class="kv-row"><span class="kv-label">Sharpe</span><span class="kv-val">0.84</span></div>
+        <div class="kv-row"><span class="kv-label">Max Drawdown</span><span class="kv-val red">−28.4%</span></div>
+        <div class="kv-row"><span class="kv-label">Std Dev (1Y)</span><span class="kv-val">22.1%</span></div>
+        <div class="kv-row"><span class="kv-label">VaR (95%)</span><span class="kv-val red">−2.3%</span></div>
+      </div>
+    </div>
+
+    <hr class="divider" />
+
+    <!-- ════════════════════════════════════════════
+         DEEP ANALYSIS LAB — NEW SECTION
+         ════════════════════════════════════════════ -->
+    <div class="deep-analysis-lab">
+
+      <div class="lab-header">
+        <div>
+          <div class="lab-title">Deep Analysis Lab</div>
+          <div class="lab-subtitle">On-demand research tools — choose your depth of analysis</div>
+        </div>
+        <span class="badge badge-gold" style="margin-left:auto">AAPL</span>
+      </div>
+
+      <!-- ANNOTATION: explains what this section is -->
+      <div class="annotation annotation-gold" style="margin-bottom:16px">
+        <div class="annotation-label">How it works</div>
+        Two report modes available. Quick Performance uses only EPM pipeline data — instant. Deep Swarm Analysis
+        runs Kronos OHLCV forecasting + MiroFish multi-agent simulation on the second analysis server.
+        Deep analysis is async — results arrive in 5–10 minutes while you continue browsing.
+      </div>
+
+      <!-- REPORT TYPE CARDS -->
+      <div class="report-type-grid">
+
+        <!-- QUICK PERFORMANCE CARD -->
+        <div class="report-type-card quick-card">
+          <div class="rt-icon rt-icon-blue">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          </div>
+          <div class="rt-type-name">Performance Snapshot</div>
+          <div class="rt-time">
+            <span class="rt-time-dot rt-time-dot-blue"></span>
+            ~1 minute &nbsp;·&nbsp; Uses EPM pipeline data only
+          </div>
+          <div class="rt-desc">
+            Fast-turn report built entirely from existing EPM quant data.
+            No external model calls — instant availability.
+          </div>
+          <ul class="rt-features">
+            <li>Price action &amp; multi-period returns (1D → 3Y)</li>
+            <li>Risk profile: Sharpe, Max DD, Beta, VaR, Sortino</li>
+            <li>Technical levels: MA20/50/200, support/resistance</li>
+            <li>EPM 7-model ensemble forecast consensus</li>
+            <li>AI narrative summary (qwen2.5:14b, ~30s)</li>
+            <li>Exportable as PDF</li>
+          </ul>
+          <button class="rt-btn rt-btn-blue">Generate Performance Report</button>
+        </div>
+
+        <!-- DEEP SWARM ANALYSIS CARD -->
+        <div class="report-type-card deep-card">
+          <span class="rt-badge rt-badge-premium">Deep</span>
+          <div class="rt-icon rt-icon-gold">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
+              <circle cx="12" cy="12" r="3"/><circle cx="4" cy="6" r="2"/><circle cx="20" cy="6" r="2"/><circle cx="4" cy="18" r="2"/><circle cx="20" cy="18" r="2"/><circle cx="12" cy="3" r="2"/><circle cx="12" cy="21" r="2"/>
+              <line x1="6" y1="6" x2="10" y2="10"/><line x1="18" y1="6" x2="14" y2="10"/><line x1="6" y1="18" x2="10" y2="14"/><line x1="18" y1="18" x2="14" y2="14"/><line x1="12" y1="5" x2="12" y2="9"/><line x1="12" y1="15" x2="12" y2="19"/>
+            </svg>
+          </div>
+          <div class="rt-type-name">Deep Swarm Analysis</div>
+          <div class="rt-time">
+            <span class="rt-time-dot rt-time-dot-gold"></span>
+            5–10 minutes &nbsp;·&nbsp; Async · Notified on completion
+          </div>
+          <div class="rt-desc">
+            Full multi-model deep dive. Kronos price-pattern forecasting
+            + MiroFish swarm simulation synthesized with EPM ensemble.
+          </div>
+          <ul class="rt-features">
+            <li>Everything in Performance Snapshot</li>
+            <li>Kronos: probabilistic OHLCV candlestick forecast</li>
+            <li>MiroFish: 40-agent swarm simulation (news + data + forecasts)</li>
+            <li>Bull/bear narrative strands from swarm consensus</li>
+            <li>Unified signal: direction + confidence + time horizon</li>
+            <li>Key catalysts + risk factors identified by agents</li>
+            <li>Full PDF report with executive summary</li>
+          </ul>
+          <button class="rt-btn rt-btn-gold">Run Deep Swarm Analysis</button>
+        </div>
+
+      </div>
+
+      <!-- POWERED BY BAR -->
+      <div class="powered-by">
+        <span>Powered by</span>
+        <div class="powered-chip">
+          <span class="chip-dot" style="background:#d4a84b"></span>
+          <strong>Kronos</strong> OHLCV Foundation Model
+        </div>
+        <div class="powered-chip">
+          <span class="chip-dot" style="background:#38bdf8"></span>
+          <strong>MiroFish</strong> Swarm Intelligence Engine
+        </div>
+        <div class="powered-chip">
+          <span class="chip-dot" style="background:#22c55e"></span>
+          <strong>EPM</strong> 7-Model Ensemble
+        </div>
+        <span style="margin-left:auto">Running on analysis server &nbsp;·&nbsp; 192.168.1.X</span>
+      </div>
+
+    </div>
+
+    <!-- ════════════════════════════════════════════
+         PROGRESS STATE (shown while deep analysis runs)
+         ════════════════════════════════════════════ -->
+    <div class="deep-analysis-lab" style="margin-top:28px">
+      <div class="lab-header">
+        <div>
+          <div class="lab-title" style="font-size:15px">Analysis In Progress — AAPL</div>
+          <div class="lab-subtitle">Deep Swarm Analysis &nbsp;·&nbsp; Started 9:47 AM</div>
+        </div>
+        <span class="badge badge-gold" style="animation:pulse 1.5s infinite">RUNNING</span>
+      </div>
+
+      <div class="analysis-progress">
+        <div class="progress-header">
+          <span class="progress-title">Deep Swarm Analysis &nbsp;·&nbsp; AAPL</span>
+          <span class="progress-eta">ETA: ~6 minutes remaining</span>
+        </div>
+        <div class="progress-stages">
+          <div class="stage-row done">
+            <div class="stage-icon stage-icon-done">✓</div>
+            <div><strong>OHLCV Data Fetch</strong> &nbsp;·&nbsp; <span style="color:var(--muted)">1,260 daily candles loaded via yfinance</span></div>
+          </div>
+          <div class="stage-row done">
+            <div class="stage-icon stage-icon-done">✓</div>
+            <div><strong>Kronos-mini Inference</strong> &nbsp;·&nbsp; <span style="color:var(--muted)">Next-candle distribution complete (4.1M params)</span></div>
+          </div>
+          <div class="stage-row done">
+            <div class="stage-icon stage-icon-done">✓</div>
+            <div><strong>Seed Document Packaged</strong> &nbsp;·&nbsp; <span style="color:var(--muted)">Price data + 14 news headlines + EPM forecasts + Kronos output</span></div>
+          </div>
+          <div class="stage-row active">
+            <div class="stage-icon stage-icon-active">↻</div>
+            <div><strong>MiroFish Swarm Simulation</strong> &nbsp;·&nbsp; <span style="color:var(--accent)">Round 18 / 40 &nbsp;·&nbsp; 12 active agents</span></div>
+          </div>
+          <div class="stage-row waiting">
+            <div class="stage-icon stage-icon-wait">○</div>
+            <div>Swarm Consensus Extraction</div>
+          </div>
+          <div class="stage-row waiting">
+            <div class="stage-icon stage-icon-wait">○</div>
+            <div>AI Synthesis &amp; Report Generation</div>
+          </div>
+        </div>
+        <div class="progress-bar-wrap">
+          <div class="progress-bar-fill" style="width:55%"></div>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:8px;text-align:right">55% complete &nbsp;·&nbsp; You can leave this page — results will be ready when you return</div>
+      </div>
+    </div>
+
+    <!-- ANNOTATION for mockup only -->
+    <div style="margin-top:32px;padding:14px 18px;background:rgba(212,168,75,0.05);border:1px dashed rgba(212,168,75,0.3);border-radius:8px;font-size:12px;color:var(--muted)">
+      <strong style="color:var(--accent)">MOCKUP NOTE:</strong> The top half of this page (chart, snapshot, data cards) is the existing search page unchanged.
+      The "Deep Analysis Lab" section and "Analysis In Progress" state are the new additions.
+      The progress panel replaces the launch cards while a job runs, then disappears when the report renders.
+    </div>
+
+  </div>
+</body>
+</html>

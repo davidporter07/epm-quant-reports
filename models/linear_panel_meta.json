@@ -1,0 +1,32 @@
+{
+  "trained_through": "2026-03-11",
+  "features": [
+    "ret_5d",
+    "ret_21d",
+    "ret_63d",
+    "ret_252d",
+    "vol_21d",
+    "vol_63d",
+    "price_vs_ma20",
+    "price_vs_ma50",
+    "price_vs_ma200",
+    "ma20_vs_ma50",
+    "ma50_vs_ma200",
+    "rsi_14",
+    "log_volume",
+    "lag1",
+    "lag5",
+    "lag21",
+    "alpha_3y",
+    "beta_3y",
+    "sharpe_3y",
+    "max_drawdown_3y",
+    "momentum_z",
+    "composite_score",
+    "quant_score"
+  ],
+  "rmse": 0.03671237759089495,
+  "trained_at": "2026-04-10T09:00:43",
+  "observations": 10388,
+  "backtest_rows": 350
+}

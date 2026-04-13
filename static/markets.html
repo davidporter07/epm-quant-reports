@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#132742" id="themeColorMeta" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" id="appleStatusBarMeta" />
+  <meta name="apple-mobile-web-app-title" content="EPM Market Intelligence" />
+  <meta name="color-scheme" content="dark light" />
+  <script>
+    (function () {
+      try {
+        var pref = localStorage.getItem('epm_theme_pref') || 'dark';
+        var resolved = pref === 'system' ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : pref;
+        var bg = resolved === 'light' ? '#f5f8fd' : '#061326';
+        var chrome = resolved === 'light' ? '#f5f8fd' : '#061326';
+        document.documentElement.dataset.theme = resolved;
+        document.documentElement.style.backgroundColor = bg;
+        var themeMeta = document.getElementById('themeColorMeta');
+        if (themeMeta) themeMeta.setAttribute('content', chrome);
+      } catch (err) {
+        document.documentElement.style.backgroundColor = '#061326';
+      }
+    })();
+  </script>
+  <script>try{if(!sessionStorage.getItem("epm_splash_shown")&&location.pathname.indexOf("login")<0&&location.pathname.indexOf("reset")<0){var _sh=document.createElement("div");_sh.id="fvsShield";_sh.style.cssText="position:fixed;inset:0;z-index:9998;background:#040d1a";document.documentElement.appendChild(_sh);}}catch(e){}</script>
+  <title>Markets | EPM Market Intelligence</title>
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260410a" />
+  <link rel="stylesheet" href="/static/css/design-v2.css?v=20260410a" />
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <script defer src="/static/js/site.js?v=20260410a"></script>
+  <link rel="icon" type="image/png" href="/static/epm_logo_sq.png">
+  <link rel="apple-touch-icon" href="/static/epm_logo_sq.png">
+  <meta property="og:image" content="/static/epm_logo.png">
+</head>
+<body data-page="markets">
+  <div id="settingsOverlay" class="settings-overlay"></div>
+  <aside id="settingsDrawer" class="settings-drawer">
+    <div class="section-title-row"><h3>Settings</h3><button id="closeSettingsBtn" class="btn btn-ghost">Close</button></div>
+    <div class="settings-group"><h4>Theme</h4><div class="radio-row"><div class="radio-chip" data-pref-theme="dark">Dark</div><div class="radio-chip" data-pref-theme="light">Light</div><div class="radio-chip" data-pref-theme="system">System</div></div></div>
+    <div class="settings-group"><h4>Animations</h4><div class="radio-row"><div class="radio-chip" data-pref-animations="on">On</div><div class="radio-chip" data-pref-animations="off">Reduced</div></div></div>
+  </aside>
+
+  <div class="page-shell">
+    <header class="topbar fade-in">
+      <div class="brand-block">
+        <img class="brand-logo" src="/static/epm_logo.png?v=20260322f" alt="EPM Financial" />
+        <div class="brand-copy">
+          <h1>EPM Market Intelligence</h1>
+          <p>Markets &mdash; cross-asset dashboard with index trend, sector rotation, grouped movers, and a clearer macro read.</p>
+        </div>
+        <nav class="main-nav">
+          <a class="nav-link" href="/">Home</a>
+          <a class="nav-link" href="/markets">Markets</a>
+          <a class="nav-link" href="/forecasting">Forecasting</a>
+          <a class="nav-link" href="/portfolios">Model Portfolios</a>
+        </nav>
+      </div>
+      <nav class="topbar-nav">
+        <a class="topbar-nav-link nav-link" href="/">Home</a>
+        <a class="topbar-nav-link nav-link" href="/markets">Markets</a>
+        <a class="topbar-nav-link nav-link" href="/forecasting">Forecasting</a>
+        <a class="topbar-nav-link nav-link" href="/portfolios">Portfolios</a>
+      </nav>
+      <div class="top-actions">
+        <button id="openSettingsBtn" class="btn btn-icon settings-gear-btn" type="button" aria-label="Open settings" title="Settings"></button>
+      </div>
+    </header>
+
+    <!-- ── Index strip / tape ── -->
+    <section class="card fade-in" style="padding:14px 18px;">
+      <div class="section-title-row" style="margin-bottom:10px;">
+        <div>
+          <h2 style="font-size:14px;margin:0;">Markets &amp; Indexes</h2>
+          <p class="card-subtitle" style="margin:2px 0 0;font-size:11px;">Live cross-asset index tape &mdash; updated each trading day.</p>
+        </div>
+        <span id="marketsGeneratedAt" class="badge">Loading live data</span>
+      </div>
+      <div id="marketsIndexes" class="market-strip"><div class="placeholder-item">Loading indexes...</div></div>
+    </section>
+
+    <!-- ── Section: Sentiment & Posture ── -->
+    <div class="sec-divider fade-in">Sentiment &amp; Posture</div>
+
+    <!-- ── Overview: EPM Gauge | Market Posture KPIs | Movers ── -->
+    <div class="markets-overview-grid fade-in">
+
+      <!-- EPM Market Sentiment Gauge -->
+      <div class="card epm-gauge-card">
+        <div class="section-title-row" style="margin-bottom:8px;">
+          <h3 style="font-size:13px;margin:0;">EPM Market Sentiment</h3>
+          <span class="badge">Composite</span>
+        </div>
+        <div id="marketsEPMGauge"><div class="placeholder-item" style="height:160px;">Loading sentiment gauge...</div></div>
+      </div>
+
+      <!-- Market Posture KPIs -->
+      <div class="card">
+        <div class="section-title-row">
+          <h3>Market Posture</h3>
+          <span class="badge">Quick read</span>
+        </div>
+        <p class="card-subtitle">Key risk &amp; macro metrics &mdash; VIX, yields, breadth, dollar, and credit spread.</p>
+        <div id="marketsRiskDashboard" class="market-kpi-grid"><div class="placeholder-item">Building market posture...</div></div>
+      </div>
+
+      <!-- Today's Movers -->
+      <div class="card">
+        <div class="section-title-row">
+          <h3>Today's Movers</h3>
+          <span class="badge">Today</span>
+        </div>
+        <p class="card-subtitle">Top gainers and losers from the live broad-market feed.</p>
+        <div id="marketsMoversBox" class="movers-box-shell"><div class="placeholder-item">Loading movers...</div></div>
+      </div>
+
+    </div><!-- /markets-overview-grid -->
+
+    <!-- ── Section: Charts ── -->
+    <div class="sec-divider fade-in">Charts</div>
+
+    <!-- ── 5 Charts ── -->
+    <div class="market-charts-grid fade-in">
+      <div class="card plot-shell chart-cell--global-index">
+        <div class="section-title-row"><h3>Global Index Comparison</h3><span class="badge">3Y returns</span></div>
+        <div id="marketsIndexComparisonChart" class="plot-target plot-target--comparison"></div>
+      </div>
+      <div class="card plot-shell chart-cell--equity-risk">
+        <div class="section-title-row"><h3>Equity Risk</h3><span class="badge">SPY vs VIX</span></div>
+        <div id="marketsEquityRiskChart" class="plot-target plot-target--short"></div>
+      </div>
+      <div class="card plot-shell chart-cell--rates-credit">
+        <div class="section-title-row"><h3>Rates &amp; Credit</h3><span class="badge">10Y + HYG</span></div>
+        <div id="marketsRatesCreditChart" class="plot-target plot-target--short"></div>
+      </div>
+      <div class="card plot-shell chart-cell--sector-rotation">
+        <div class="section-title-row"><h3>Sector Rotation</h3><span class="badge">YTD</span></div>
+        <div id="marketsSectorRotationChart" class="plot-target plot-target--short"></div>
+      </div>
+      <div class="card plot-shell chart-cell--commodities">
+        <div class="section-title-row"><h3>Dollar &amp; Commodities</h3><span class="badge">Rebased</span></div>
+        <div id="marketsDollarCommoditiesChart" class="plot-target plot-target--short"></div>
+      </div>
+    </div>
+
+    <!-- ── Section: Tactical Posture ── -->
+    <div class="sec-divider fade-in">Tactical Posture</div>
+
+    <!-- ── Risk On / Off ── -->
+    <div class="two-col-grid fade-in">
+      <div class="card risk-on-card">
+        <div class="section-title-row">
+          <div class="section-title-with-info">
+            <h3>Risk On <span class="risk-accent risk-accent--on">&#9650;</span></h3>
+            <button class="info-icon-btn" type="button" aria-label="How Risk On is selected" data-tooltip="risk-on-tip">&#9432;</button>
+          </div>
+          <span class="badge badge--green">Offense</span>
+        </div>
+        <div class="risk-selection-note">
+          <span class="risk-note-icon">&#9650;</span>
+          <span>Ranked by <strong>1-month return</strong> &mdash; QQQ, IWM, SMH, SOXX, IGV, XLY, XBI, ARKK, HYG, XLE, XLI, VUG basket.</span>
+        </div>
+        <div id="marketsRiskOn" class="market-card-grid market-card-grid--compact"><div class="placeholder-item">Loading risk-on basket...</div></div>
+      </div>
+      <div class="card risk-off-card">
+        <div class="section-title-row">
+          <div class="section-title-with-info">
+            <h3>Risk Off <span class="risk-accent risk-accent--off">&#9660;</span></h3>
+            <button class="info-icon-btn" type="button" aria-label="How Risk Off is selected" data-tooltip="risk-off-tip">&#9432;</button>
+          </div>
+          <span class="badge badge--amber">Defense</span>
+        </div>
+        <div class="risk-selection-note">
+          <span class="risk-note-icon">&#9660;</span>
+          <span>Ranked by <strong>1-month return</strong> &mdash; TLT, IEF, SHY, GLD, UUP, XLU, XLP, LQD, XLV, BIL, SGOV basket.</span>
+        </div>
+        <div id="marketsRiskOff" class="market-card-grid market-card-grid--compact"><div class="placeholder-item">Loading risk-off basket...</div></div>
+      </div>
+    </div>
+
+    <!-- ── Section: Market Intelligence ── -->
+    <div class="sec-divider fade-in">Market Intelligence</div>
+
+    <!-- ── Trend table (full-width) ── -->
+    <div class="card fade-in" style="margin-bottom:var(--card-gap);">
+      <div class="section-title-row"><h3>Trend Table</h3><span class="badge">Cross-market</span></div>
+      <p class="card-subtitle">Cross-market ETFs ranked by trend state &mdash; daily, 1M, YTD, beta, and volatility.</p>
+      <div id="marketsTrendTable" class="table-shell"><div class="placeholder-item">Loading trend table...</div></div>
+    </div>
+
+    <!-- ── 3-col data suite ── -->
+    <div class="markets-data-suite fade-in">
+
+      <!-- Col 1: OECD CLI -->
+      <div class="markets-data-stack">
+        <div class="card">
+          <div class="section-title-row"><h3>OECD Leading Indicators</h3><span class="badge">Monthly CLI</span></div>
+          <p class="card-subtitle">CLI above 100 = above long-run trend (expansionary).</p>
+          <div id="marketsOECDCLI" class="oecd-cli-grid"><div class="placeholder-item">Loading OECD data...</div></div>
+        </div>
+      </div>
+
+      <!-- Col 2: Market Intelligence News -->
+      <div class="markets-data-stack">
+        <div class="card">
+          <div class="section-title-row"><h3>Market Intelligence</h3><span class="badge">7-day news</span></div>
+          <div id="marketsWorldNews" class="world-news-list"><div class="placeholder-item">Loading market news...</div></div>
+        </div>
+      </div>
+
+      <!-- Col 3: 4-week Economic Calendar -->
+      <div class="markets-data-cal">
+        <div class="card">
+          <div class="section-title-row"><h3>Economic Calendar</h3><span class="badge">4-week outlook</span></div>
+          <p class="card-subtitle">Click any day to see scheduled releases. Red&nbsp;= high impact, amber&nbsp;= medium.</p>
+          <div id="marketsEconCalendar" class="econ-cal-grid"><div class="placeholder-item">Loading calendar...</div></div>
+          <div id="marketsEconDayPanel" class="econ-day-panel hidden"></div>
+        </div>
+      </div><!-- /markets-data-cal -->
+
+    </div><!-- /markets-data-suite -->
+
+    <!-- ── Section: Insider Activity ── -->
+    <div class="sec-divider fade-in">Insider Activity</div>
+
+    <!-- ── SEC Insider Activity ── -->
+    <section class="card fade-in">
+      <div class="section-title-row">
+        <div>
+          <h3>Insider Activity Monitor</h3>
+          <p class="card-subtitle">Open-market Form 4 transactions &mdash; 50 major S&amp;P 500 companies, rolling 30 days. Excludes RSU vesting and option exercises.</p>
+        </div>
+        <span class="badge">SEC Form 4 &middot; 50 names</span>
+      </div>
+      <div id="marketsInsiderSummary" class="insider-summary-bar"><div class="placeholder-item">Loading insider summary...</div></div>
+      <div id="marketsInsiderActivity" class="insider-activity-list" style="margin-top:12px;"><div class="placeholder-item">Loading insider transactions...</div></div>
+    </section>
+
+  </div><!-- /page-shell -->
+</body>
+</html>

@@ -1,0 +1,62 @@
+{
+  "portfolio_ycharts_symbols": [
+    "AAPL",
+    "MSFT",
+    "AMZN",
+    "NVDA",
+    "GOOG",
+    "META",
+    "TSLA",
+    "BUFR",
+    "CGDV",
+    "FLQM",
+    "AUSF",
+    "SDVD",
+    "DIVO",
+    "XLG",
+    "TMFC",
+    "XNTK",
+    "RLY",
+    "EFAA",
+    "LVHI",
+    "M:SGIIX",
+    "M:JFNIX",
+    "IXJ",
+    "M:VSMIX",
+    "M:TGVIX",
+    "JAAA",
+    "M:WCPBX",
+    "M:LBIIX",
+    "M:ADVNX",
+    "EVTR",
+    "M:MFIIX",
+    "M:SUBFX",
+    "KORP",
+    "M:OMFYX",
+    "M:MTFGX",
+    "JHPI",
+    "JHMB",
+    "JMST",
+    "JSI",
+    "M:FDUIX"
+  ],
+  "ycharts_snapshot_symbols_extra": [
+    "^SPX",
+    "^MSEUR",
+    "^MSACAS"
+  ],
+  "mag7": [
+    "AAPL",
+    "MSFT",
+    "AMZN",
+    "NVDA",
+    "GOOG",
+    "META",
+    "TSLA"
+  ],
+  "index_comparison": [
+    "^SPX",
+    "^STOXX50E",
+    "^N225"
+  ]
+}
