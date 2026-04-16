@@ -476,34 +476,8 @@
     })();
 
     // -----------------------------------------------------------------------
-    // Auto-auth: if a valid token is already stored, skip login form entirely
+    // Auto-auth: check for an existing server session via HttpOnly cookie
     // -----------------------------------------------------------------------
-    const TOKEN_KEY   = 'epm_auth_token';
-    const STORAGE_KEY = 'epm_token_storage'; // 'local' | 'session'
-
-    function getStoredToken() {
-      try {
-        const where = localStorage.getItem(STORAGE_KEY) || 'session';
-        const store = where === 'local' ? localStorage : sessionStorage;
-        return store.getItem(TOKEN_KEY) || null;
-      } catch (e) { return null; }
-    }
-
-    function storeToken(token, rememberMe) {
-      try {
-        const store = rememberMe ? localStorage : sessionStorage;
-        store.setItem(TOKEN_KEY, token);
-        localStorage.setItem(STORAGE_KEY, rememberMe ? 'local' : 'session');
-      } catch (e) {}
-    }
-
-    function clearToken() {
-      try {
-        localStorage.removeItem(TOKEN_KEY);
-        sessionStorage.removeItem(TOKEN_KEY);
-        localStorage.removeItem(STORAGE_KEY);
-      } catch (e) {}
-    }
 
     function redirectTarget() {
       try {
@@ -545,23 +519,16 @@
       advance();
     }
 
-    // Check for an existing valid token on page load
+    // Check for an existing server session (HttpOnly cookie sent automatically)
     (async function checkExistingAuth() {
-      const token = getStoredToken();
-      if (!token) return; // no token — show login form normally
-
       try {
-        const res = await fetch('/api/auth/me', {
-          headers: { 'Authorization': 'Bearer ' + token }
-        });
+        const res = await fetch('/api/auth/me');
         if (res.ok) {
-          // Token still valid — run splash then redirect
+          const data = await res.json();
+          try { localStorage.setItem('epm_username', data?.user?.username || ''); } catch (_) {}
           runSplash(() => { window.location.href = redirectTarget(); });
-          return;
         }
-      } catch (e) {}
-      // Token invalid or expired — clear it and show the form
-      clearToken();
+      } catch (_) {}
     })();
 
     // -----------------------------------------------------------------------
@@ -686,10 +653,7 @@
           return;
         }
 
-        // Store token based on remember-me preference
-        storeToken(data.token, data.remember_me);
-
-        // Store username for topbar display
+        // Server sets HttpOnly cookie; cache username for optimistic topbar display.
         try { localStorage.setItem('epm_username', data.user.username); } catch (ex) {}
 
         if (isRegisterMode) {

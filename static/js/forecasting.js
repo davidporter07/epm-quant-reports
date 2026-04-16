@@ -729,13 +729,11 @@ function setStatus(msg, isError) {
 }
 
 function _refreshForecastsInBackground() {
-  const token = (typeof epmGetToken === 'function') ? epmGetToken() : null;
-  const headers = token ? { 'Authorization': 'Bearer ' + token } : {};
   const chartAbort = new AbortController();
   const chartTimeout = setTimeout(() => chartAbort.abort(), 25000);
   Promise.all([
-    fetch('/api/forecasts', { headers }).catch(() => null),
-    fetch('/api/forecast-chart-data', { signal: chartAbort.signal, headers }).catch(() => null),
+    fetch('/api/forecasts').catch(() => null),
+    fetch('/api/forecast-chart-data', { signal: chartAbort.signal }).catch(() => null),
   ]).then(([forecastResp, chartResp]) => {
     clearTimeout(chartTimeout);
     if (!forecastResp || !forecastResp.ok) return;

@@ -1211,6 +1211,7 @@ async function runAnalysis(event) {
       scheduleDockVisibilityCheck();
     });
     statusEl.textContent = `Loaded snapshot for ${ticker}.`;
+    window.initDeepAnalysis?.(ticker);
   } catch (err) {
     window.EPMTickerValidation?.markTickerInvalid?.(ticker);
     setDockVisibleImmediate(false);
@@ -1225,12 +1226,22 @@ function syncStickyHeaderOffset() {
     document.documentElement.style.setProperty("--search-sticky-top", `${fallback}px`);
     return;
   }
-  // Use offsetHeight + CSS sticky-top to compute where the bottom of a stuck topbar
-  // sits. BCR.bottom is intentionally NOT used here — when the page hasn't scrolled,
-  // BCR.bottom includes the ticker-tape/pre-scroll offset which is much larger than
-  // the stuck position, causing the dock to appear too far down the viewport.
   const topCss = parseFloat(getComputedStyle(topbar).top);
   const topOffset = Number.isFinite(topCss) && topCss >= 0 ? topCss : 12;
+
+  if (window.scrollY > 0) {
+    // Once scrolled, use the topbar's live viewport bottom edge so the dock
+    // sits flush under the sticky topbar. If the topbar has scrolled off-screen
+    // (not sticky / not visible), fall back to 8px so the dock docks at the top
+    // rather than leaving a gap where the header used to be.
+    const bcrBottom = topbar.getBoundingClientRect().bottom;
+    const offset = bcrBottom > 0 ? Math.ceil(bcrBottom + 8) : 8;
+    document.documentElement.style.setProperty("--search-sticky-top", `${offset}px`);
+    return;
+  }
+
+  // Before scrolling: BCR.bottom is unreliable because the ticker tape above the
+  // topbar inflates it to a large pre-scroll offset. Use offsetHeight + CSS top instead.
   const offset = Math.ceil(topbar.offsetHeight + topOffset + 8);
   document.documentElement.style.setProperty("--search-sticky-top", `${offset}px`);
 }

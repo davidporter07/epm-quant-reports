@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Deep Analysis Report | EPM Market Intelligence</title>
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260410a" />
+  <link rel="stylesheet" href="/static/css/design-v2.css?v=20260410a" />
+  <script defer src="/static/js/site.js?v=20260410a"></script>
+  <link rel="icon" type="image/png" href="/static/epm_logo_sq.png">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    .report-page { max-width: 960px; margin: 0 auto; padding: 32px 24px 80px; }
+    .report-header {
+      background: linear-gradient(160deg, #07112a, rgba(5,12,28,0.95));
+      border: 1px solid rgba(212,168,75,0.35);
+      border-radius: 14px;
+      padding: 28px 32px;
+      margin-bottom: 20px;
+      position: relative;
+      overflow: hidden;
+    }
+    .report-header::before {
+      content: '';
+      position: absolute; top: 0; left: 0; right: 0; height: 4px;
+      background: linear-gradient(90deg, #d4a84b 0%, #f0c878 50%, #d4a84b 100%);
+    }
+    .report-ticker { font-size: 42px; font-weight: 900; color: #d4a84b; line-height: 1; }
+    .report-title { font-size: 16px; color: var(--text, #e8eeff); margin-top: 6px; opacity: 0.85; }
+    .report-meta { font-size: 11px; color: var(--muted, #7d94c0); margin-top: 6px; }
+    .report-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .12em;
+      background: rgba(212,168,75,0.12); color: #d4a84b;
+      border: 1px solid rgba(212,168,75,0.3);
+      padding: 4px 12px; border-radius: 20px; margin-bottom: 14px;
+    }
+    .section-card {
+      background: var(--panel, rgba(8,18,40,0.93));
+      border: 1px solid var(--border, rgba(28,52,96,0.62));
+      border-radius: 10px;
+      padding: 22px 24px;
+      margin-bottom: 16px;
+    }
+    .section-card h2 { font-size: 15px; font-weight: 700; color: #d4a84b; margin-bottom: 14px; }
+    .section-card p, .section-card li { font-size: 13px; color: var(--muted, #7d94c0); line-height: 1.75; }
+    .section-card strong { color: var(--text, #e8eeff); }
+    .section-card ul, .section-card ol { padding-left: 20px; }
+    .section-card h3 { font-size: 13px; font-weight: 700; color: var(--text, #e8eeff); margin: 14px 0 6px; }
+    .back-link {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 12px; color: var(--muted, #7d94c0);
+      text-decoration: none; margin-bottom: 20px;
+    }
+    .back-link:hover { color: var(--text, #e8eeff); }
+    .loading-state { text-align: center; padding: 60px 20px; color: var(--muted, #7d94c0); }
+    .error-state { padding: 20px; background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); border-radius: 8px; color: #ef4444; font-size: 13px; }
+    .summary-card {
+      background: rgba(212,168,75,0.06);
+      border: 1px solid rgba(212,168,75,0.2);
+      border-radius: 10px;
+      padding: 16px 20px;
+      margin-bottom: 20px;
+      font-size: 13px;
+      color: var(--text, #e8eeff);
+      line-height: 1.7;
+    }
+    .md-content h1, .md-content h2, .md-content h3 { color: var(--text, #e8eeff); margin: 16px 0 8px; }
+    .md-content p { font-size: 13px; color: var(--muted, #7d94c0); line-height: 1.75; margin-bottom: 10px; }
+    .md-content ul, .md-content ol { padding-left: 20px; margin-bottom: 10px; }
+    .md-content li { font-size: 13px; color: var(--muted, #7d94c0); line-height: 1.7; }
+    .md-content strong { color: var(--text, #e8eeff); }
+    @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.5; } }
+    .pulsing { animation: pulse 1.5s ease-in-out infinite; }
+    .report-actions {
+      display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap;
+    }
+    .report-actions button {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 8px 16px; border-radius: 8px; font-size: 12px; font-weight: 600;
+      cursor: pointer; transition: opacity .15s;
+    }
+    .report-actions button:hover { opacity: .8; }
+    .btn-copy {
+      background: transparent;
+      border: 1px solid rgba(212,168,75,0.35);
+      color: var(--muted, #7d94c0);
+    }
+    .btn-pdf {
+      background: linear-gradient(135deg,#d4a84b,#a07828);
+      border: none; color: #0a1928;
+    }
+    @media print {
+      body { background: #fff !important; color: #111 !important; }
+      .back-link, .report-actions, #loadingState, #errorState { display: none !important; }
+      .report-page { max-width: 100%; padding: 0; }
+      .report-header {
+        background: #f8f4ec !important; border: 1px solid #ccc !important;
+        -webkit-print-color-adjust: exact; print-color-adjust: exact;
+      }
+      .report-ticker { color: #8a5f1a !important; -webkit-text-fill-color: #8a5f1a !important; }
+      .report-pill { background: #f0e6cc !important; color: #8a5f1a !important; border-color: #ccc !important; }
+      .section-card {
+        background: #fff !important; border: 1px solid #ddd !important;
+        break-inside: avoid; page-break-inside: avoid;
+      }
+      .section-card h2 { color: #8a5f1a !important; }
+      .section-card p, .section-card li { color: #333 !important; }
+      .section-card strong { color: #111 !important; }
+      .summary-card { background: #fdf8ee !important; border-color: #ccc !important; color: #222 !important; }
+      .report-title, .report-meta { color: #444 !important; }
+    }
+  </style>
+</head>
+<body data-page="deep-report">
+  <div id="settingsOverlay" class="settings-overlay"></div>
+  <aside id="settingsDrawer" class="settings-drawer"></aside>
+
+  <div class="report-page">
+    <a class="back-link" id="backLink" href="/search">← Back to Fund Search</a>
+
+    <div class="report-actions" id="reportActions" style="display:none;">
+      <button class="btn-copy" id="btnNewAnalysis" onclick="window.location.href=document.getElementById('backLink').href+'&newAnalysis=1#deepAnalysisLab'" style="border-color:rgba(212,168,75,0.35);color:#d4a84b;">
+        + Run New Analysis
+      </button>
+      <button class="btn-copy" id="btnCopyLink" onclick="copyReportLink()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        Copy Link
+      </button>
+      <button class="btn-pdf" onclick="window.print()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+        Download PDF
+      </button>
+    </div>
+
+    <div id="loadingState" class="loading-state">
+      <div class="pulsing" style="font-size:14px;">Loading report…</div>
+    </div>
+
+    <div id="errorState" class="error-state" style="display:none;"></div>
+
+    <div id="reportContent" style="display:none;">
+      <div class="report-header">
+        <div class="report-pill">Deep Swarm Analysis</div>
+        <div class="report-ticker" id="rTicker"></div>
+        <div class="report-title" id="rTitle"></div>
+        <div class="report-meta" id="rMeta"></div>
+      </div>
+
+      <div id="rSummary" class="summary-card" style="display:none;"></div>
+
+      <div id="rSections"></div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const params = new URLSearchParams(window.location.search);
+      const jobId = params.get('job_id');
+      const ticker = (params.get('ticker') || '').toUpperCase();
+
+      const backLink = document.getElementById('backLink');
+      if (ticker) backLink.href = `/search?ticker=${encodeURIComponent(ticker)}`;
+
+      function showError(msg) {
+        document.getElementById('loadingState').style.display = 'none';
+        const e = document.getElementById('errorState');
+        e.textContent = msg;
+        e.style.display = '';
+      }
+
+      function copyReportLink() {
+        const btn = document.getElementById('btnCopyLink');
+        navigator.clipboard.writeText(window.location.href).then(() => {
+          btn.textContent = '✓ Copied!';
+          setTimeout(() => {
+            btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy Link';
+          }, 2000);
+        });
+      }
+
+      function renderReport(status) {
+        document.getElementById('loadingState').style.display = 'none';
+        document.getElementById('reportActions').style.display = '';
+        const result = status.result;
+        if (!result) { showError('Report data unavailable.'); return; }
+
+        document.getElementById('rTicker').textContent = status.ticker || ticker;
+        document.getElementById('rTitle').textContent = result.title || 'Deep Analysis Report';
+        document.getElementById('rMeta').textContent =
+          'Deep Swarm Analysis · Powered by Kronos + MiroFish + EPM Ensemble · ' +
+          (status.completed_at ? new Date(status.completed_at + 'Z').toLocaleString() : '');
+
+        if (result.summary) {
+          const s = document.getElementById('rSummary');
+          s.textContent = result.summary;
+          s.style.display = '';
+        }
+
+        const container = document.getElementById('rSections');
+        // Prefer LLM-enhanced markdown, then sections array, then raw markdown
+        if (result.enhanced_markdown) {
+          const badge = document.createElement('div');
+          badge.style.cssText = 'display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;padding:3px 10px;border-radius:4px;background:rgba(34,197,94,0.1);color:#22c55e;border:1px solid rgba(34,197,94,0.25);margin-bottom:12px;';
+          badge.textContent = 'EPM Enhanced';
+          container.appendChild(badge);
+          const card = document.createElement('div');
+          card.className = 'section-card md-content';
+          card.innerHTML = (window.marked ? marked.parse(result.enhanced_markdown) : result.enhanced_markdown);
+          container.appendChild(card);
+        } else if (result.sections && result.sections.length) {
+          result.sections.forEach(sec => {
+            const card = document.createElement('div');
+            card.className = 'section-card';
+            const h = document.createElement('h2');
+            h.textContent = sec.title || '';
+            card.appendChild(h);
+            const body = document.createElement('div');
+            body.className = 'md-content';
+            body.innerHTML = (window.marked ? marked.parse(sec.content || '') : sec.content || '');
+            card.appendChild(body);
+            container.appendChild(card);
+          });
+        } else if (result.markdown_content) {
+          const card = document.createElement('div');
+          card.className = 'section-card md-content';
+          card.innerHTML = (window.marked ? marked.parse(result.markdown_content) : result.markdown_content);
+          container.appendChild(card);
+        }
+
+        document.getElementById('reportContent').style.display = '';
+      }
+
+      async function load() {
+        if (!jobId) { showError('No job ID provided.'); return; }
+        try {
+          const r = await fetch(`/api/deep/${jobId}/status`, { credentials: 'include' });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const data = await r.json();
+          if (data.status === 'completed') {
+            renderReport(data);
+          } else if (data.status === 'failed') {
+            showError('Analysis failed: ' + (data.error || 'unknown error'));
+          } else {
+            showError('Report not ready yet. Return to Fund Search to track progress.');
+          }
+        } catch (err) {
+          showError('Could not load report: ' + err.message);
+        }
+      }
+
+      load();
+
+      // Agent Activity viewer — loads after report renders
+      async function loadAgents(jobId) {
+        const section = document.getElementById('agentActivity');
+        if (!section) return;
+        try {
+          const r = await fetch(`/api/deep/${jobId}/agents`, { credentials: 'include' });
+          if (!r.ok) return;
+          const data = await r.json();
+          if (!data.ok || !data.agents || !data.agents.length) return;
+
+          section.style.display = '';
+          const list = document.getElementById('agentList');
+          list.innerHTML = data.agents.map(a => `
+            <details class="agent-card">
+              <summary class="agent-summary">
+                <span class="agent-name">${a.name}</span>
+                <span class="agent-post-count">${a.post_count} post${a.post_count !== 1 ? 's' : ''}</span>
+              </summary>
+              <div class="agent-bio">${a.bio ? a.bio.slice(0, 180) + (a.bio.length > 180 ? '…' : '') : ''}</div>
+              <div class="agent-posts">${a.posts.map(p => `<div class="agent-post">${p}</div>`).join('')}</div>
+            </details>
+          `).join('');
+        } catch (_) {}
+      }
+
+      // Patch renderReport to also trigger agent load
+      const _origLoad = load;
+      window._loadAgentsForJob = loadAgents;
+    })();
+  </script>
+
+  <style>
+    #agentActivity { margin: 32px auto; max-width: 860px; padding: 0 16px; }
+    #agentActivity h3 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted, #888); margin-bottom: 12px; }
+    .agent-card { border: 1px solid var(--border, #2a2a2a); border-radius: 8px; margin-bottom: 8px; overflow: hidden; }
+    .agent-summary { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; cursor: pointer; list-style: none; background: var(--surface, #1a1a1a); }
+    .agent-summary::-webkit-details-marker { display: none; }
+    .agent-name { font-weight: 600; font-size: 14px; }
+    .agent-post-count { font-size: 11px; color: var(--text-muted, #888); background: var(--surface2, #222); padding: 2px 8px; border-radius: 10px; }
+    .agent-bio { font-size: 12px; color: var(--text-muted, #888); padding: 8px 14px 4px; font-style: italic; border-top: 1px solid var(--border, #2a2a2a); }
+    .agent-posts { padding: 8px 14px 12px; display: flex; flex-direction: column; gap: 6px; }
+    .agent-post { font-size: 13px; line-height: 1.5; padding: 8px 10px; background: var(--surface2, #111); border-radius: 6px; border-left: 2px solid var(--accent, #b8860b); }
+  </style>
+
+  <div id="agentActivity" style="display:none;">
+    <h3>Simulation Agent Activity</h3>
+    <div id="agentList"></div>
+  </div>
+
+  <script>
+    // Wire agent load after report renders
+    (function() {
+      const params = new URLSearchParams(window.location.search);
+      const jobId = params.get('job_id');
+      if (jobId && window._loadAgentsForJob) {
+        // Delay slightly so main report renders first
+        setTimeout(() => window._loadAgentsForJob(jobId), 800);
+      }
+    })();
+  </script>
+</body>
+</html>

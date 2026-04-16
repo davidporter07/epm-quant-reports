@@ -52,51 +52,34 @@
 })();
 
 // ==========================================================================
-// AUTH — token storage, auth state, and topbar actions
+// AUTH — cookie-based auth state and topbar actions
+// Session tokens are stored in an HttpOnly Secure cookie set by the server.
+// JS never sees the raw token; cookies are sent automatically by the browser.
 // ==========================================================================
 
-const EPM_TOKEN_KEY   = 'epm_auth_token';
-const EPM_STORAGE_KEY = 'epm_token_storage'; // 'local' | 'session'
+// Stubs kept for compatibility with callers that guard on typeof/null checks.
+function epmGetToken() { return null; }
+function epmAuthHeaders() { return {}; }
 
-function epmGetToken() {
+async function epmClearToken() {
+  // Ask the server to clear the HttpOnly cookie, then wipe cached display data.
+  try { await fetch('/api/auth/logout', { method: 'POST' }); } catch (_) {}
   try {
-    const where = localStorage.getItem(EPM_STORAGE_KEY) || 'session';
-    return (where === 'local' ? localStorage : sessionStorage).getItem(EPM_TOKEN_KEY) || null;
-  } catch (_) { return null; }
-}
-
-function epmClearToken() {
-  try {
-    localStorage.removeItem(EPM_TOKEN_KEY);
-    sessionStorage.removeItem(EPM_TOKEN_KEY);
-    localStorage.removeItem(EPM_STORAGE_KEY);
     localStorage.removeItem('epm_username');
     localStorage.removeItem('epm_user_prefs');
   } catch (_) {}
 }
 
-function epmAuthHeaders() {
-  const token = epmGetToken();
-  return token ? { 'Authorization': 'Bearer ' + token } : {};
-}
-
 /**
- * Non-blocking auth check. Validates the stored token against /api/auth/me,
- * then updates body[data-auth-state] and the topbar accordingly.
- * Never redirects — public pages just show the Sign In button.
- * Gated pages (forecasting, portfolios) use data-auth-state to control blur/gate.
+ * Non-blocking auth check. Calls /api/auth/me — the HttpOnly cookie is sent
+ * automatically by the browser. Uses cached username for optimistic display
+ * so gated pages don't flash the sign-in gate during the round-trip.
  */
 async function epmCheckAuthState() {
-  const token = epmGetToken();
-  if (!token) {
-    _applyAuthState('guest');
-    return;
-  }
-  // Optimistic: if we have a token, treat as member immediately so gated pages
-  // don't flash the sign-in gate while the network round-trip is in flight.
-  _applyAuthState('member', localStorage.getItem('epm_username') || '');
+  const cached = localStorage.getItem('epm_username');
+  if (cached) _applyAuthState('member', cached);
   try {
-    const res = await fetch('/api/auth/me', { headers: { 'Authorization': 'Bearer ' + token } });
+    const res = await fetch('/api/auth/me');
     if (res.ok) {
       const data = await res.json();
       if (data?.user?.username) {
@@ -105,12 +88,12 @@ async function epmCheckAuthState() {
       }
       _applyAuthState('member', data?.user?.username);
     } else {
-      epmClearToken();
+      await epmClearToken();
       _applyAuthState('guest');
     }
   } catch (_) {
-    // Network error — if we have a token, optimistically treat as member
-    _applyAuthState(token ? 'member' : 'guest');
+    // Network error — keep optimistic member state if we had a cached username
+    if (!cached) _applyAuthState('guest');
   }
 }
 
@@ -137,10 +120,8 @@ function epmGetCachedPrefs() {
 }
 
 async function epmFetchPrefs() {
-  const token = epmGetToken();
-  if (!token) return null;
   try {
-    const res = await fetch('/api/user/prefs', { headers: { 'Authorization': 'Bearer ' + token } });
+    const res = await fetch('/api/user/prefs');
     if (!res.ok) return null;
     const data = await res.json();
     if (data?.prefs) {
@@ -151,12 +132,10 @@ async function epmFetchPrefs() {
 }
 
 async function epmSavePrefs(prefs) {
-  const token = epmGetToken();
-  if (!token) return false;
   try {
     const res = await fetch('/api/user/prefs', {
       method: 'PUT',
-      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(prefs),
     });
     if (!res.ok) return false;
@@ -1316,15 +1295,16 @@ function warmBackgroundRoutes() {
     pageQueue.push("/", "/markets", "/portfolios");
   }
 
-  // Pre-warm API payloads for auth-gated pages if already authenticated
-  const token = epmGetToken();
-  if (token && page !== "forecasting") {
+  // Pre-warm API payloads for auth-gated pages if already authenticated.
+  // Cookies are sent automatically; use cached username as a proxy for auth state.
+  const isAuthenticated = !!localStorage.getItem('epm_username');
+  if (isAuthenticated && page !== "forecasting") {
     apiQueue.push(
       { url: '/api/forecasts',           key: 'api_cache_forecasts',    ttl: 300000 },
       { url: '/api/forecast-chart-data', key: 'api_cache_forecast_chart', ttl: 300000 },
     );
   }
-  if (token && page !== "portfolios") {
+  if (isAuthenticated && page !== "portfolios") {
     apiQueue.push({ url: '/api/portfolios', key: 'api_cache_portfolios', ttl: 180000 });
   }
   if (page !== "markets") {
@@ -1337,8 +1317,7 @@ function warmBackgroundRoutes() {
       // Skip if already cached and fresh
       if (readSessionJson(key, ttl)) return;
       setTimeout(() => {
-        const headers = token ? { 'Authorization': 'Bearer ' + token } : {};
-        fetch(url, { headers }).then(r => r.ok ? r.json() : null).then(data => {
+        fetch(url).then(r => r.ok ? r.json() : null).then(data => {
           if (data && data.ok !== false) writeSessionJson(key, data.payload ?? data);
         }).catch(() => {});
       }, pageQueue.length * 300 + i * 400);
@@ -1768,11 +1747,9 @@ function _wireProfileEvents(section, currentColor, currentAvatar) {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(async () => {
       try {
-        const token = epmGetToken();
-        if (!token) return;
         const res = await fetch('/api/user/prefs', {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ profile_color: color, profile_avatar: avatar }),
         });
         if (res.ok) {
@@ -1842,17 +1819,14 @@ function _wireProfileEvents(section, currentColor, currentAvatar) {
     submitBtn.textContent = 'Saving…';
 
     try {
-      const token = epmGetToken();
       const res = await fetch('/api/user/username', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ new_username: newUsername, password }),
       });
       const data = await res.json();
       if (res.ok && data.ok) {
-        // Store new token and username
-        const storageType = localStorage.getItem('epm_token_storage') || 'session';
-        storeToken(data.token, storageType === 'local');
+        // Server sets a refreshed HttpOnly cookie; just update cached display data.
         try { localStorage.setItem('epm_username', data.user.username); } catch (_) {}
         // Update topbar badge name
         const badgeName = document.querySelector('.user-badge-name');
@@ -1881,8 +1855,8 @@ function _wireProfileEvents(section, currentColor, currentAvatar) {
   });
 
   // Sign out
-  section.querySelector('#spSignOutBtn')?.addEventListener('click', () => {
-    epmClearToken();
+  section.querySelector('#spSignOutBtn')?.addEventListener('click', async () => {
+    await epmClearToken();
     document.body.dataset.authState = 'guest';
     mountAuthActions('guest', '');
     document.getElementById('settingsDrawer').classList.remove('open');
@@ -1929,8 +1903,8 @@ function mountAuthActions(state, username) {
       </button>`;
     if (settingsBtn) topActions.insertBefore(badge, settingsBtn);
     else topActions.prepend(badge);
-    badge.querySelector('.user-badge-logout').addEventListener('click', () => {
-      epmClearToken();
+    badge.querySelector('.user-badge-logout').addEventListener('click', async () => {
+      await epmClearToken();
       document.body.dataset.authState = 'guest';
       mountAuthActions('guest', '');
       const page = document.body.dataset.page;
@@ -2091,7 +2065,7 @@ function openAuthDrawer() {
   }
 
   function onAuthSuccess(data) {
-    storeToken(data.token, data.remember_me || false);
+    // Server sets the HttpOnly cookie; we only cache display data locally.
     try { localStorage.setItem('epm_username', data.user.username); } catch (_) {}
     try { localStorage.setItem('epm_user_prefs', JSON.stringify(data.prefs || {})); } catch (_) {}
     close();
@@ -2154,13 +2128,7 @@ function openAuthDrawer() {
   setTimeout(() => drawer.querySelector('#adLoginUser')?.focus(), 80);
 }
 
-function storeToken(token, rememberMe) {
-  try {
-    const store = rememberMe ? localStorage : sessionStorage;
-    store.setItem(EPM_TOKEN_KEY, token);
-    localStorage.setItem(EPM_STORAGE_KEY, rememberMe ? 'local' : 'session');
-  } catch (_) {}
-}
+// storeToken removed — tokens are now set as HttpOnly cookies by the server.
 
 // ==========================================================================
 // WATCHLIST EDITOR MODAL — home page featured watchlist customization
@@ -3054,32 +3022,34 @@ document.addEventListener("DOMContentLoaded", () => {
   setupHomeHeroSearch();
   setupChromeEffects();
 
-  // Set initial guest state instantly (synchronous token check) then validate async
+  // Set initial display state from cached username (sync), then validate cookie async.
+  // Cookies are HttpOnly so JS can't read them — localStorage.epm_username is our proxy.
   const page = document.body.dataset.page;
-  const hasToken = !!epmGetToken();
+  const hasCachedUser = !!localStorage.getItem('epm_username');
   const isGatedPage = page === 'forecasting' || page === 'portfolios';
 
-  if (hasToken) {
-    // Optimistically show member UI while we validate — avoids flash of Sign In button
+  if (hasCachedUser) {
+    // Optimistically show member UI — avoids Sign In button flash for returning users
     document.body.dataset.authState = 'member';
     document.querySelectorAll('.pw-guest-prompt').forEach(el => { el.style.display = 'none'; });
     mountAuthActions('member', localStorage.getItem('epm_username') || '');
     if (!isGatedPage) {
-      // Public pages: load data immediately, validate token in background
+      // Public pages: start data load immediately, validate cookie in background
       initPageData();
     }
-    // Full async validation (updates auth state + triggers gated-page data load on member confirm)
-    epmCheckAuthState();
   } else {
     mountAuthActions('guest', '');
     if (!isGatedPage) {
       // Public pages load for everyone
       initPageData();
     } else {
-      // Gated page with no token — show gate, don't load data
+      // Gated page with no cached user — show gate, don't load data yet
       document.body.dataset.authState = 'guest';
     }
   }
+  // Always validate the cookie async — confirms or revokes optimistic state,
+  // and triggers gated-page data load on member confirmation.
+  epmCheckAuthState();
 
   mountTickerTape();
   warmBackgroundRoutes();

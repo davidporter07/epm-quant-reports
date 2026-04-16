@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import secrets
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -20,26 +21,35 @@ from typing import Any
 
 import bcrypt
 import jwt
+from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "users.db"
 SECRET_FILE = DATA_DIR / "jwt_secret.key"
 
+load_dotenv(BASE_DIR / ".env", override=False)
+
 _TOKEN_ALGORITHM = "HS256"
 _TOKEN_EXPIRE_HOURS_SHORT = 72     # 3-day sessions (sessionStorage, clears on browser close)
 _TOKEN_EXPIRE_HOURS_LONG  = 720    # 30-day sessions (localStorage, "Remember Me")
-_RESET_TOKEN_EXPIRE_HOURS = 1      # Password reset links expire in 1 hour
+_RESET_TOKEN_EXPIRE_MINUTES = 15   # Password reset links expire in 15 minutes
 
 
 # ---------------------------------------------------------------------------
-# JWT secret — auto-generated on first run, persisted across restarts
+# JWT secret — loaded from JWT_SECRET env var; falls back to file for existing
+# deployments. Set JWT_SECRET in .env to avoid any file-based secret.
 # ---------------------------------------------------------------------------
 
 def _load_or_create_secret() -> str:
+    env_secret = os.environ.get("JWT_SECRET", "").strip()
+    if env_secret:
+        return env_secret
+    # Legacy: read from or create the key file
     if SECRET_FILE.exists():
         return SECRET_FILE.read_text(encoding="utf-8").strip()
     secret = secrets.token_hex(48)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
     SECRET_FILE.write_text(secret, encoding="utf-8")
     return secret
 
@@ -114,6 +124,11 @@ def init_db() -> None:
             conn.execute("ALTER TABLE user_prefs ADD COLUMN profile_avatar TEXT NOT NULL DEFAULT ''")
             conn.commit()
 
+        # Migration: add token_version for server-side session invalidation on password change
+        if "token_version" not in existing_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0")
+            conn.commit()
+
 
 # ---------------------------------------------------------------------------
 # Shared error type
@@ -154,8 +169,8 @@ def register_user(username: str, password: str, email: str) -> dict[str, Any]:
         raise AuthError("Username must be at least 2 characters.")
     if len(username) > 40:
         raise AuthError("Username too long (max 40 characters).")
-    if not password or len(password) < 6:
-        raise AuthError("Password must be at least 6 characters.")
+    if not password or len(password) < 10:
+        raise AuthError("Password must be at least 10 characters.")
     if not email or "@" not in email or "." not in email.split("@")[-1]:
         raise AuthError("A valid email address is required.")
 
@@ -174,7 +189,14 @@ def register_user(username: str, password: str, email: str) -> dict[str, Any]:
         if "email" in msg:
             raise AuthError("An account with that email already exists.")
         raise AuthError("Username already taken.")
-    return {"id": user_id, "username": username, "email": email}
+    return {"id": user_id, "username": username, "email": email, "token_version": 0}
+
+
+def get_token_version(user_id: int) -> int:
+    """Return the current token_version for a user (used to invalidate old JWTs)."""
+    with _get_conn() as conn:
+        row = conn.execute("SELECT token_version FROM users WHERE id = ?", (user_id,)).fetchone()
+    return int(row["token_version"]) if row else 0
 
 
 def verify_login(username: str, password: str) -> dict[str, Any]:
@@ -182,12 +204,12 @@ def verify_login(username: str, password: str) -> dict[str, Any]:
     username = username.strip()
     with _get_conn() as conn:
         row = conn.execute(
-            "SELECT id, username, pw_hash FROM users WHERE username = ? COLLATE NOCASE",
+            "SELECT id, username, pw_hash, token_version FROM users WHERE username = ? COLLATE NOCASE",
             (username,),
         ).fetchone()
     if row is None or not _verify_password(password, row["pw_hash"]):
         raise AuthError("Invalid username or password.", status_code=401)
-    return {"id": row["id"], "username": row["username"]}
+    return {"id": row["id"], "username": row["username"], "token_version": int(row["token_version"])}
 
 
 def get_user_by_email(email: str) -> dict[str, Any] | None:
@@ -217,6 +239,7 @@ def create_token(user: dict[str, Any], remember_me: bool = False) -> str:
     payload = {
         "sub": str(user["id"]),
         "username": user["username"],
+        "tv": user.get("token_version", 0),
         "remember": remember_me,
         "iat": datetime.now(tz=timezone.utc),
         "exp": datetime.now(tz=timezone.utc) + timedelta(hours=hours),
@@ -246,7 +269,7 @@ def create_reset_token(user_id: int) -> str:
     """
     plain = secrets.token_hex(48)
     token_hash = hashlib.sha256(plain.encode()).hexdigest()
-    expires_at = (datetime.now(tz=timezone.utc) + timedelta(hours=_RESET_TOKEN_EXPIRE_HOURS)).isoformat()
+    expires_at = (datetime.now(tz=timezone.utc) + timedelta(minutes=_RESET_TOKEN_EXPIRE_MINUTES)).isoformat()
 
     with _get_conn() as conn:
         # Invalidate any previous unused tokens for this user
@@ -290,12 +313,15 @@ def consume_reset_token(plain_token: str) -> int:
 
 
 def reset_password(user_id: int, new_password: str) -> None:
-    """Update the password hash for a user. Raises AuthError if password too short."""
-    if not new_password or len(new_password) < 6:
-        raise AuthError("Password must be at least 6 characters.")
+    """Update the password hash for a user and invalidate all existing sessions."""
+    if not new_password or len(new_password) < 10:
+        raise AuthError("Password must be at least 10 characters.")
     pw_hash = _hash_password(new_password)
     with _get_conn() as conn:
-        conn.execute("UPDATE users SET pw_hash = ? WHERE id = ?", (pw_hash, user_id))
+        conn.execute(
+            "UPDATE users SET pw_hash = ?, token_version = token_version + 1 WHERE id = ?",
+            (pw_hash, user_id),
+        )
         conn.commit()
 
 
@@ -339,8 +365,13 @@ def set_user_prefs(
     import re as _re
     if not _re.match(r'^#[0-9a-fA-F]{6}$', new_color or ''):
         new_color = "#2563eb"
-    # Sanitise avatar: allow empty, a single letter/symbol, or up to 2 chars (emoji)
-    new_avatar = (new_avatar or "")[:4]
+    # Sanitise avatar: allow empty string, one ASCII letter/digit, or one emoji
+    # (emoji are typically 1-2 Unicode code points). Reject HTML-unsafe characters.
+    _av = (new_avatar or "").strip()
+    import html as _html
+    _av_escaped = _html.escape(_av, quote=True)
+    # Only accept if escaping didn't change it (i.e. no <, >, &, ", ')
+    new_avatar = _av[:4] if _av == _av_escaped else ""
 
     with _get_conn() as conn:
         conn.execute("""
@@ -385,11 +416,15 @@ def change_username(user_id: int, new_username: str, password: str) -> dict[str,
 
     try:
         with _get_conn() as conn:
-            conn.execute("UPDATE users SET username = ? WHERE id = ?", (new_username, user_id))
+            conn.execute(
+                "UPDATE users SET username = ?, token_version = token_version + 1 WHERE id = ?",
+                (new_username, user_id),
+            )
             conn.commit()
+            row = conn.execute("SELECT token_version FROM users WHERE id = ?", (user_id,)).fetchone()
     except sqlite3.IntegrityError:
         raise AuthError("That username is already taken.")
-    return {"id": user_id, "username": new_username}
+    return {"id": user_id, "username": new_username, "token_version": int(row["token_version"]) if row else 0}
 
 
 # Initialize DB on import

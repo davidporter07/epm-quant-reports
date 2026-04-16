@@ -37,10 +37,30 @@ from services.auth_service import (
     verify_login,
 )
 from services.email_service import EmailError, send_password_reset_email
+from deep_analysis_worker import enqueue, get_job_status, start_worker, stop_worker
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 DATA_DIR = BASE_DIR / "data"
+
+# Cookie security: set SECURE_COOKIES=false in local dev (HTTP); always true in production (HTTPS).
+_SECURE_COOKIES = os.environ.get("SECURE_COOKIES", "true").lower() not in ("false", "0", "no")
+
+_COOKIE_MAX_AGE_SHORT = 72 * 3600    # 3 days (no remember-me)
+_COOKIE_MAX_AGE_LONG  = 720 * 3600   # 30 days (remember-me)
+
+
+def _set_auth_cookie(response: JSONResponse, token: str, remember_me: bool) -> None:
+    """Write the epm_token HttpOnly cookie onto an existing JSONResponse."""
+    response.set_cookie(
+        key="epm_token",
+        value=token,
+        httponly=True,
+        secure=_SECURE_COOKIES,
+        samesite="lax",
+        max_age=_COOKIE_MAX_AGE_LONG if remember_me else _COOKIE_MAX_AGE_SHORT,
+        path="/",
+    )
 
 app = FastAPI(title="EPM Market Intelligence", version="0.7.0")
 app.add_middleware(
@@ -934,13 +954,14 @@ async def api_login(body: LoginRequest) -> JSONResponse:
         raise HTTPException(status_code=exc.status_code, detail=str(exc))
     token = create_token(user, remember_me=body.remember_me)
     prefs = get_user_prefs(user["id"])
-    return JSONResponse({
+    response = JSONResponse({
         "ok": True,
-        "token": token,
         "remember_me": body.remember_me,
         "user": {"id": user["id"], "username": user["username"]},
         "prefs": prefs,
     })
+    _set_auth_cookie(response, token, body.remember_me)
+    return response
 
 
 @app.post("/api/auth/register")
@@ -950,13 +971,14 @@ async def api_register(body: RegisterRequest) -> JSONResponse:
     except AuthError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc))
     token = create_token(user, remember_me=False)
-    return JSONResponse({
+    response = JSONResponse({
         "ok": True,
-        "token": token,
         "remember_me": False,
         "user": {"id": user["id"], "username": user["username"]},
         "prefs": {"featured_tickers": [], "tape_tickers": []},
     })
+    _set_auth_cookie(response, token, remember_me=False)
+    return response
 
 
 @app.post("/api/auth/forgot-password")
@@ -1036,7 +1058,16 @@ async def api_change_username(request: Request, body: ChangeUsernameRequest) -> 
     # Re-issue token so the embedded username stays current
     remember = payload.get("remember", False)
     new_token = create_token(updated_user, remember_me=remember)
-    return JSONResponse({"ok": True, "token": new_token, "user": updated_user})
+    response = JSONResponse({"ok": True, "user": updated_user})
+    _set_auth_cookie(response, new_token, remember_me=remember)
+    return response
+
+
+@app.post("/api/auth/logout")
+async def api_logout() -> JSONResponse:
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(key="epm_token", path="/", httponly=True, samesite="lax")
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -1280,6 +1311,16 @@ def _build_ticker_tape_item(symbol: str) -> dict[str, object] | None:
         "last_price": last_price,
         "day_change_pct": day_change_pct,
     }
+
+
+@app.on_event("startup")
+def _startup_deep_worker() -> None:
+    start_worker()
+
+
+@app.on_event("shutdown")
+def _shutdown_deep_worker() -> None:
+    stop_worker()
 
 
 @app.on_event("startup")
@@ -1976,6 +2017,102 @@ async def api_chat(body: ChatRequest) -> JSONResponse:
         raise HTTPException(status_code=503, detail=f"AI assistant unavailable: {exc}")
 
     return JSONResponse({"ok": True, "reply": reply})
+
+
+_DEEP_TICKER_RE = re.compile(r'^[A-Z]{1,10}$')
+_MIROFISH_SIMS = Path(os.environ.get("MIROFISH_SIMS_DIR", "/opt/mirofish/backend/uploads/simulations"))
+
+
+@app.get("/deep-report")
+def deep_report_page() -> FileResponse:
+    return _page("deep-report.html")
+
+
+@app.post("/api/deep/{ticker}")
+def deep_analysis_start(ticker: str, request: Request) -> JSONResponse:
+    _require_user(request)
+    t = ticker.strip().upper()
+    if not _DEEP_TICKER_RE.match(t):
+        raise HTTPException(status_code=400, detail="Invalid ticker.")
+    job_id = enqueue(t)
+    return JSONResponse({"ok": True, "job_id": job_id, "ticker": t})
+
+
+@app.get("/api/deep/{job_id}/status")
+def deep_analysis_status(job_id: str, request: Request) -> JSONResponse:
+    _require_user(request)
+    status = get_job_status(job_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    return JSONResponse({"ok": True, **status})
+
+
+@app.get("/api/deep/{job_id}/agents")
+def deep_analysis_agents(job_id: str, request: Request) -> JSONResponse:
+    """Return agent profiles and their simulation posts for a completed job."""
+    _require_user(request)
+    status = get_job_status(job_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if status.get("status") != "completed":
+        raise HTTPException(status_code=400, detail="Job not completed yet.")
+
+    sim_id = (status.get("result") or {}).get("simulation_id")
+    if not sim_id:
+        raise HTTPException(status_code=404, detail="Simulation ID not found in job.")
+
+    sim_dir = _MIROFISH_SIMS / sim_id
+    if not sim_dir.exists():
+        raise HTTPException(status_code=404, detail="Simulation data not found.")
+
+    # Load agent profiles
+    profiles: list[dict] = []
+    profiles_path = sim_dir / "reddit_profiles.json"
+    if profiles_path.exists():
+        try:
+            raw = json.loads(profiles_path.read_text(encoding="utf-8"))
+            profiles = raw if isinstance(raw, list) else list(raw.values())
+        except Exception:
+            pass
+
+    # Build user_id → display_name map
+    id_to_name: dict[int, str] = {
+        p.get("user_id", i): p.get("name") or p.get("username", f"Agent {i}")
+        for i, p in enumerate(profiles)
+    }
+
+    # Load posts from SQLite
+    posts_by_agent: dict[str, list[str]] = {}
+    db_path = sim_dir / "reddit_simulation.db"
+    if db_path.exists():
+        try:
+            import sqlite3
+            conn = sqlite3.connect(str(db_path))
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            c.execute("SELECT user_id, content FROM post ORDER BY created_at ASC")
+            for row in c.fetchall():
+                uid = row["user_id"]
+                name = id_to_name.get(uid, f"Agent {uid}")
+                posts_by_agent.setdefault(name, []).append(row["content"] or "")
+            conn.close()
+        except Exception:
+            pass
+
+    # Build response
+    agents = []
+    for i, p in enumerate(profiles):
+        name = p.get("name") or p.get("username", f"Agent {i}")
+        agents.append({
+            "name": name,
+            "username": p.get("username", ""),
+            "bio": p.get("bio", ""),
+            "persona": p.get("persona", ""),
+            "post_count": len(posts_by_agent.get(name, [])),
+            "posts": posts_by_agent.get(name, []),
+        })
+
+    return JSONResponse({"ok": True, "simulation_id": sim_id, "agents": agents})
 
 
 if __name__ == "__main__":

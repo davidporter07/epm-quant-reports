@@ -29,12 +29,231 @@
   <title>Fund Search | EPM Market Intelligence</title>
   <link rel="stylesheet" href="/static/css/styles.css?v=20260410a" />
   <link rel="stylesheet" href="/static/css/design-v2.css?v=20260410a" />
-  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <script src="/static/js/plotly-2.35.2.min.js"></script>
   <script defer src="/static/js/site.js?v=20260410a"></script>
   <script defer src="/static/js/search.js?v=20260325a"></script>
+  <script defer src="/static/js/deep_analysis.js"></script>
   <link rel="icon" type="image/png" href="/static/epm_logo_sq.png">
   <link rel="apple-touch-icon" href="/static/epm_logo_sq.png">
   <meta property="og:image" content="/static/epm_logo.png">
+  <style>
+    /* ── Deep Analysis Swarm Progress Panel ── */
+    .swarm-panel {
+      background: var(--panel, rgba(8,18,40,0.93));
+      border: 1px solid rgba(212,168,75,0.3);
+      border-radius: 14px;
+      overflow: hidden;
+      position: relative;
+    }
+    .swarm-panel::before {
+      content: '';
+      position: absolute; top: 0; left: 0; right: 0; height: 3px;
+      background: linear-gradient(90deg, #7c5010 0%, #d4a84b 30%, #f0c878 50%, #d4a84b 70%, #7c5010 100%);
+      background-size: 200% 100%;
+      animation: swarmShimmer 2.4s linear infinite;
+    }
+    @keyframes swarmShimmer {
+      0%   { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+    .swarm-header {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      padding: 18px 22px 12px;
+    }
+    .swarm-viz-wrap { flex-shrink: 0; }
+    .swarm-svg { width: 164px; height: 82px; overflow: visible; }
+
+    /* SVG network lines */
+    .swarm-line {
+      stroke: rgba(212,168,75,0.18);
+      stroke-width: 1;
+      stroke-dasharray: 5 5;
+    }
+    .swarm-line.sl-flow {
+      stroke: rgba(212,168,75,0.55);
+      stroke-dasharray: 5 5;
+      animation: lineFlow 1.8s linear infinite;
+    }
+    .swarm-line.sl-flow-r {
+      stroke: rgba(240,200,120,0.4);
+      stroke-dasharray: 5 5;
+      animation: lineFlowR 2.2s linear infinite;
+    }
+    @keyframes lineFlow  { to { stroke-dashoffset: -20; } }
+    @keyframes lineFlowR { to { stroke-dashoffset:  20; } }
+
+    /* SVG nodes */
+    .swarm-node {
+      fill: rgba(212,168,75,0.08);
+      stroke: rgba(212,168,75,0.28);
+      stroke-width: 1;
+      transition: fill 0.5s, stroke 0.5s;
+    }
+    .swarm-node.sn-active {
+      fill: rgba(212,168,75,0.32);
+      stroke: #d4a84b;
+      stroke-width: 1.5;
+      animation: nodeGlow 1.6s ease-in-out infinite;
+    }
+    .swarm-node.sn-done {
+      fill: rgba(34,197,94,0.22);
+      stroke: rgba(34,197,94,0.7);
+      stroke-width: 1.5;
+    }
+    @keyframes nodeGlow {
+      0%,100% { fill: rgba(212,168,75,0.28); }
+      50%      { fill: rgba(212,168,75,0.55); }
+    }
+
+    /* Pulse rings on key nodes */
+    .swarm-pulse {
+      fill: none;
+      stroke: rgba(212,168,75,0.55);
+      stroke-width: 1;
+      transform-origin: center;
+      transform-box: fill-box;
+      animation: pulseOut 2.6s ease-out infinite;
+    }
+    .swarm-pulse.p2 { animation-delay: 0.9s; }
+    .swarm-pulse.p3 { animation-delay: 1.8s; }
+    @keyframes pulseOut {
+      0%   { transform: scale(1);   opacity: 0.7; }
+      100% { transform: scale(3.2); opacity: 0;   }
+    }
+
+    /* Stage info */
+    .swarm-stage-info { min-width: 0; flex: 1; }
+    .swarm-stage-kicker {
+      font-size: 9px; font-weight: 700; letter-spacing: .14em;
+      color: rgba(212,168,75,0.65); margin-bottom: 5px; text-transform: uppercase;
+    }
+    .swarm-stage-name {
+      font-size: 17px; font-weight: 800;
+      color: var(--text, #e8eeff); line-height: 1.2; margin-bottom: 5px;
+    }
+    .swarm-stage-desc {
+      font-size: 11px; color: var(--muted, #7d94c0); line-height: 1.55;
+    }
+
+    /* Horizontal pipeline track */
+    .swarm-pipeline {
+      display: flex; align-items: flex-start;
+      padding: 0 22px 14px;
+      overflow-x: auto; scrollbar-width: none;
+    }
+    .swarm-pipeline::-webkit-scrollbar { display: none; }
+    .pip-step {
+      display: flex; flex-direction: column; align-items: center;
+      flex: 1; min-width: 0; position: relative; gap: 5px;
+    }
+    .pip-step + .pip-step::before {
+      content: ''; position: absolute;
+      top: 6px; right: 50%; left: -50%; height: 1px;
+      background: rgba(212,168,75,0.15); z-index: 0;
+      transition: background 0.5s;
+    }
+    .pip-step.p-done + .pip-step::before,
+    .pip-step.p-active + .pip-step::before {
+      background: rgba(212,168,75,0.45);
+    }
+    .pip-dot {
+      width: 13px; height: 13px; border-radius: 50%;
+      background: rgba(212,168,75,0.08);
+      border: 1.5px solid rgba(212,168,75,0.22);
+      position: relative; z-index: 1; flex-shrink: 0;
+      transition: all 0.4s ease;
+    }
+    .pip-step.p-done .pip-dot {
+      background: rgba(34,197,94,0.2); border-color: rgba(34,197,94,0.7);
+    }
+    .pip-step.p-active .pip-dot {
+      background: rgba(212,168,75,0.3); border-color: #d4a84b;
+      box-shadow: 0 0 0 3px rgba(212,168,75,0.15), 0 0 10px rgba(212,168,75,0.4);
+      animation: pipPulse 1.3s ease-in-out infinite;
+    }
+    @keyframes pipPulse {
+      0%,100% { box-shadow: 0 0 0 2px rgba(212,168,75,0.12), 0 0 7px rgba(212,168,75,0.35); }
+      50%      { box-shadow: 0 0 0 4px rgba(212,168,75,0.2),  0 0 14px rgba(212,168,75,0.6); }
+    }
+    .pip-label {
+      font-size: 8px; color: var(--muted, #7d94c0);
+      text-align: center; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis; max-width: 52px;
+      text-transform: uppercase; letter-spacing: .04em;
+      transition: color 0.4s;
+    }
+    .pip-step.p-done   .pip-label { color: rgba(34,197,94,0.65); }
+    .pip-step.p-active .pip-label { color: #d4a84b; font-weight: 700; }
+
+    /* Progress bar */
+    .swarm-bar-wrap { padding: 0 22px 18px; }
+    .swarm-bar-track {
+      height: 5px; background: rgba(212,168,75,0.07);
+      border-radius: 5px; position: relative; margin-bottom: 8px;
+    }
+    .swarm-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #8a6220, #d4a84b, #f0c878);
+      border-radius: 5px;
+      transition: width 0.9s cubic-bezier(0.4,0,0.2,1);
+      position: relative;
+    }
+    .swarm-bar-fill::after {
+      content: ''; position: absolute;
+      right: -5px; top: -4px;
+      width: 13px; height: 13px; border-radius: 50%;
+      background: #f0c878;
+      box-shadow: 0 0 0 2px rgba(240,200,120,0.2), 0 0 10px rgba(240,200,120,0.7);
+    }
+    .swarm-bar-meta {
+      display: flex; justify-content: space-between;
+      font-size: 11px;
+    }
+    .swarm-pct  { font-weight: 700; color: #d4a84b; }
+    .swarm-eta  { color: var(--muted, #7d94c0); }
+
+    /* Force swarm animations to run regardless of prefers-reduced-motion */
+    @media (prefers-reduced-motion: reduce) {
+      .swarm-panel::before {
+        animation-name: swarmShimmer !important;
+        animation-duration: 2.4s !important;
+        animation-iteration-count: infinite !important;
+        animation-play-state: running !important;
+      }
+      .swarm-line.sl-flow {
+        animation-name: lineFlow !important;
+        animation-duration: 1.8s !important;
+        animation-iteration-count: infinite !important;
+        animation-play-state: running !important;
+      }
+      .swarm-line.sl-flow-r {
+        animation-name: lineFlowR !important;
+        animation-duration: 2.2s !important;
+        animation-iteration-count: infinite !important;
+        animation-play-state: running !important;
+      }
+      .swarm-node.sn-active {
+        animation-name: nodeGlow !important;
+        animation-duration: 1.6s !important;
+        animation-iteration-count: infinite !important;
+        animation-play-state: running !important;
+      }
+      .swarm-pulse {
+        animation-name: pulseOut !important;
+        animation-duration: 2.6s !important;
+        animation-iteration-count: infinite !important;
+        animation-play-state: running !important;
+      }
+      .pip-step.p-active .pip-dot {
+        animation-name: pipPulse !important;
+        animation-duration: 1.3s !important;
+        animation-iteration-count: infinite !important;
+        animation-play-state: running !important;
+      }
+    }
+  </style>
 </head>
 <body data-page="search">
   <div id="settingsOverlay" class="settings-overlay"></div>
@@ -251,6 +470,120 @@
           <span class="badge">Provider News, Curated Layer Later</span>
         </div>
         <div id="newsCard" class="news-list"></div>
+      </section>
+
+      <!-- ── DEEP ANALYSIS LAB ── -->
+      <section id="deepAnalysisLab" style="display:none; margin-top:28px;">
+        <div class="lab-header" style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+          <div>
+            <div class="lab-title" style="font-size:18px;font-weight:800;background:linear-gradient(135deg,#d4a84b,#f0c878);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">Deep Analysis Lab</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:2px;">On-demand swarm intelligence — Kronos + MiroFish + EPM ensemble</div>
+          </div>
+          <span id="dalTickerBadge" style="margin-left:auto;font-size:10px;font-weight:700;padding:3px 9px;border-radius:4px;background:rgba(212,168,75,0.15);color:#d4a84b;border:1px solid rgba(212,168,75,0.3);text-transform:uppercase;letter-spacing:.08em;"></span>
+        </div>
+
+        <div id="dalError" style="display:none;margin-bottom:12px;padding:10px 14px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:8px;font-size:12px;color:#ef4444;"></div>
+
+        <!-- Launch cards -->
+        <div id="dalLaunchCards">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+            <!-- Quick card -->
+            <div style="background:var(--panel,rgba(8,18,40,0.93));border:1px solid rgba(56,189,248,0.25);border-radius:12px;padding:22px 24px;position:relative;overflow:hidden;">
+              <div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#38bdf8,#7dd3fc);"></div>
+              <div style="font-size:17px;font-weight:700;margin-bottom:4px;">Performance Snapshot</div>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:10px;">~1 min · EPM pipeline data only</div>
+              <div style="font-size:12px;color:var(--muted);line-height:1.6;margin-bottom:16px;">Fast report from existing EPM quant data — returns, risk, technicals, 7-model ensemble.</div>
+              <button class="btn btn-primary" style="width:100%;font-size:13px;font-weight:700;" disabled title="Coming soon">Generate Performance Report</button>
+            </div>
+            <!-- Deep card -->
+            <div style="background:var(--panel,rgba(8,18,40,0.93));border:1px solid rgba(212,168,75,0.35);border-radius:12px;padding:22px 24px;position:relative;overflow:hidden;">
+              <div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#d4a84b,#f0c878);"></div>
+              <span style="position:absolute;top:16px;right:16px;font-size:10px;font-weight:700;padding:3px 8px;border-radius:4px;text-transform:uppercase;letter-spacing:.08em;background:rgba(212,168,75,0.18);color:#d4a84b;border:1px solid rgba(212,168,75,0.3);">Deep</span>
+              <div style="font-size:17px;font-weight:700;margin-bottom:4px;">Deep Swarm Analysis</div>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:10px;">~22 min · Async · Notified on completion</div>
+              <div style="font-size:12px;color:var(--muted);line-height:1.6;margin-bottom:16px;">Kronos OHLCV forecast + MiroFish multi-agent swarm simulation synthesized with EPM ensemble.</div>
+              <button id="dalRunBtn" style="width:100%;padding:10px;border-radius:8px;border:none;font-size:13px;font-weight:700;cursor:pointer;background:linear-gradient(135deg,#d4a84b 0%,#a07828 100%);color:#0a1928;">Run Deep Swarm Analysis</button>
+            </div>
+          </div>
+          <!-- Powered by bar -->
+          <div style="background:var(--panel-2,#09152a);border:1px solid var(--border);border-radius:8px;padding:10px 16px;display:flex;align-items:center;gap:16px;font-size:11px;color:var(--muted);flex-wrap:wrap;">
+            <span>Powered by</span>
+            <span style="display:flex;align-items:center;gap:6px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:600;"><span style="width:6px;height:6px;border-radius:50%;background:#d4a84b;display:inline-block;"></span><strong>Kronos</strong> OHLCV Foundation Model</span>
+            <span style="display:flex;align-items:center;gap:6px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:600;"><span style="width:6px;height:6px;border-radius:50%;background:#38bdf8;display:inline-block;"></span><strong>MiroFish</strong> Swarm Intelligence</span>
+            <span style="display:flex;align-items:center;gap:6px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:600;"><span style="width:6px;height:6px;border-radius:50%;background:#22c55e;display:inline-block;"></span><strong>EPM</strong> 6-Model Ensemble</span>
+          </div>
+        </div>
+
+        <!-- Progress panel (shown while running) -->
+        <div id="dalProgress" style="display:none;">
+          <div class="swarm-panel">
+            <div class="swarm-header">
+              <!-- Animated agent network -->
+              <div class="swarm-viz-wrap">
+                <svg class="swarm-svg" viewBox="0 0 164 82" xmlns="http://www.w3.org/2000/svg">
+                  <!-- Connection lines -->
+                  <line class="swarm-line sl-flow"   x1="18" y1="41" x2="52" y2="16"/>
+                  <line class="swarm-line sl-flow-r" x1="18" y1="41" x2="52" y2="66"/>
+                  <line class="swarm-line sl-flow"   x1="52" y1="16" x2="82" y2="41"/>
+                  <line class="swarm-line sl-flow-r" x1="52" y1="66" x2="82" y2="41"/>
+                  <line class="swarm-line sl-flow"   x1="82" y1="41" x2="112" y2="16"/>
+                  <line class="swarm-line sl-flow-r" x1="82" y1="41" x2="112" y2="66"/>
+                  <line class="swarm-line sl-flow"   x1="112" y1="16" x2="146" y2="41"/>
+                  <line class="swarm-line sl-flow-r" x1="112" y1="66" x2="146" y2="41"/>
+                  <!-- Diagonal cross-links (depth) -->
+                  <line class="swarm-line" x1="52" y1="16" x2="112" y2="66" style="stroke:rgba(212,168,75,0.08)"/>
+                  <line class="swarm-line" x1="52" y1="66" x2="112" y2="16" style="stroke:rgba(212,168,75,0.08)"/>
+                  <!-- Pulse rings first (behind nodes) -->
+                  <circle class="swarm-pulse p1" cx="18"  cy="41" r="5"/>
+                  <circle class="swarm-pulse p2" cx="82"  cy="41" r="6"/>
+                  <circle class="swarm-pulse p3" cx="146" cy="41" r="5"/>
+                  <!-- Nodes -->
+                  <circle class="swarm-node" cx="18"  cy="41" r="5"/>
+                  <circle class="swarm-node sn-active" cx="52"  cy="16" r="4"/>
+                  <circle class="swarm-node sn-active" cx="52"  cy="66" r="4"/>
+                  <circle class="swarm-node sn-active" cx="82"  cy="41" r="6"/>
+                  <circle class="swarm-node" cx="112" cy="16" r="4"/>
+                  <circle class="swarm-node" cx="112" cy="66" r="4"/>
+                  <circle class="swarm-node" cx="146" cy="41" r="5"/>
+                </svg>
+              </div>
+              <!-- Current stage info -->
+              <div class="swarm-stage-info">
+                <div class="swarm-stage-kicker">Deep Swarm Analysis</div>
+                <div class="swarm-stage-name" id="dalCurrentStage">Initializing…</div>
+                <div class="swarm-stage-desc" id="dalCurrentDesc">Preparing analysis pipeline</div>
+              </div>
+            </div>
+
+            <!-- Horizontal pipeline -->
+            <div class="swarm-pipeline" id="dalPipeline"></div>
+
+            <!-- Progress bar -->
+            <div class="swarm-bar-wrap">
+              <div class="swarm-bar-track">
+                <div class="swarm-bar-fill" id="dalProgressBar" style="width:0%"></div>
+              </div>
+              <div class="swarm-bar-meta">
+                <span class="swarm-pct" id="dalProgressPct">0%</span>
+                <span class="swarm-eta">~22 min · You can leave this page</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Done panel -->
+        <div id="dalDone" style="display:none;">
+          <div style="background:var(--panel,rgba(8,18,40,0.93));border:1px solid rgba(34,197,94,0.35);border-radius:12px;padding:20px 22px;display:flex;align-items:center;justify-content:space-between;gap:16px;">
+            <div>
+              <div style="font-size:14px;font-weight:700;color:#22c55e;margin-bottom:4px;">Analysis Complete</div>
+              <div style="font-size:12px;color:var(--muted);">Your Deep Swarm Analysis report is ready.</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;">
+              <button id="dalNewAnalysisBtn" style="padding:10px 16px;border-radius:8px;border:1px solid rgba(212,168,75,0.3);font-size:12px;font-weight:600;cursor:pointer;background:transparent;color:var(--muted);white-space:nowrap;">Run New Analysis</button>
+              <button id="dalViewReportBtn" style="padding:10px 22px;border-radius:8px;border:none;font-size:13px;font-weight:700;cursor:pointer;background:linear-gradient(135deg,#d4a84b,#a07828);color:#0a1928;white-space:nowrap;">View Report</button>
+            </div>
+          </div>
+        </div>
       </section>
     </div>
 
