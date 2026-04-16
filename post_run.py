@@ -32,7 +32,7 @@ SERVER_HOST = "192.168.1.145"
 SERVER_PATH = "/opt/epm-market-intelligence"
 SSH_KEY = str(Path.home() / ".ssh" / "epm_server")
 
-SYNC_DIRS = ["charts", "data", "epm-quant-reports", "static", "services", "feature_store", "config", "providers"]
+SYNC_DIRS = ["charts", "commentary", "data", "epm-quant-reports", "static", "services", "feature_store", "config", "providers"]
 
 # Individual Python files at root level that are part of the app
 SYNC_PY_FILES = [
@@ -45,6 +45,8 @@ SYNC_PY_FILES = [
     "data_arbiter.py",
     "feature_registry.py",
     "dl_feature_gate.py",
+    "deep_analysis.py",
+    "deep_analysis_worker.py",
 ]
 
 
@@ -57,23 +59,34 @@ def run(cmd: list[str]) -> int:
         return 1
 
 
+# Files that live on the server and must not be overwritten from local.
+_SERVER_MANAGED = {"jwt_secret.key", "users.db"}
+
+
 def _scp_dir(local: Path, remote: str, key_args: list[str]) -> int:
-    """Copy contents of a local directory to a remote path via scp, skipping .git folders."""
+    """Copy contents of a local directory to a remote path via scp, skipping .git folders
+    and any server-managed files that the server owns (e.g. jwt_secret.key, users.db)."""
     import tempfile, shutil
     dest_user_host, dest_path = remote.split(":", 1)
-    # Build a filtered temp copy excluding .git
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp) / local.name
         shutil.copytree(local, tmp_dir, ignore=shutil.ignore_patterns(".git", "__pycache__"))
-        # Copy contents of tmp_dir into dest_path (the /* pattern avoids nested dirs)
-        cmd = ["scp", *key_args, "-r"] + [str(p) for p in tmp_dir.iterdir()] + [f"{dest_user_host}:{dest_path}/"]
+        # Drop server-managed files so scp never tries to overwrite them.
+        for name in _SERVER_MANAGED:
+            candidate = tmp_dir / name
+            if candidate.exists():
+                candidate.unlink()
+        items = list(tmp_dir.iterdir())
+        if not items:
+            return 0
+        cmd = ["scp", *key_args, "-r"] + [str(p) for p in items] + [f"{dest_user_host}:{dest_path}/"]
         return subprocess.call(cmd)
 
 
 def sync_to_server():
     print("\n[SYNC] Pushing output to server...")
     dest = f"{SERVER_USER}@{SERVER_HOST}"
-    key_args = ["-i", SSH_KEY, "-o", "StrictHostKeyChecking=no"]
+    key_args = ["-i", SSH_KEY, "-o", "StrictHostKeyChecking=no", "-O"]
     errors = 0
 
     # Push directories

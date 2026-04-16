@@ -8,7 +8,6 @@ Sources (all free, no scrapers):
   - CNN Fear & Greed Index      (public dataviz endpoint, no key)
   - Alternative.me crypto F&G  (api.alternative.me, no key)
   - ApeWisdom WSB sentiment     (api.apewisdom.io, no key)
-  - StockTwits retail sentiment (api.stocktwits.com, no key)
   - FRED macro proxies          (api.stlouisfed.org, FRED_API_KEY)
   - Finnhub market news         (finnhub.io, FINNHUB_KEY — free tier)
   - Finnhub earnings calendar   (finnhub.io, FINNHUB_KEY — free tier)
@@ -470,63 +469,6 @@ def fetch_alternative_me_fg() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 8. StockTwits retail sentiment (free public API, no key)
-# ---------------------------------------------------------------------------
-_STOCKTWITS_SYMBOLS = ["SPY", "QQQ", "AAPL", "NVDA", "TSLA", "MSFT", "AMZN"]
-
-
-def fetch_stocktwits_sentiment(symbols: list[str] | None = None) -> dict[str, Any]:
-    """
-    Fetch StockTwits message streams for major symbols and compute a bull/bear ratio.
-    Returns {bull_pct, bear_pct, total_messages, by_symbol, source}.
-    Bull pct 0-100: 50 = neutral, >50 = net bullish.
-    """
-    symbols = symbols or _STOCKTWITS_SYMBOLS
-    total_bull = 0
-    total_bear = 0
-    total_msgs = 0
-    by_symbol: dict[str, dict] = {}
-
-    for sym in symbols:
-        try:
-            r = requests.get(
-                f"https://api.stocktwits.com/api/2/streams/symbol/{sym}.json",
-                headers={"User-Agent": "Mozilla/5.0"},
-                timeout=10,
-            )
-            if r.status_code == 429:
-                print(f"[WARN] StockTwits rate-limited on {sym}, skipping remaining")
-                break
-            r.raise_for_status()
-            messages = r.json().get("messages", [])
-            bull = sum(1 for m in messages if (m.get("entities") or {}).get("sentiment", {}).get("basic") == "Bullish")
-            bear = sum(1 for m in messages if (m.get("entities") or {}).get("sentiment", {}).get("basic") == "Bearish")
-            total = bull + bear
-            total_bull += bull
-            total_bear += bear
-            total_msgs += len(messages)
-            by_symbol[sym] = {
-                "bull": bull, "bear": bear,
-                "bull_pct": round(bull / total * 100, 1) if total else 50.0,
-            }
-        except Exception as exc:
-            print(f"[WARN] StockTwits {sym} failed: {exc}")
-
-    total_tagged = total_bull + total_bear
-    bull_pct = round(total_bull / total_tagged * 100, 1) if total_tagged else 50.0
-    result = {
-        "bull_pct":       bull_pct,
-        "bear_pct":       round(100 - bull_pct, 1),
-        "total_messages": total_msgs,
-        "total_tagged":   total_tagged,
-        "by_symbol":      by_symbol,
-        "source":         "stocktwits",
-    }
-    print(f"[ENRICH] StockTwits: {bull_pct}% bullish across {len(by_symbol)} symbols ({total_tagged} tagged msgs)")
-    return result
-
-
-# ---------------------------------------------------------------------------
 # 9. Reddit r/wallstreetbets sentiment (free public API, no key)
 # ---------------------------------------------------------------------------
 def fetch_reddit_wsb_sentiment(n_posts: int = 50, min_upvotes: int = 100) -> dict[str, Any]:
@@ -898,7 +840,6 @@ def compute_epm_sentiment_index(
     cnn_fg: dict,
     alt_fg: dict,
     news_sentiment: dict,
-    stocktwits: dict,
     reddit_wsb: dict | None = None,
     own_news: dict | None = None,
     cftc: dict | None = None,
@@ -910,7 +851,7 @@ def compute_epm_sentiment_index(
     Components and weights:
       CNN Fear & Greed (stock market)  35%  — already 0-100
       News VADER sentiment             25%  — normalized from [-1, +1] to [0, 100]
-      StockTwits bull/bear ratio       25%  — % bullish (0-100)
+      Reddit WSB sentiment             20%  — 0-100 score
       Alternative.me Crypto F&G        15%  — already 0-100
 
     Score labels:
@@ -970,15 +911,6 @@ def compute_epm_sentiment_index(
             "score":  float(rsi_spy["score"]),
             "weight": 15,
             "detail": f"RSI {rsi_spy['score']:.1f} on {rsi_spy.get('date','')}",
-        }
-
-    # Only include StockTwits if actual tagged messages were returned
-    if stocktwits.get("total_tagged", 0) > 0:
-        components["stocktwits"] = {
-            "label":  "StockTwits Retail",
-            "score":  float(stocktwits["bull_pct"]),
-            "weight": 25,
-            "detail": f"{stocktwits['total_tagged']} tagged messages",
         }
 
     if alt_fg.get("score") is not None:
@@ -1061,7 +993,6 @@ def run_enrichment() -> dict[str, Any]:
     fear_greed     = fetch_fear_greed()
     alt_fg         = fetch_alternative_me_fg()
     wsb            = fetch_wsb_sentiment(top_n=25)
-    stocktwits     = fetch_stocktwits_sentiment()
     reddit_wsb     = fetch_reddit_wsb_sentiment()
     own_news       = fetch_own_news_sentiment()
     cftc           = fetch_cftc_spx_positioning()
@@ -1077,7 +1008,7 @@ def run_enrichment() -> dict[str, Any]:
     earnings       = fetch_earnings_calendar()
     sentiment      = aggregate_sentiment(market_news)
     epm_index      = compute_epm_sentiment_index(
-        fear_greed, alt_fg, sentiment, stocktwits,
+        fear_greed, alt_fg, sentiment,
         reddit_wsb=reddit_wsb, own_news=own_news, cftc=cftc, rsi_spy=rsi_spy,
     )
 
@@ -1086,7 +1017,6 @@ def run_enrichment() -> dict[str, Any]:
         "fear_greed":            fear_greed,
         "alternative_me_fg":     alt_fg,
         "wsb_sentiment":         wsb,
-        "stocktwits_sentiment":  stocktwits,
         "reddit_wsb_sentiment":  reddit_wsb,
         "own_news_sentiment":    own_news,
         "cftc_spx_positioning":  cftc,
@@ -1108,7 +1038,6 @@ def run_enrichment() -> dict[str, Any]:
     print(f"[ENRICH] Saved -> {OUT_PATH}")
     print(f"  CNN Fear & Greed:  {fear_greed.get('score', 'N/A')} ({fear_greed.get('rating', 'N/A')})")
     print(f"  Alt.me Crypto F&G: {alt_fg.get('score', 'N/A')} ({alt_fg.get('rating', 'N/A')})")
-    print(f"  StockTwits:        {stocktwits.get('bull_pct', 'N/A')}% bullish")
     print(f"  EPM Sentiment Idx: {epm_index.get('score', 'N/A')} ({epm_index.get('label', 'N/A')})")
     print(f"  WSB top ticker:    {wsb[0]['ticker'] if wsb else 'N/A'}")
     print(f"  FRED series:       {sum(1 for v in fred.values() if v.get('value') is not None)}/{len(_FRED_SERIES)}")

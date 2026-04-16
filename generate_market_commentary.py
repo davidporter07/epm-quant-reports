@@ -874,6 +874,8 @@ NEVER use: "geopolitical tensions", "geopolitical risks", "global uncertainties"
 All market directions MUST match the sign of pct_change values provided.
 Do NOT describe a yield or price as "unchanged" if a non-zero pct_change is provided — state the actual direction (rose/fell) and magnitude instead.
 Do not invent figures or events not in the payload.
+Do NOT attribute geopolitical actions, policy proposals, or peace initiatives to specific companies or financial institutions — if a headline mentions a bank alongside a geopolitical event, the bank is a commentator or stakeholder, not the actor proposing the policy.
+Do NOT escalate the severity of geopolitical events beyond the exact language in the payload — if headlines say "tensions" or "conflict", do not write "war"; if they say "negotiations", do not write "deal reached".
 Return ONLY valid JSON  no markdown fences, no explanation."""
 
 # Call 1: Market narrative sections
@@ -1204,6 +1206,22 @@ def call_ollama(payload: dict) -> dict:
         if alias in merged and canonical not in merged:
             merged[canonical] = merged.pop(alias)
 
+    # Strip any keys not in the expected output schema — prevents LLM "response",
+    # "portfolio_spotlight_losers", "summary", and other hallucinated fields from
+    # leaking into latest_commentary.json.
+    _ALLOWED_LLM_KEYS = {
+        "pre_market_bullets", "equities_commentary", "fixed_income_commentary",
+        "commodities_commentary", "currencies_commentary", "economics_commentary",
+        "market_outlook_label", "market_outlook_rationale",
+        "tactical_outperforming", "tactical_underperforming", "asset_class_outlooks",
+        "portfolio_spotlight_winners", "portfolio_spotlight_watch",
+        "session_recap", "watch_today", "international_section",
+    }
+    unexpected = set(merged) - _ALLOWED_LLM_KEYS
+    if unexpected:
+        print(f"[VALIDATE] Stripping unexpected LLM keys: {sorted(unexpected)}")
+    merged = {k: v for k, v in merged.items() if k in _ALLOWED_LLM_KEYS}
+
     return merged, known_tickers
 
 
@@ -1509,10 +1527,29 @@ def main() -> int:
     existing["bonds_table"]        = bonds_tbl
     existing["technical_levels"]   = tech_levels
     existing["report_date"]        = today
-    # Enrichment fields — available to email renderer even if LLM skipped
+    # Enrichment fields — available to email renderer even if LLM skipped.
+    # Write a single structured fear_greed block; remove any stale fear_greed_index
+    # that may have been written by a previous LLM output or older code path.
+    existing.pop("fear_greed_index", None)
     if isinstance(fg, dict) and fg.get("score") is not None:
         existing["fear_greed_score"]  = fg.get("score")
         existing["fear_greed_rating"] = fg.get("rating", "")
+        existing["fear_greed"]        = {
+            "score":      fg.get("score"),
+            "rating":     fg.get("rating", ""),
+            "prev_score": fg.get("prev_score"),
+        }
+        # Warn if the Fear & Greed data is stale (timestamp more than 24 h old)
+        ts = fg.get("timestamp")
+        if ts:
+            try:
+                from datetime import timezone
+                fg_dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                age_hours = (datetime.now(timezone.utc) - fg_dt).total_seconds() / 3600
+                if age_hours > 24:
+                    print(f"[WARN] Fear & Greed data is {age_hours:.0f}h old (timestamp: {ts}). CNN endpoint may be stale.")
+            except Exception:
+                pass
 
     DATA_DIR.mkdir(exist_ok=True)
     with open(COMMENTARY_PATH, "w", encoding="utf-8") as f:

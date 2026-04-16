@@ -63,7 +63,7 @@ import atexit as _atexit
 _FREEZE_PATTERNS = ["mirofish", "kronos"]
 
 def _freeze_background_services() -> None:
-    if DEV_MODE:
+    if DEV_MODE or sys.platform == "win32":
         return
     import subprocess as _sp
     for pattern in _FREEZE_PATTERNS:
@@ -77,6 +77,8 @@ def _freeze_background_services() -> None:
             print(f"  [pipeline] Could not freeze {pattern}: {exc}")
 
 def _thaw_background_services() -> None:
+    if sys.platform == "win32":
+        return
     import subprocess as _sp
     for pattern in _FREEZE_PATTERNS:
         try:
@@ -211,9 +213,15 @@ try:
         cwd=_here, capture_output=True, text=True
     )
     if result.returncode == 0:
-        subprocess.run(["git", "pull", "--rebase", "origin", "main"], cwd=_here, check=True)
-        subprocess.run(["git", "push", "origin", "main"], cwd=_here, check=True)
-        print(" DL model checkpoint committed and pushed to git")
+        # Stash any unstaged local changes so pull --rebase can run cleanly,
+        # then restore them afterwards.
+        subprocess.run(["git", "stash", "--include-untracked", "-m", "pipeline-auto-stash"], cwd=_here)
+        try:
+            subprocess.run(["git", "pull", "--rebase", "origin", "main"], cwd=_here, check=True)
+            subprocess.run(["git", "push", "origin", "main"], cwd=_here, check=True)
+            print(" DL model checkpoint committed and pushed to git")
+        finally:
+            subprocess.run(["git", "stash", "pop"], cwd=_here)
     elif "nothing to commit" in result.stdout.lower() or "nothing to commit" in result.stderr.lower():
         print(" DL model checkpoint unchanged  no git commit needed")
     else:
@@ -1930,7 +1938,7 @@ def _load_cached_commentary(path=COMMENTARY_JSON_PATH):
     try:
         if not os.path.exists(path):
             return None
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else None
     except Exception as e:

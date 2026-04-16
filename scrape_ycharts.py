@@ -22,17 +22,22 @@ Called from:
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
+
 # ---------------------------------------------------------------------------
 # Paths & config
 # ---------------------------------------------------------------------------
 ROOT       = Path(__file__).resolve().parent
-CREDS_FILE = ROOT / "config" / "ycharts_creds.json"
+CREDS_FILE = ROOT / "config" / "ycharts_creds.json"  # legacy fallback only
 OUT_FILE   = ROOT / "data" / "ycharts_live.json"
 TODAY_STR  = datetime.today().strftime("%Y-%m-%d")
 
@@ -126,6 +131,11 @@ PERFORMANCE_ROW_MAP: dict[str, str] = {
 # Helpers
 # ---------------------------------------------------------------------------
 def _load_creds() -> dict[str, str]:
+    user = os.environ.get("YCHARTS_USER", "")
+    pw   = os.environ.get("YCHARTS_PASS", "")
+    if user and pw:
+        return {"username": user, "password": pw}
+    # Legacy fallback: read from config file (do not store plaintext creds there in production)
     with open(CREDS_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
