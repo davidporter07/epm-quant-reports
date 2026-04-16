@@ -169,15 +169,26 @@
         e.style.display = '';
       }
 
-      function copyReportLink() {
+      // Exposed globally so onclick= attribute can reach it
+      window.copyReportLink = function () {
         const btn = document.getElementById('btnCopyLink');
         navigator.clipboard.writeText(window.location.href).then(() => {
           btn.textContent = '✓ Copied!';
           setTimeout(() => {
             btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy Link';
           }, 2000);
+        }).catch(() => {
+          // Fallback for browsers that block clipboard without user gesture
+          const ta = document.createElement('textarea');
+          ta.value = window.location.href;
+          ta.style.position = 'fixed'; ta.style.opacity = '0';
+          document.body.appendChild(ta); ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+          btn.textContent = '✓ Copied!';
+          setTimeout(() => { btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy Link'; }, 2000);
         });
-      }
+      };
 
       function renderReport(status) {
         document.getElementById('loadingState').style.display = 'none';
@@ -229,6 +240,9 @@
         }
 
         document.getElementById('reportContent').style.display = '';
+
+        // Load agent activity after report is visible
+        loadAgents(jobId);
       }
 
       async function load() {
@@ -251,18 +265,27 @@
 
       load();
 
-      // Agent Activity viewer — loads after report renders
+      // Agent Activity viewer — called from renderReport after report is visible
       async function loadAgents(jobId) {
         const section = document.getElementById('agentActivity');
+        const loadingEl = document.getElementById('agentLoading');
+        const list = document.getElementById('agentList');
         if (!section) return;
+
+        section.style.display = '';
         try {
           const r = await fetch(`/api/deep/${jobId}/agents`, { credentials: 'include' });
-          if (!r.ok) return;
+          if (!r.ok) {
+            if (loadingEl) loadingEl.textContent = `Agent data unavailable (HTTP ${r.status}).`;
+            return;
+          }
           const data = await r.json();
-          if (!data.ok || !data.agents || !data.agents.length) return;
+          if (!data.ok || !data.agents || !data.agents.length) {
+            if (loadingEl) loadingEl.textContent = 'No agent activity recorded for this simulation.';
+            return;
+          }
 
-          section.style.display = '';
-          const list = document.getElementById('agentList');
+          if (loadingEl) loadingEl.style.display = 'none';
           list.innerHTML = data.agents.map(a => `
             <details class="agent-card">
               <summary class="agent-summary">
@@ -270,15 +293,14 @@
                 <span class="agent-post-count">${a.post_count} post${a.post_count !== 1 ? 's' : ''}</span>
               </summary>
               <div class="agent-bio">${a.bio ? a.bio.slice(0, 180) + (a.bio.length > 180 ? '…' : '') : ''}</div>
-              <div class="agent-posts">${a.posts.map(p => `<div class="agent-post">${p}</div>`).join('')}</div>
+              <div class="agent-posts">${(a.posts || []).map(p => `<div class="agent-post">${p}</div>`).join('')}</div>
             </details>
           `).join('');
-        } catch (_) {}
+        } catch (err) {
+          if (loadingEl) loadingEl.textContent = 'Could not load agent data.';
+        }
       }
 
-      // Patch renderReport to also trigger agent load
-      const _origLoad = load;
-      window._loadAgentsForJob = loadAgents;
     })();
   </script>
 
@@ -297,19 +319,9 @@
 
   <div id="agentActivity" style="display:none;">
     <h3>Simulation Agent Activity</h3>
+    <div id="agentLoading" style="font-size:12px;color:var(--text-muted,#888);padding:8px 0;">Loading agent data…</div>
     <div id="agentList"></div>
   </div>
 
-  <script>
-    // Wire agent load after report renders
-    (function() {
-      const params = new URLSearchParams(window.location.search);
-      const jobId = params.get('job_id');
-      if (jobId && window._loadAgentsForJob) {
-        // Delay slightly so main report renders first
-        setTimeout(() => window._loadAgentsForJob(jobId), 800);
-      }
-    })();
-  </script>
 </body>
 </html>

@@ -1,7 +1,7 @@
 # Handoff: Deep Analysis Feature
-Updated: 2026-04-16
+Updated: 2026-04-16 (session 4)
 
-## Status: LIVE — Agent viewer added, report quality improved
+## Status: LIVE — Auth fixed, zombie auto-cleanup, report prompt hardened, agent viewer wired
 
 ---
 
@@ -15,6 +15,62 @@ Updated: 2026-04-16
 - SVG animations force-run even when OS has prefers-reduced-motion enabled
 - **Agent Activity section** on report page: expandable per-agent cards showing bio + all simulation posts
 - 401 on deep analysis start now opens auth drawer with friendly message instead of raw HTTP error
+
+---
+
+## Session Fixes Applied (2026-04-16, session 4)
+
+### Auth Cookie Fix (root cause of all 401 errors)
+- **Root cause**: Security hardening (2026-04-13) removed `storeToken` from frontend JS with a comment
+  "tokens are now set as HttpOnly cookies by the server" — but `set_cookie()` was never implemented
+  in `app.py`. The JWT was returned in the login JSON body, discarded by the frontend, and no cookie
+  was ever written. Every auth-gated route returned 401 for all users always.
+- **Fix**: `api_login` and `api_register` now call `_set_auth_cookie(response, token, remember_me)`,
+  which sets `epm_token` as `HttpOnly`, `Secure`, `SameSite=lax` with correct `max_age`
+- Added `/api/auth/logout` route — calls `delete_cookie("epm_token")`; previously missing entirely
+- `api_change_username` now refreshes the cookie with the re-issued token
+- `SECURE_COOKIES` env var (default `true`): set `SECURE_COOKIES=false` for local HTTP dev
+- **Impact**: All auth-gated features were broken (deep analysis, user prefs, forecasting page).
+  Users appeared signed in due to optimistic `localStorage.epm_username` state but all API calls failed.
+
+### Zombie Sim Auto-Cleanup
+- **Root cause**: MiroFish never cleans up `run_parallel_simulation.py` child processes.
+  Accumulated zombies compete for Ollama GPU causing IPC stalls and poll timeouts.
+  Previously required manual `pgrep + kill` each session.
+- **Fix**: Added `_kill_zombie_sims()` to `deep_analysis_worker.py` — runs `pgrep -f
+  run_parallel_simulation.py` + `kill -9` on any found PIDs, waits 1s for GPU release.
+  Called automatically just before `simulation_create` in every pipeline run.
+
+### LLM Post-Processing Prompt Hardened
+- Added explicit rule to strip MiroFish internal tool names: `interview_agents`, `quick_search`,
+  `insight_forge`, `panorama_search` — these were leaking verbatim into report text
+- Banned blockquote formatting (`>`) entirely — fabricated quotes were persisting as blockquotes
+  attributed to unnamed "spokespersons" and "firms"
+- Added deduplication rule: each statistic appears exactly once across the report
+- Total rules: 8 numbered mandatory rules (up from 4 loose bullet points)
+
+### Copy Link Bug Fixed
+- `copyReportLink()` was defined inside the IIFE — invisible to `onclick="copyReportLink()"`
+  global scope. Button did nothing.
+- Fixed by making it `window.copyReportLink = function() {...}`
+- Added `execCommand('copy')` fallback for browsers that block the clipboard API
+
+### Agent Activity Viewer Wired Correctly
+- Was triggered on a blind 800ms setTimeout — failed silently if auth returned 401 (which it always did)
+- Now called directly from `renderReport()` after report content is visible
+- Shows "Loading agent data…" immediately, surfaces HTTP error codes if fetch fails
+- Old redundant second script block removed
+
+### Agent Activity — What MiroFish Actually Produces
+- **Finding**: 72-round simulation for AAPL produced only 5 total posts (1 per agent)
+- Agents do NOT deliberate — each makes one isolated statement then goes silent
+- Raw Reddit posts are a sparse side-effect of the simulation; the actual analysis comes from
+  MiroFish's internal IPC interview layer (not accessible via API)
+- Agent posts are in Chinese — MiroFish has no language constraint; qwen2.5 defaults to Chinese
+- **Recommendation**: Relabel section "Agent Perspective Snapshots" (not "activity/conversations")
+  and add note that these are domain-perspective statements, not a conversation log
+- Next improvement: add `simulation_requirement` to force English-language posts
+- Elle Fanning / ASML still appeared as agents (sim ran before news contamination fix)
 
 ---
 

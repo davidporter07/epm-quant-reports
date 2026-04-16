@@ -51,6 +51,31 @@ _stop_event = threading.Event()
 
 
 # ---------------------------------------------------------------------------
+# Zombie simulation cleanup
+# ---------------------------------------------------------------------------
+
+def _kill_zombie_sims() -> None:
+    """Kill any lingering run_parallel_simulation.py processes from prior runs.
+
+    MiroFish does not auto-clean child sim processes after a simulation
+    completes or fails. Accumulated zombies compete for Ollama GPU and cause
+    IPC timeouts mid-report. Kill them before starting each new pipeline run.
+    """
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", "run_parallel_simulation.py"],
+            capture_output=True, text=True,
+        )
+        pids = [p.strip() for p in result.stdout.splitlines() if p.strip()]
+        if pids:
+            subprocess.run(["kill", "-9"] + pids, capture_output=True)
+            time.sleep(1)  # brief pause so GPU memory is released
+    except Exception:
+        pass  # non-fatal — log nothing, just proceed
+
+
+# ---------------------------------------------------------------------------
 # Job file helpers
 # ---------------------------------------------------------------------------
 
@@ -137,25 +162,34 @@ def _postprocess_with_llm(ticker: str, seed_text: str, raw_markdown: str) -> str
     prompt = (
         f"You are an institutional financial analyst. Produce a structured market intelligence report "
         f"for {ticker} using the two inputs below.\n\n"
-        f"CRITICAL RULES — violations make the report unusable:\n"
-        f"- USE ONLY the numbers from the SEED DOCUMENT for all prices, percentages, Kronos forecasts, "
-        f"RSI, and EPM model values. IGNORE any numbers in the MiroFish report — they are often wrong.\n"
-        f"- DO NOT write 'we interviewed', 'interviews with stakeholders', 'said a spokesperson', "
-        f"'according to a survey', or any language implying real-world interviews were conducted. "
-        f"The MiroFish report contains agent simulation outputs, not real interviews.\n"
-        f"- DO NOT fabricate quotes from named or unnamed external sources. "
-        f"All insights come from the swarm simulation agents.\n"
-        f"- DO NOT assert specific current geopolitical events (e.g. 'current tariff escalation') "
-        f"unless explicitly stated in the seed document.\n"
-        f"- Structure as exactly four sections with these headings:\n"
+        f"CRITICAL RULES — every rule is mandatory:\n"
+        f"1. USE ONLY numbers from the SEED DOCUMENT for all prices, percentages, Kronos forecasts, "
+        f"RSI, and EPM model values. IGNORE all numbers in the MiroFish report — they are often hallucinated.\n"
+        f"2. STRIP all MiroFish internal tool references. The following words are internal artifacts "
+        f"and must NEVER appear in your output: interview_agents, quick_search, insight_forge, "
+        f"panorama_search, quick_search_tool, insight_forge_tool, panorama_search_tool. "
+        f"Replace any insight attributed to these tools with neutral phrasing such as "
+        f"'swarm analysis shows' or 'scenario modeling indicates'.\n"
+        f"3. NO blockquotes. Do not use > markdown blockquote syntax. Do not write indented quote blocks. "
+        f"Do not attribute any statement to a 'spokesperson', 'company', 'firm', or 'expert'. "
+        f"All insights come from simulation agents — write them as analytical observations, not quotes.\n"
+        f"4. NO interview language. Never write 'we interviewed', 'interviews with', 'said a spokesperson', "
+        f"'according to a survey', 'experts from X indicated', or any phrasing implying real-world interviews. "
+        f"These are agent simulation outputs.\n"
+        f"5. NO repeated statistics. Each number appears EXACTLY ONCE across the entire report. "
+        f"Do not mention the same percentage or price target in multiple sections.\n"
+        f"6. NO speculation about specific current events unless explicitly in the seed document. "
+        f"Do not assert active rate hikes, active tariff escalations, or specific geopolitical events "
+        f"unless the seed document states them.\n"
+        f"7. Structure as exactly four sections:\n"
         f"  ## Quantitative Snapshot\n"
         f"  ## Swarm Intelligence Analysis\n"
         f"  ## Scenario Analysis\n"
         f"  ## Critical Risk Assessment\n"
-        f"- Each section: 2-4 concise paragraphs, specific numbers (from seed doc) not vague language\n"
-        f"- No disclaimers, no 'investors should consider', no boilerplate\n\n"
+        f"8. Each section: 2-4 concise paragraphs with specific numbers (seed doc only). "
+        f"No disclaimers, no boilerplate, no 'investors should consider' language.\n\n"
         f"SEED DOCUMENT (source of truth for all numbers):\n{seed_excerpt}\n\n"
-        f"MIROFISH SWARM REPORT (agent simulation insights only — ignore its numbers):\n{raw_markdown}\n\n"
+        f"MIROFISH SWARM REPORT (agent simulation insights only — ignore its numbers and tool references):\n{raw_markdown}\n\n"
         f"Write only the report in clean markdown, starting with ## Quantitative Snapshot:"
     )
 
@@ -264,7 +298,8 @@ def _run_pipeline(job_id: str, ticker: str) -> None:
     graph_id = resp["data"]["result"]["graph_id"]
     _update_job(job_id, stage="graph", progress=25, graph_id=graph_id)
 
-    # Step 3: Create simulation
+    # Step 3: Create simulation — kill any lingering zombie sim processes first
+    _kill_zombie_sims()
     resp = _mf_post("/api/simulation/create", json={"project_id": project_id})
     if not resp.get("success"):
         raise RuntimeError(f"Simulation create failed: {resp}")
