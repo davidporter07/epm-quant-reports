@@ -20,6 +20,8 @@ report.html
 report.pdf
 email_log.txt
 email_sent.log
+push_log.txt
+*.log
 
 # Generated data outputs — exclude entire data/ directory
 data/
