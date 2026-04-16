@@ -261,6 +261,9 @@ def _run_pipeline(job_id: str, ticker: str) -> None:
             "/api/graph/ontology/generate",
             data={
                 "simulation_requirement": (
+                    f"LANGUAGE RULE: ALL agents MUST write ALL posts and ALL analysis EXCLUSIVELY "
+                    f"in English. Do not use Chinese, Japanese, Korean, or any other language under "
+                    f"any circumstances. English only — this is mandatory. "
                     f"For {ticker}: analyze risk, uncertainty, and non-obvious scenarios. "
                     f"(1) Under what specific conditions would the most pessimistic model prove correct? "
                     f"(2) Where is the asymmetric risk — is downside or upside being underestimated? "

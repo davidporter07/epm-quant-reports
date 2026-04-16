@@ -2081,8 +2081,9 @@ def deep_analysis_agents(job_id: str, request: Request) -> JSONResponse:
         for i, p in enumerate(profiles)
     }
 
-    # Load posts from SQLite
+    # Load posts from SQLite — fetch all columns available for timeline view
     posts_by_agent: dict[str, list[str]] = {}
+    timeline: list[dict] = []  # chronological across all agents
     db_path = sim_dir / "reddit_simulation.db"
     if db_path.exists():
         try:
@@ -2090,11 +2091,29 @@ def deep_analysis_agents(job_id: str, request: Request) -> JSONResponse:
             conn = sqlite3.connect(str(db_path))
             conn.row_factory = sqlite3.Row
             c = conn.cursor()
-            c.execute("SELECT user_id, content FROM post ORDER BY created_at ASC")
+            # Fetch available columns — created_at for ordering, round_num if present
+            c.execute("PRAGMA table_info(post)")
+            col_names = {row["name"] for row in c.fetchall()}
+            has_round = "round_num" in col_names
+            has_ts    = "created_at" in col_names
+            select_cols = "user_id, content"
+            if has_round:
+                select_cols += ", round_num"
+            if has_ts:
+                select_cols += ", created_at"
+            order_by = "created_at ASC" if has_ts else "rowid ASC"
+            c.execute(f"SELECT {select_cols} FROM post ORDER BY {order_by}")
             for row in c.fetchall():
                 uid = row["user_id"]
                 name = id_to_name.get(uid, f"Agent {uid}")
-                posts_by_agent.setdefault(name, []).append(row["content"] or "")
+                content = row["content"] or ""
+                posts_by_agent.setdefault(name, []).append(content)
+                entry: dict = {"agent": name, "content": content}
+                if has_round:
+                    entry["round"] = row["round_num"]
+                if has_ts:
+                    entry["ts"] = row["created_at"]
+                timeline.append(entry)
             conn.close()
         except Exception:
             pass
@@ -2112,7 +2131,7 @@ def deep_analysis_agents(job_id: str, request: Request) -> JSONResponse:
             "posts": posts_by_agent.get(name, []),
         })
 
-    return JSONResponse({"ok": True, "simulation_id": sim_id, "agents": agents})
+    return JSONResponse({"ok": True, "simulation_id": sim_id, "agents": agents, "timeline": timeline})
 
 
 if __name__ == "__main__":

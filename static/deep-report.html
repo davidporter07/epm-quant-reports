@@ -265,11 +265,41 @@
 
       load();
 
+      // Avatar colour palette — assigns a consistent colour to each agent name
+      const AVATAR_COLORS = [
+        '#d4a84b','#3b82f6','#22c55e','#a855f7','#ef4444',
+        '#06b6d4','#f97316','#84cc16','#ec4899','#14b8a6',
+      ];
+      function _avatarColor(name, idx) {
+        return AVATAR_COLORS[idx % AVATAR_COLORS.length];
+      }
+      function _initials(name) {
+        return name.split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase();
+      }
+
+      // Tab toggle — exposed globally for onclick= attributes
+      window.switchAgentTab = function (tab) {
+        const agentWrap    = document.getElementById('agentListWrap');
+        const timelineWrap = document.getElementById('agentTimelineWrap');
+        const tabA = document.getElementById('tabByAgent');
+        const tabT = document.getElementById('tabTimeline');
+        if (tab === 'agents') {
+          if (agentWrap)    agentWrap.style.display = '';
+          if (timelineWrap) timelineWrap.style.display = 'none';
+          if (tabA) tabA.classList.add('active');
+          if (tabT) tabT.classList.remove('active');
+        } else {
+          if (agentWrap)    agentWrap.style.display = 'none';
+          if (timelineWrap) timelineWrap.style.display = '';
+          if (tabA) tabA.classList.remove('active');
+          if (tabT) tabT.classList.add('active');
+        }
+      };
+
       // Agent Activity viewer — called from renderReport after report is visible
       async function loadAgents(jobId) {
         const section = document.getElementById('agentActivity');
         const loadingEl = document.getElementById('agentLoading');
-        const list = document.getElementById('agentList');
         if (!section) return;
 
         section.style.display = '';
@@ -286,16 +316,62 @@
           }
 
           if (loadingEl) loadingEl.style.display = 'none';
-          list.innerHTML = data.agents.map(a => `
-            <details class="agent-card">
-              <summary class="agent-summary">
-                <span class="agent-name">${a.name}</span>
-                <span class="agent-post-count">${a.post_count} post${a.post_count !== 1 ? 's' : ''}</span>
-              </summary>
-              <div class="agent-bio">${a.bio ? a.bio.slice(0, 180) + (a.bio.length > 180 ? '…' : '') : ''}</div>
-              <div class="agent-posts">${(a.posts || []).map(p => `<div class="agent-post">${p}</div>`).join('')}</div>
-            </details>
-          `).join('');
+
+          // Build colour map so timeline and cards share the same colour per agent
+          const colorMap = {};
+          data.agents.forEach((a, i) => { colorMap[a.name] = _avatarColor(a.name, i); });
+
+          // ── By-Agent cards ──────────────────────────────────────────────
+          const list = document.getElementById('agentList');
+          if (list) {
+            list.innerHTML = data.agents.map((a, i) => {
+              const color = colorMap[a.name];
+              const noPosts = !a.posts || a.posts.length === 0;
+              return `
+                <details class="agent-card">
+                  <summary class="agent-summary">
+                    <div style="display:flex;align-items:center;gap:10px;">
+                      <div class="tl-avatar" style="background:${color};width:28px;height:28px;font-size:10px;">${_initials(a.name)}</div>
+                      <span class="agent-name">${a.name}</span>
+                    </div>
+                    <span class="agent-post-count">${a.post_count} post${a.post_count !== 1 ? 's' : ''}</span>
+                  </summary>
+                  ${a.bio ? `<div class="agent-bio">${a.bio}</div>` : ''}
+                  <div class="agent-posts">
+                    ${noPosts
+                      ? '<div style="font-size:12px;color:var(--muted,#7d94c0);font-style:italic;">No posts in this simulation.</div>'
+                      : a.posts.map(p => `<div class="agent-post">${p}</div>`).join('')
+                    }
+                  </div>
+                </details>`;
+            }).join('');
+          }
+          document.getElementById('agentListWrap').style.display = '';
+
+          // ── Timeline ────────────────────────────────────────────────────
+          const tlEl = document.getElementById('agentTimeline');
+          const timeline = data.timeline || [];
+          if (tlEl) {
+            if (!timeline.length) {
+              tlEl.innerHTML = '<div class="agent-empty">No timeline posts recorded for this simulation.</div>';
+            } else {
+              tlEl.innerHTML = timeline.map(entry => {
+                const color = colorMap[entry.agent] || AVATAR_COLORS[0];
+                const roundLabel = entry.round != null ? `Round ${entry.round}` : (entry.ts ? entry.ts.slice(0, 16).replace('T', ' ') : '');
+                return `
+                  <div class="tl-entry">
+                    <div class="tl-avatar" style="background:${color};">${_initials(entry.agent)}</div>
+                    <div class="tl-bubble">
+                      <div class="tl-meta">
+                        <span class="tl-agent-name">${entry.agent}</span>
+                        ${roundLabel ? `<span class="tl-round">${roundLabel}</span>` : ''}
+                      </div>
+                      <div class="tl-content">${entry.content}</div>
+                    </div>
+                  </div>`;
+              }).join('');
+            }
+          }
         } catch (err) {
           if (loadingEl) loadingEl.textContent = 'Could not load agent data.';
         }
@@ -305,22 +381,108 @@
   </script>
 
   <style>
-    #agentActivity { margin: 32px auto; max-width: 860px; padding: 0 16px; }
-    #agentActivity h3 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted, #888); margin-bottom: 12px; }
-    .agent-card { border: 1px solid var(--border, #2a2a2a); border-radius: 8px; margin-bottom: 8px; overflow: hidden; }
-    .agent-summary { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; cursor: pointer; list-style: none; background: var(--surface, #1a1a1a); }
+    #agentActivity { margin: 32px auto; max-width: 860px; padding: 0 16px 40px; }
+    .agent-section-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 14px; flex-wrap: wrap; gap: 10px;
+    }
+    .agent-section-title {
+      font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .1em; color: rgba(212,168,75,0.7);
+    }
+    .agent-section-note {
+      font-size: 11px; color: var(--muted, #7d94c0); font-style: italic;
+    }
+    /* Tab toggle */
+    .agent-tabs {
+      display: flex; gap: 4px;
+      background: rgba(8,18,40,0.8);
+      border: 1px solid rgba(28,52,96,0.5);
+      border-radius: 8px; padding: 3px;
+    }
+    .agent-tab {
+      padding: 5px 14px; border-radius: 6px; font-size: 11px; font-weight: 600;
+      cursor: pointer; border: none; background: transparent;
+      color: var(--muted, #7d94c0); transition: all .15s;
+    }
+    .agent-tab.active {
+      background: rgba(212,168,75,0.15); color: #d4a84b;
+    }
+    /* Per-agent cards */
+    .agent-card {
+      border: 1px solid rgba(28,52,96,0.55);
+      border-radius: 8px; margin-bottom: 8px; overflow: hidden;
+      background: var(--panel, rgba(8,18,40,0.93));
+    }
+    .agent-summary {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 11px 16px; cursor: pointer; list-style: none;
+      gap: 10px;
+    }
     .agent-summary::-webkit-details-marker { display: none; }
-    .agent-name { font-weight: 600; font-size: 14px; }
-    .agent-post-count { font-size: 11px; color: var(--text-muted, #888); background: var(--surface2, #222); padding: 2px 8px; border-radius: 10px; }
-    .agent-bio { font-size: 12px; color: var(--text-muted, #888); padding: 8px 14px 4px; font-style: italic; border-top: 1px solid var(--border, #2a2a2a); }
-    .agent-posts { padding: 8px 14px 12px; display: flex; flex-direction: column; gap: 6px; }
-    .agent-post { font-size: 13px; line-height: 1.5; padding: 8px 10px; background: var(--surface2, #111); border-radius: 6px; border-left: 2px solid var(--accent, #b8860b); }
+    .agent-name { font-weight: 700; font-size: 13px; color: var(--text, #e8eeff); }
+    .agent-post-count {
+      font-size: 11px; color: var(--muted, #7d94c0);
+      background: rgba(28,52,96,0.5);
+      padding: 2px 9px; border-radius: 10px; white-space: nowrap;
+    }
+    .agent-bio {
+      font-size: 12px; color: var(--muted, #7d94c0); padding: 8px 16px 6px;
+      font-style: italic; border-top: 1px solid rgba(28,52,96,0.4);
+      line-height: 1.6;
+    }
+    .agent-posts { padding: 8px 16px 12px; display: flex; flex-direction: column; gap: 6px; }
+    .agent-post {
+      font-size: 13px; line-height: 1.65; padding: 9px 12px;
+      background: rgba(5,12,28,0.7); border-radius: 6px;
+      border-left: 2px solid rgba(212,168,75,0.5); color: var(--muted, #7d94c0);
+    }
+    /* Timeline view */
+    #agentTimeline { display: flex; flex-direction: column; gap: 10px; }
+    .tl-entry {
+      display: flex; gap: 12px; align-items: flex-start;
+    }
+    .tl-avatar {
+      width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; font-weight: 800; color: #0a1928;
+    }
+    .tl-bubble {
+      flex: 1; background: rgba(8,18,40,0.93);
+      border: 1px solid rgba(28,52,96,0.55);
+      border-radius: 0 8px 8px 8px; padding: 10px 14px;
+    }
+    .tl-meta {
+      display: flex; align-items: baseline; gap: 8px; margin-bottom: 5px;
+    }
+    .tl-agent-name { font-size: 12px; font-weight: 700; color: var(--text, #e8eeff); }
+    .tl-round { font-size: 10px; color: var(--muted, #7d94c0); }
+    .tl-content { font-size: 13px; line-height: 1.65; color: var(--muted, #7d94c0); }
+    .agent-empty {
+      font-size: 13px; color: var(--muted, #7d94c0);
+      padding: 16px; text-align: center;
+      border: 1px dashed rgba(28,52,96,0.4); border-radius: 8px;
+    }
   </style>
 
   <div id="agentActivity" style="display:none;">
-    <h3>Simulation Agent Activity</h3>
-    <div id="agentLoading" style="font-size:12px;color:var(--text-muted,#888);padding:8px 0;">Loading agent data…</div>
-    <div id="agentList"></div>
+    <div class="agent-section-header">
+      <div>
+        <div class="agent-section-title">Agent Perspective Snapshots</div>
+        <div class="agent-section-note">Domain-perspective statements from simulation agents — not a real-time conversation log</div>
+      </div>
+      <div class="agent-tabs">
+        <button class="agent-tab active" id="tabByAgent" onclick="switchAgentTab('agents')">By Agent</button>
+        <button class="agent-tab" id="tabTimeline" onclick="switchAgentTab('timeline')">Timeline</button>
+      </div>
+    </div>
+    <div id="agentLoading" style="font-size:12px;color:var(--muted,#7d94c0);padding:8px 0;">Loading agent data…</div>
+    <div id="agentListWrap" style="display:none;">
+      <div id="agentList"></div>
+    </div>
+    <div id="agentTimelineWrap" style="display:none;">
+      <div id="agentTimeline"></div>
+    </div>
   </div>
 
 </body>

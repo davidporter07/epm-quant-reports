@@ -404,6 +404,50 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> str:
         )
         lines.append("")
 
+    # ── GROWTH INVESTOR PERSPECTIVE ───────────────────────────────────────────
+    lines.append("── GROWTH INVESTOR PERSPECTIVE ─────────────────────────────────────────────────")
+    lines.append(
+        f"From a growth-oriented investment perspective on {co_info['name']}: Focus on revenue "
+        f"trajectory, market share dynamics, and long-term secular tailwinds. Are current quantitative "
+        f"models capturing the compounding effect of margin expansion and reinvestment at scale? "
+        f"Does the near-term volatility represent an opportunity to build a position in a structural "
+        f"winner, or does it signal a genuine breakdown in the growth thesis that demands reassessment?"
+    )
+    lines.append("")
+
+    # ── VALUE INVESTOR PERSPECTIVE ────────────────────────────────────────────
+    lines.append("── VALUE INVESTOR PERSPECTIVE ──────────────────────────────────────────────────")
+    lines.append(
+        f"From a fundamental valuation standpoint on {co_info['name']}: What does the current "
+        f"price imply about normalized long-run earnings power and return on invested capital? "
+        f"Is the stock pricing in a durable competitive moat or extrapolating unsustainable "
+        f"near-term momentum? Does the short-term model spread diverge from the long-term "
+        f"fundamental trajectory, and what is the margin of safety at current levels?"
+    )
+    lines.append("")
+
+    # ── MARKET COMMENTATOR PERSPECTIVE ───────────────────────────────────────
+    lines.append("── MARKET COMMENTATOR PERSPECTIVE ──────────────────────────────────────────────")
+    lines.append(
+        f"From a market commentary and sentiment perspective on {ticker}: How is the financial "
+        f"media and retail investor narrative currently framing this stock — momentum play, "
+        f"turnaround story, or value trap? What headline catalyst would most rapidly shift "
+        f"sentiment in either direction? Are options markets pricing complacency or genuine "
+        f"tail-risk hedging relative to the technical picture and model forecasts?"
+    )
+    lines.append("")
+
+    # ── BEARISH ANALYST PERSPECTIVE ───────────────────────────────────────────
+    lines.append("── BEARISH ANALYST PERSPECTIVE ─────────────────────────────────────────────────")
+    lines.append(
+        f"The bear case for {ticker}: What risk factors are bulls systematically underweighting? "
+        f"Where is market consensus most likely wrong? If the most pessimistic quantitative model "
+        f"proves correct, identify the specific catalyst that triggers it and the transmission "
+        f"mechanism to price. What asymmetric downside scenario are the models failing to price in, "
+        f"and what hedging approach would a short-focused analyst recommend given current technicals?"
+    )
+    lines.append("")
+
     # ── MACRO / FEDERAL RESERVE PERSPECTIVE ──────────────────────────────────
     lines.append("── MACRO / FEDERAL RESERVE PERSPECTIVE ─────────────────────────────────────────")
     if vix is not None:
