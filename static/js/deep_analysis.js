@@ -215,9 +215,16 @@
     if (urlParams.get('newAnalysis') === '1') {
       _clearJob(_currentTicker);
       // Clean URL so a refresh doesn't re-clear a new run
-      const cleanUrl = window.location.pathname + '?q=' + encodeURIComponent(_currentTicker);
+      const cleanUrl = window.location.pathname + '?ticker=' + encodeURIComponent(_currentTicker);
       history.replaceState(null, '', cleanUrl);
       _showLaunchCards();
+      // Wire run button before returning — without this the button appears but has no handler
+      const runBtn = document.getElementById('dalRunBtn');
+      if (runBtn) {
+        runBtn.disabled = false;
+        runBtn.textContent = 'Run Deep Swarm Analysis';
+        runBtn.onclick = () => _runDeepAnalysis(_currentTicker);
+      }
       return;
     }
 
