@@ -149,60 +149,81 @@ def _reset_interrupted_jobs() -> None:
 
 def _postprocess_with_llm(ticker: str, seed_text: str, raw_markdown: str) -> str:
     """
-    Pass MiroFish raw report through qwen2.5:14b to recover quantitative data
-    that MiroFish's report generator drops, and restructure into 4 clean sections.
+    Pass MiroFish raw report through qwen2.5:14b to produce a structured deep analysis.
+    Uses a strict template so the LLM fills in sections rather than following rules it ignores.
     Falls back to raw_markdown on any error so the job never fails here.
     """
     import logging
     logger = logging.getLogger(__name__)
 
-    # Trim seed to most data-dense portion (first 3000 chars has all the numbers)
-    seed_excerpt = seed_text[:3000]
+    # Include enough seed text to cover price data, Kronos scenarios, AND EPM forecasts
+    # Kronos tables start around char 600-800, EPM models typically around 1500-2000
+    seed_excerpt = seed_text[:5000]
 
     prompt = (
-        f"You are an institutional financial analyst. Produce a structured market intelligence report "
-        f"for {ticker} using the two inputs below.\n\n"
-        f"CRITICAL RULES — every rule is mandatory:\n"
-        f"1. USE ONLY numbers from the SEED DOCUMENT for all prices, percentages, Kronos forecasts, "
-        f"RSI, and EPM model values. IGNORE all numbers in the MiroFish report — they are often hallucinated.\n"
-        f"2. STRIP all MiroFish internal tool references. The following words are internal artifacts "
-        f"and must NEVER appear in your output: interview_agents, quick_search, insight_forge, "
-        f"panorama_search, quick_search_tool, insight_forge_tool, panorama_search_tool. "
-        f"Replace any insight attributed to these tools with neutral phrasing such as "
-        f"'swarm analysis shows' or 'scenario modeling indicates'.\n"
-        f"3. NO blockquotes. Do not use > markdown blockquote syntax. Do not write indented quote blocks. "
-        f"Do not attribute any statement to a 'spokesperson', 'company', 'firm', or 'expert'. "
-        f"All insights come from simulation agents — write them as analytical observations, not quotes.\n"
-        f"4. NO interview language. Never write 'we interviewed', 'interviews with', 'said a spokesperson', "
-        f"'according to a survey', 'experts from X indicated', or any phrasing implying real-world interviews. "
-        f"These are agent simulation outputs.\n"
-        f"5. NO repeated statistics. Each number appears EXACTLY ONCE across the entire report. "
-        f"Do not mention the same percentage or price target in multiple sections.\n"
-        f"6. NO speculation about specific current events unless explicitly in the seed document. "
-        f"Do not assert active rate hikes, active tariff escalations, or specific geopolitical events "
-        f"unless the seed document states them.\n"
-        f"7. Structure as exactly four sections:\n"
-        f"  ## Quantitative Snapshot\n"
-        f"  ## Swarm Intelligence Analysis\n"
-        f"  ## Scenario Analysis\n"
-        f"  ## Critical Risk Assessment\n"
-        f"8. Each section: 2-4 concise paragraphs with specific numbers (seed doc only). "
-        f"No disclaimers, no boilerplate, no 'investors should consider' language.\n\n"
-        f"SEED DOCUMENT (source of truth for all numbers):\n{seed_excerpt}\n\n"
-        f"MIROFISH SWARM REPORT (agent simulation insights only — ignore its numbers and tool references):\n{raw_markdown}\n\n"
-        f"Write only the report in clean markdown, starting with ## Quantitative Snapshot:"
+        f"You are a senior equity research analyst. Write a deep market intelligence report for "
+        f"{ticker} by filling in the five sections below using the two data sources provided.\n\n"
+        f"DATA SOURCE A — SEED DOCUMENT (use these numbers for ALL prices, percentages, and forecasts):\n"
+        f"```\n{seed_excerpt}\n```\n\n"
+        f"DATA SOURCE B — MIROFISH SWARM SIMULATION (use only for agent reasoning and qualitative "
+        f"perspectives — its numbers are unreliable, use Source A numbers instead):\n"
+        f"```\n{raw_markdown[:3000]}\n```\n\n"
+        f"Write exactly these five sections. Do not add any other sections or text outside them.\n\n"
+        f"## Quantitative Snapshot\n"
+        f"Write 2-3 paragraphs covering: current price and where it sits relative to its 52-week "
+        f"range and moving averages (use exact figures from Source A). RSI reading and what momentum "
+        f"signals. The EPM model ensemble spread — name the most optimistic and most pessimistic "
+        f"models with their exact forecast percentages and explain what a spread of that magnitude "
+        f"implies about directional conviction. Volume trend vs 20-day average.\n\n"
+        f"## Kronos Scenario Breakdown\n"
+        f"Write one paragraph per Kronos scenario (bullish, base, bearish — use the exact labels "
+        f"and price targets from Source A). Each paragraph must cover: the exact implied price "
+        f"target and percentage move from Source A, what specific market conditions or catalysts "
+        f"would produce that path, how retail investors and institutional players would position "
+        f"differently in that scenario, and which EPM models from Source A align with that outcome.\n\n"
+        f"## Swarm Simulation: Agent Perspectives & Tensions\n"
+        f"Write 3-4 paragraphs on what the multi-agent simulation revealed. Focus on: where agent "
+        f"perspectives disagreed rather than agreed (tension is more informative than consensus), "
+        f"what asymmetric risks the macro/Fed-perspective agents flagged that technical models miss, "
+        f"what the supply-chain and geopolitical perspectives argued about structural risks, and "
+        f"how investor-perspective agents framed positioning under uncertainty. Write as analysis "
+        f"of what the simulation produced — no quotes, no 'Expert A said', no blockquotes.\n\n"
+        f"## Market Participant Reactions\n"
+        f"Write 3 paragraphs of concrete behavioral predictions. Paragraph 1: if {ticker} trends "
+        f"toward the bearish Kronos target over the next 10 days, what do retail momentum traders "
+        f"do (at what price level does selling accelerate?), what do value-oriented institutions do, "
+        f"and what narrative takes hold in financial media? Paragraph 2: same analysis for the "
+        f"bullish scenario — what triggers a momentum chase, where does short covering add fuel, "
+        f"and how does the options market amplify the move? Paragraph 3: what behavioral dynamic "
+        f"is most likely to cause a whipsaw between the two scenarios, and what is the tell that "
+        f"the dominant scenario has been decided?\n\n"
+        f"## Critical Risks Beyond the Models\n"
+        f"Write exactly 3 numbered risks that no quantitative model captures for {ticker}. "
+        f"For each: name the specific risk, explain the exact trigger mechanism, identify which "
+        f"Kronos scenario it would most accelerate, and state what a risk-aware investor would "
+        f"watch as an early warning signal. Be specific to {ticker}'s business — not generic.\n\n"
+        f"OUTPUT FORMAT RULES (violations invalidate the report):\n"
+        f"- Use only prices and percentages from Source A\n"
+        f"- No quotes attributed to 'Expert', 'Analyst', 'Spokesperson', or any named/unnamed person\n"
+        f"- No blockquote markdown (no > syntax)\n"
+        f"- No mention of: panorama_search, interview_agents, quick_search, insight_forge\n"
+        f"- No repetition of the same statistic across sections\n"
+        f"- Start immediately with ## Quantitative Snapshot — no preamble\n"
     )
 
     try:
         r = requests.post(
             f"{OLLAMA_URL}/api/generate",
             json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
-            timeout=180,
+            timeout=300,  # increased: 5 sections takes longer than 4
         )
         r.raise_for_status()
         enhanced = r.json().get("response", "").strip()
-        if enhanced and len(enhanced) > 200:
+        # Validate: must contain at least 3 of our 5 section headers and be substantive
+        required = ["## Quantitative Snapshot", "## Kronos Scenario", "## Market Participant"]
+        if enhanced and len(enhanced) > 500 and all(h in enhanced for h in required):
             return enhanced
+        logger.warning("LLM post-processing output failed validation (missing required sections)")
     except Exception as exc:
         logger.warning("LLM post-processing failed (using raw MiroFish output): %s", exc)
 
@@ -261,16 +282,21 @@ def _run_pipeline(job_id: str, ticker: str) -> None:
             "/api/graph/ontology/generate",
             data={
                 "simulation_requirement": (
-                    f"LANGUAGE RULE: ALL agents MUST write ALL posts and ALL analysis EXCLUSIVELY "
-                    f"in English. Do not use Chinese, Japanese, Korean, or any other language under "
-                    f"any circumstances. English only — this is mandatory. "
-                    f"For {ticker}: analyze risk, uncertainty, and non-obvious scenarios. "
-                    f"(1) Under what specific conditions would the most pessimistic model prove correct? "
-                    f"(2) Where is the asymmetric risk — is downside or upside being underestimated? "
-                    f"(3) What are the 2-3 most critical risks the quantitative models may not capture? "
-                    f"(4) Does the spread between model forecasts signal genuine directional uncertainty "
-                    f"or do models simply capture different risk factors? "
-                    f"Prioritize scenario analysis and actionable insight over directional summary."
+                    f"LANGUAGE: Write ALL posts exclusively in English. No other language permitted.\n"
+                    f"SIMULATION MANDATE for {ticker}:\n"
+                    f"Each agent must post from their specific domain perspective. Agents should "
+                    f"DISAGREE with each other — the goal is productive tension, not consensus.\n"
+                    f"Three things every agent must address in their posts:\n"
+                    f"1. SCENARIO STANCE: Given the quantitative models show divergence between "
+                    f"an optimistic and pessimistic forecast, argue which scenario your domain "
+                    f"perspective finds more credible and exactly why.\n"
+                    f"2. MARKET BEHAVIOR PREDICTION: How would retail investors react if the bearish "
+                    f"scenario materializes? What about institutional investors? What narrative would "
+                    f"dominate financial media? Be specific about price levels and behavioral triggers.\n"
+                    f"3. HIDDEN RISK: Identify one structural risk specific to your domain that "
+                    f"no price-based model captures. Name the trigger, the mechanism, and the impact.\n"
+                    f"Engage with other agents' arguments. If another perspective is wrong, say so "
+                    f"and explain why from your domain expertise."
                 ),
                 "project_name": f"{ticker} Deep Analysis",
             },

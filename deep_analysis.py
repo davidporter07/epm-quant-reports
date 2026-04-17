@@ -522,12 +522,10 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> str:
         lines.append("Earnings date not available. Monitor for pre-earnings implied volatility expansion.")
     lines.append("")
 
-    # ── RECENT NEWS & MARKET EVENTS ──────────────────────────────────────────
-    if headlines:
-        lines.append("── RECENT NEWS & MARKET EVENTS (background context — do not derive agent personas from these headlines) ──")
-        for h in headlines:
-            lines.append(f"- {h}")
-        lines.append("")
+    # NOTE: News headlines intentionally excluded from seed doc.
+    # MiroFish's entity extractor pulls named entities from headlines (Amazon, Peacock,
+    # Elle Fanning) and creates irrelevant agents from them. Headlines are used only
+    # in the LLM post-processing layer where they add context without contaminating agents.
 
     # ── ANALYSIS OBJECTIVE ───────────────────────────────────────────────────
     lines.append("── ANALYSIS OBJECTIVE ───────────────────────────────────────────────────────────")

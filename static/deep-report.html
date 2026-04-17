@@ -348,28 +348,39 @@
           }
           document.getElementById('agentListWrap').style.display = '';
 
-          // ── Timeline ────────────────────────────────────────────────────
+          // ── Deliberation Script (Timeline) ──────────────────────────────
           const tlEl = document.getElementById('agentTimeline');
           const timeline = data.timeline || [];
           if (tlEl) {
             if (!timeline.length) {
-              tlEl.innerHTML = '<div class="agent-empty">No timeline posts recorded for this simulation.</div>';
+              tlEl.innerHTML = '<div class="agent-empty">No deliberation posts recorded for this simulation.</div>';
             } else {
-              tlEl.innerHTML = timeline.map(entry => {
+              const totalRounds = 72;
+              const totalPosts = timeline.length;
+              const header = `
+                <div class="script-header">
+                  <div class="script-title">DELIBERATION TRANSCRIPT</div>
+                  <div class="script-meta">${totalRounds}-Round Swarm Simulation &nbsp;·&nbsp; ${totalPosts} recorded statement${totalPosts !== 1 ? 's' : ''} &nbsp;·&nbsp; ${data.agents ? data.agents.length : '?'} agents</div>
+                  <div class="script-divider">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</div>
+                </div>`;
+
+              const lines = timeline.map((entry, idx) => {
                 const color = colorMap[entry.agent] || AVATAR_COLORS[0];
-                const roundLabel = entry.round != null ? `Round ${entry.round}` : (entry.ts ? entry.ts.slice(0, 16).replace('T', ' ') : '');
+                const roundLabel = entry.round != null ? `Round ${entry.round}` : (entry.ts ? `~Round ${Math.round((idx + 1) / totalPosts * totalRounds)}` : '');
+                const prevAgent = idx > 0 ? timeline[idx - 1].agent : null;
+                const isReply = prevAgent && prevAgent !== entry.agent;
                 return `
-                  <div class="tl-entry">
-                    <div class="tl-avatar" style="background:${color};">${_initials(entry.agent)}</div>
-                    <div class="tl-bubble">
-                      <div class="tl-meta">
-                        <span class="tl-agent-name">${entry.agent}</span>
-                        ${roundLabel ? `<span class="tl-round">${roundLabel}</span>` : ''}
-                      </div>
-                      <div class="tl-content">${entry.content}</div>
+                  <div class="script-line${isReply ? ' script-reply' : ''}">
+                    <div class="script-speaker">
+                      <span class="script-dot" style="background:${color};"></span>
+                      <span class="script-name">${entry.agent.toUpperCase()}</span>
+                      ${roundLabel ? `<span class="script-round">${roundLabel}</span>` : ''}
                     </div>
+                    <div class="script-dialogue">${entry.content}</div>
                   </div>`;
               }).join('');
+
+              tlEl.innerHTML = header + lines;
             }
           }
         } catch (err) {
@@ -463,17 +474,54 @@
       padding: 16px; text-align: center;
       border: 1px dashed rgba(28,52,96,0.4); border-radius: 8px;
     }
+    /* Script / deliberation format */
+    #agentTimeline { display: flex; flex-direction: column; gap: 0; }
+    .script-header {
+      padding: 16px 0 20px;
+      border-bottom: 1px solid rgba(28,52,96,0.4);
+      margin-bottom: 8px;
+    }
+    .script-title {
+      font-size: 11px; font-weight: 800; letter-spacing: .16em;
+      color: rgba(212,168,75,0.8); text-transform: uppercase; margin-bottom: 4px;
+    }
+    .script-meta { font-size: 11px; color: var(--muted, #7d94c0); margin-bottom: 6px; }
+    .script-divider { font-size: 11px; color: rgba(28,52,96,0.6); letter-spacing: .02em; }
+    .script-line {
+      padding: 16px 0;
+      border-bottom: 1px solid rgba(28,52,96,0.25);
+    }
+    .script-reply { padding-left: 28px; border-left: 2px solid rgba(28,52,96,0.4); margin-left: 14px; }
+    .script-speaker {
+      display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+    }
+    .script-dot {
+      width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+    }
+    .script-name {
+      font-size: 11px; font-weight: 800; letter-spacing: .1em;
+      color: var(--text, #e8eeff);
+    }
+    .script-round {
+      font-size: 10px; color: var(--muted, #7d94c0);
+      background: rgba(28,52,96,0.35); padding: 1px 7px; border-radius: 4px;
+    }
+    .script-dialogue {
+      font-size: 13px; line-height: 1.75; color: var(--muted, #7d94c0);
+      padding-left: 16px;
+      border-left: 2px solid rgba(212,168,75,0.2);
+    }
   </style>
 
   <div id="agentActivity" style="display:none;">
     <div class="agent-section-header">
       <div>
-        <div class="agent-section-title">Agent Perspective Snapshots</div>
-        <div class="agent-section-note">Domain-perspective statements from simulation agents — not a real-time conversation log</div>
+        <div class="agent-section-title">Simulation Deliberation</div>
+        <div class="agent-section-note">Statements recorded from the 72-round swarm simulation — By Agent for profiles, Transcript for deliberation flow</div>
       </div>
       <div class="agent-tabs">
         <button class="agent-tab active" id="tabByAgent" onclick="switchAgentTab('agents')">By Agent</button>
-        <button class="agent-tab" id="tabTimeline" onclick="switchAgentTab('timeline')">Timeline</button>
+        <button class="agent-tab" id="tabTimeline" onclick="switchAgentTab('timeline')">Transcript</button>
       </div>
     </div>
     <div id="agentLoading" style="font-size:12px;color:var(--muted,#7d94c0);padding:8px 0;">Loading agent data…</div>
