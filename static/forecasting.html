@@ -12,7 +12,7 @@
   <script>
     (function () {
       try {
-        var pref = localStorage.getItem('epm_theme_pref') || 'dark';
+        var pref = localStorage.getItem('epm_theme_pref') || 'light';
         var resolved = pref === 'system' ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : pref;
         var bg = resolved === 'light' ? '#f5f8fd' : '#061326';
         document.documentElement.dataset.theme = resolved;
@@ -25,53 +25,31 @@
     })();
   </script>
   <script>try{if(!sessionStorage.getItem("epm_splash_shown")&&location.pathname.indexOf("login")<0&&location.pathname.indexOf("reset")<0){var _sh=document.createElement("div");_sh.id="fvsShield";_sh.style.cssText="position:fixed;inset:0;z-index:9998;background:#040d1a";document.documentElement.appendChild(_sh);}}catch(e){}</script>
+  <script>
+    (function () {
+      try {
+        var density = localStorage.getItem('epm_density_pref') || 'comfortable';
+        document.documentElement.dataset.density = density;
+      } catch (e) {}
+    })();
+  </script>
   <title>Forecasting | EPM Market Intelligence</title>
   <link rel="stylesheet" href="/static/css/styles.css?v=20260410a" />
   <link rel="stylesheet" href="/static/css/design-v2.css?v=20260410a" />
+  <link rel="stylesheet" href="/static/css/design-system.css?v=20260419a" />
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <script src="/static/js/chrome.js?v=20260419a"></script>
   <script defer src="/static/js/site.js?v=20260410a"></script>
   <script defer src="/static/js/forecasting.js?v=20260410a"></script>
   <link rel="icon" type="image/png" href="/static/epm_logo_sq.png">
   <link rel="apple-touch-icon" href="/static/epm_logo_sq.png">
   <meta property="og:image" content="/static/epm_logo.png">
 </head>
-<body data-page="forecasting">
-  <div id="settingsOverlay" class="settings-overlay"></div>
-  <aside id="settingsDrawer" class="settings-drawer">
-    <div class="section-title-row">
-      <h3>Settings</h3>
-      <button id="closeSettingsBtn" class="btn btn-ghost">Close</button>
-    </div>
-    <div class="settings-group"><h4>Theme</h4><div class="radio-row"><div class="radio-chip" data-pref-theme="dark">Dark</div><div class="radio-chip" data-pref-theme="light">Light</div><div class="radio-chip" data-pref-theme="system">System</div></div></div>
-<div class="settings-group"><h4>Animations</h4><div class="radio-row"><div class="radio-chip" data-pref-animations="on">On</div><div class="radio-chip" data-pref-animations="off">Reduced</div></div></div>
-  </aside>
+<body data-page="forecasting" data-ds="v3">
+  <div id="epmChrome"></div>
+  <script>if (window.EPMChrome) EPMChrome.render();</script>
 
   <div class="page-shell">
-    <header class="topbar fade-in">
-      <div class="brand-block">
-        <img class="brand-logo" src="/static/epm_logo.png?v=20260322f" alt="EPM Financial" />
-        <div class="brand-copy">
-          <h1>EPM Market Intelligence</h1>
-          <p>Forecasting — MAG7 model outputs, consensus, rankings, and daily commentary.</p>
-        </div>
-      </div>
-      <nav class="main-nav">
-        <a class="nav-link" href="/">Home</a>
-        <a class="nav-link" href="/markets">Markets</a>
-        <a class="nav-link" href="/forecasting">Forecasting</a>
-        <a class="nav-link" href="/portfolios">Model Portfolios</a>
-        <a class="nav-link" href="/search">Fund Search</a>
-      </nav>
-      <nav class="topbar-nav">
-        <a class="topbar-nav-link nav-link" href="/">Home</a>
-        <a class="topbar-nav-link nav-link" href="/markets">Markets</a>
-        <a class="topbar-nav-link nav-link" href="/forecasting">Forecasting</a>
-        <a class="topbar-nav-link nav-link" href="/portfolios">Portfolios</a>
-      </nav>
-      <div class="top-actions">
-        <button id="openSettingsBtn" class="btn btn-icon settings-gear-btn" type="button" aria-label="Open settings" title="Settings"></button>
-      </div>
-    </header>
 
     <!-- Auth gate overlay — visible to guests, hidden once data-auth-state="member" -->
     <div class="auth-gate-overlay" id="forecastingGate" aria-live="polite">
@@ -90,59 +68,64 @@
     <!-- Blurred content wrapper — blur removed for members -->
     <div class="auth-gated-content">
 
-    <!-- Page header card -->
-    <section class="card fade-in" style="margin-top:22px;">
-      <div class="section-title-row">
-        <h2>MAG7 Forecast Dashboard</h2>
-        <span id="forecastAsOf" class="badge">Loading…</span>
-      </div>
-      <p class="card-subtitle">
-        Multi-model consensus forecasts for the Magnificent Seven. Seven models contribute to each
-        consensus via Weighted Inverse-RMSE averaging — models with lower historical error carry
-        more weight. Winning Model shows the single best-ranked model for each ticker.
-      </p>
-      <div id="forecastStatus" class="status" style="display:none;"></div>
-    </section>
-
-    <!-- Commentary injected here by JS -->
-    <div id="commentarySection"></div>
-
-    <!-- MAG7 forecast cards -->
-    <section class="card fade-in" style="margin-top:18px;">
-      <div class="section-title-row">
-        <h3>Consensus Forecasts</h3>
-        <div style="display:flex;align-items:center;gap:8px;">
-          <span class="badge">7 Models</span>
-          <button id="openModelsInfoBtn" class="btn btn-ghost" style="font-size:11px;padding:3px 10px;" type="button">About the Models</button>
+      <!-- Page header card -->
+      <section class="ds-card is-panel fade-in" style="margin-top:22px;">
+        <div class="ds-eyebrow">EPM Research</div>
+        <div class="ds-section-header" style="margin-top:var(--s-1);">
+          <h2 class="ds-title is-h2">MAG7 Forecast Dashboard</h2>
+          <span id="forecastAsOf" class="badge">Loading…</span>
         </div>
-      </div>
-      <div id="forecastGrid" class="forecast-grid">
-        <div class="placeholder-item">Loading NVDA…</div>
-        <div class="placeholder-item">Loading AAPL…</div>
-        <div class="placeholder-item">Loading MSFT…</div>
-        <div class="placeholder-item">Loading AMZN…</div>
-        <div class="placeholder-item">Loading META…</div>
-        <div class="placeholder-item">Loading GOOG…</div>
-        <div class="placeholder-item">Loading TSLA…</div>
-      </div>
-    </section>
+        <p class="ds-subtitle">
+          Multi-model consensus forecasts for the Magnificent Seven. Seven models contribute to each
+          consensus via Weighted Inverse-RMSE averaging — models with lower historical error carry
+          more weight. Winning Model shows the single best-ranked model for each ticker.
+        </p>
+        <div id="forecastStatus" class="status" style="display:none;"></div>
+      </section>
 
-    <!-- Model podium leaderboard -->
-    <section class="card fade-in" style="margin-top:18px;">
-      <div class="section-title-row">
-        <h3>Model Leaderboard</h3>
-        <span class="badge">Historical Accuracy + 21-Day Lookback</span>
-      </div>
-      <p class="card-subtitle">Top 3 models per ticker ranked by composite score (RMSE, MAE, directional accuracy, correlation). The 21-day lookback compares each model's prediction from ~21 trading days ago against the actual price movement.</p>
-      <div id="rankingsContainer">
-        <div class="placeholder-item">Loading leaderboard…</div>
-      </div>
-    </section>
+      <!-- Commentary injected here by forecasting.js — ds-research gives editorial serif treatment -->
+      <div id="commentarySection" class="ds-research"></div>
 
-    <div class="page-footer">
-      Forecasting — consensus via Weighted Inverse-RMSE across 7 models. Refreshed daily with the morning pipeline run.
-    </div>
-  </div>
+      <!-- MAG7 forecast cards -->
+      <section class="ds-card is-panel fade-in" style="margin-top:18px;">
+        <div class="ds-eyebrow">MAG7</div>
+        <div class="ds-section-header" style="margin-top:var(--s-1);">
+          <h3 class="ds-title is-h3">Consensus Forecasts</h3>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span class="badge">7 Models</span>
+            <button id="openModelsInfoBtn" class="btn btn-ghost" style="font-size:11px;padding:3px 10px;" type="button">About the Models</button>
+          </div>
+        </div>
+        <div id="forecastGrid" class="forecast-grid">
+          <div class="placeholder-item">Loading NVDA…</div>
+          <div class="placeholder-item">Loading AAPL…</div>
+          <div class="placeholder-item">Loading MSFT…</div>
+          <div class="placeholder-item">Loading AMZN…</div>
+          <div class="placeholder-item">Loading META…</div>
+          <div class="placeholder-item">Loading GOOG…</div>
+          <div class="placeholder-item">Loading TSLA…</div>
+        </div>
+      </section>
+
+      <!-- Model podium leaderboard -->
+      <section class="ds-card is-panel fade-in" style="margin-top:18px;">
+        <div class="ds-eyebrow">Ranking</div>
+        <div class="ds-section-header" style="margin-top:var(--s-1);">
+          <h3 class="ds-title is-h3">Model Leaderboard</h3>
+          <span class="badge">Historical Accuracy + 21-Day Lookback</span>
+        </div>
+        <p class="ds-subtitle">Top 3 models per ticker ranked by composite score (RMSE, MAE, directional accuracy, correlation). The 21-day lookback compares each model's prediction from ~21 trading days ago against the actual price movement.</p>
+        <div id="rankingsContainer">
+          <div class="placeholder-item">Loading leaderboard…</div>
+        </div>
+      </section>
+
+      <div class="page-footer">
+        Forecasting — consensus via Weighted Inverse-RMSE across 7 models. Refreshed daily with the morning pipeline run.
+      </div>
+
+    </div><!-- /auth-gated-content -->
+  </div><!-- /page-shell -->
 
   <!-- Model descriptions modal -->
   <div id="modelsInfoModal" class="chart-modal" aria-hidden="true">
@@ -158,8 +141,6 @@
       <div id="modelsInfoContent" style="padding:18px 22px 24px;overflow-y:auto;max-height:74vh;"></div>
     </div>
   </div>
-
-  </div><!-- /auth-gated-content -->
 
   <!-- Chart expand modal -->
   <div id="chartModal" class="chart-modal" aria-hidden="true">

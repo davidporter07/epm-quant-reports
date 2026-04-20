@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -40,22 +40,51 @@ _EPM_MODEL_FILES: Dict[str, Tuple[str, str]] = {
 # ---------------------------------------------------------------------------
 
 def _get_ohlcv(ticker: str, days: int = 252) -> List[dict]:
+    import logging
+    logger = logging.getLogger(__name__)
+
+    def _df_to_candles(df) -> List[dict]:
+        candles = []
+        for date, row in df.iterrows():
+            def _f(col: str) -> float:
+                v = row[col]
+                return float(v.iloc[0]) if hasattr(v, "iloc") else float(v)
+            candles.append({
+                "date":   date.strftime("%Y-%m-%d"),
+                "open":   round(_f("Open"),   2),
+                "high":   round(_f("High"),   2),
+                "low":    round(_f("Low"),    2),
+                "close":  round(_f("Close"),  2),
+                "volume": _f("Volume"),
+            })
+        return candles
+
     df = yf.download(ticker, period=f"{days}d", interval="1d", progress=False, auto_adjust=True)
     if df.empty:
         return []
-    candles = []
-    for date, row in df.iterrows():
-        def _f(col: str) -> float:
-            v = row[col]
-            return float(v.iloc[0]) if hasattr(v, "iloc") else float(v)
-        candles.append({
-            "date":   date.strftime("%Y-%m-%d"),
-            "open":   round(_f("Open"),   2),
-            "high":   round(_f("High"),   2),
-            "low":    round(_f("Low"),    2),
-            "close":  round(_f("Close"),  2),
-            "volume": _f("Volume"),
-        })
+    candles = _df_to_candles(df)
+
+    # Sanity-check: compare last close against fast_info spot price.
+    # If they diverge by >15%, yf.download() returned stale/bad data
+    # (common when Yahoo Finance auth cookies are stale). Re-fetch via
+    # Ticker.history() which uses a separate code path.
+    if candles:
+        try:
+            spot = yf.Ticker(ticker).fast_info.get("lastPrice") or yf.Ticker(ticker).fast_info.get("last_price")
+            if spot and spot > 0:
+                last_close = candles[-1]["close"]
+                ratio = abs(last_close / spot - 1)
+                if ratio > 0.15:
+                    logger.warning(
+                        "OHLCV price sanity check failed for %s: last_close=%.2f vs fast_info=%.2f (%.0f%% gap). "
+                        "Falling back to Ticker.history()", ticker, last_close, spot, ratio * 100
+                    )
+                    hist = yf.Ticker(ticker).history(period=f"{days}d", interval="1d", auto_adjust=True)
+                    if not hist.empty:
+                        candles = _df_to_candles(hist)
+        except Exception as exc:
+            logger.debug("OHLCV sanity check skipped (%s)", exc)
+
     return candles
 
 
@@ -188,6 +217,192 @@ def _get_company_info(ticker: str) -> Dict:
         return {"name": ticker, "sector": None, "industry": None, "country": None}
 
 
+def _get_fundamentals(ticker: str) -> Dict:
+    """Pull key fundamental metrics from yf.Ticker().info.
+
+    Retries once after a short pause — Yahoo Finance periodically returns
+    401 Invalid Crumb on the first call when the session hasn't been warmed.
+    """
+    import time as _time
+
+    def _pct(v):
+        return round(float(v) * 100, 2) if v is not None else None
+
+    def _f(v, dp=2):
+        return round(float(v), dp) if v is not None else None
+
+    for attempt in range(2):
+        try:
+            info = yf.Ticker(ticker).info
+            return {
+                "pe_ratio":        _f(info.get("trailingPE")),
+                "forward_pe":      _f(info.get("forwardPE")),
+                "peg_ratio":       _f(info.get("pegRatio")),
+                "eps_ttm":         _f(info.get("trailingEps")),
+                "revenue_growth":  _pct(info.get("revenueGrowth")),
+                "earnings_growth": _pct(info.get("earningsGrowth")),
+                "profit_margin":   _pct(info.get("profitMargins")),
+                "operating_margin":_pct(info.get("operatingMargins")),
+                "roe":             _pct(info.get("returnOnEquity")),
+                "debt_to_equity":  _f(info.get("debtToEquity")),
+                "market_cap":      info.get("marketCap"),
+                "enterprise_value":info.get("enterpriseValue"),
+                "ev_to_ebitda":    _f(info.get("enterpriseToEbitda")),
+                "price_to_book":   _f(info.get("priceToBook")),
+                "dividend_yield":  _pct(info.get("trailingAnnualDividendYield")),
+                "analyst_target":  _f(info.get("targetMeanPrice")),
+                "analyst_count":   info.get("numberOfAnalystOpinions"),
+                "recommendation":  _f(info.get("recommendationMean")),
+            }
+        except Exception:
+            if attempt == 0:
+                _time.sleep(4)
+    return {}
+
+
+SECTOR_ETFS = {
+    "technology": "XLK", "financials": "XLF", "healthcare": "XLV",
+    "consumer discretionary": "XLY", "consumer staples": "XLP",
+    "energy": "XLE", "utilities": "XLU", "materials": "XLB",
+    "industrials": "XLI", "real estate": "XLRE",
+    "communication services": "XLC",
+}
+
+
+def _get_relative_performance(ticker: str, sector: str) -> Dict:
+    """Stock return vs sector ETF over 1m / 3m / 6m (Jegadeesh & Titman momentum)."""
+    try:
+        etf = SECTOR_ETFS.get((sector or "").lower())
+        tickers_to_fetch = [ticker] + ([etf] if etf else [])
+        df = yf.download(tickers_to_fetch, period="180d", interval="1d",
+                         progress=False, auto_adjust=True)
+        if df.empty:
+            return {}
+
+        # Flatten MultiIndex columns if present
+        if isinstance(df.columns, pd.MultiIndex):
+            close = df["Close"]
+        else:
+            close = df[["Close"]]
+
+        def _ret(col, days):
+            s = close[col].dropna()
+            if len(s) < days + 1:
+                return None
+            return round((float(s.iloc[-1]) / float(s.iloc[-days-1]) - 1) * 100, 2)
+
+        result: Dict = {"etf": etf}
+        for period_label, days in [("1m", 21), ("3m", 63), ("6m", 126)]:
+            stock_ret = _ret(ticker, days)
+            etf_ret   = _ret(etf, days) if etf and etf in close.columns else None
+            result[period_label] = {
+                "stock": stock_ret,
+                "etf":   etf_ret,
+                "rel":   round(stock_ret - etf_ret, 2) if stock_ret is not None and etf_ret is not None else None,
+            }
+
+        rel_6m = result.get("6m", {}).get("rel")
+        if rel_6m is not None:
+            if rel_6m > 5:
+                result["label"] = "SECTOR LEADER"
+            elif rel_6m < -5:
+                result["label"] = "SECTOR LAGGARD"
+            else:
+                result["label"] = "INLINE WITH SECTOR"
+        return result
+    except Exception:
+        return {}
+
+
+def _get_volatility_regime(ohlcv: List[dict]) -> Dict:
+    """ATR-based volatility regime: where is current vol vs trailing 252-day distribution?"""
+    closes = [c["close"] for c in ohlcv]
+    highs  = [c["high"]  for c in ohlcv]
+    lows   = [c["low"]   for c in ohlcv]
+
+    tr_series = []
+    for i in range(1, len(closes)):
+        tr = max(highs[i] - lows[i],
+                 abs(highs[i] - closes[i-1]),
+                 abs(lows[i]  - closes[i-1]))
+        tr_series.append(tr)
+
+    atr_14 = float(np.mean(tr_series[-14:])) if len(tr_series) >= 14 else None
+
+    if len(tr_series) >= 28:
+        window_atrs = [float(np.mean(tr_series[i:i+14])) for i in range(len(tr_series) - 13)]
+        pct = round(sum(1 for x in window_atrs if x < atr_14) / len(window_atrs) * 100, 1)
+    else:
+        pct = None
+
+    if len(closes) >= 21:
+        daily_returns = [np.log(closes[i]/closes[i-1]) for i in range(1, len(closes))]
+        hv_20 = round(float(np.std(daily_returns[-20:])) * np.sqrt(252) * 100, 1)
+    else:
+        hv_20 = None
+
+    if pct is not None:
+        if pct <= 20:
+            regime = "COMPRESSION — vol in bottom 20th pct; breakout risk elevated"
+        elif pct <= 35:
+            regime = "LOW — below-average vol; watch for compression-to-expansion transition"
+        elif pct <= 65:
+            regime = "NORMAL — vol in typical historical range"
+        elif pct <= 80:
+            regime = "ELEVATED — vol in top third; trend follow-through less reliable"
+        else:
+            regime = "EXTREME — vol in top 20th pct; mean-reversion more likely than continuation"
+    else:
+        regime = "N/A"
+
+    return {"atr_14": round(atr_14, 2) if atr_14 else None, "atr_pct": pct, "hv_20": hv_20, "regime": regime}
+
+
+def _get_overnight_stats(ohlcv: List[dict], lookback: int = 20) -> Dict:
+    """Splits recent returns into overnight (close→open) vs intraday (open→close) components."""
+    if len(ohlcv) < lookback + 1:
+        return {}
+    recent = ohlcv[-(lookback + 1):]
+    overnight, intraday = [], []
+    for i in range(1, len(recent)):
+        prev_close = recent[i-1]["close"]
+        today_open = recent[i]["open"]
+        today_close = recent[i]["close"]
+        overnight.append((today_open / prev_close - 1) * 100)
+        intraday.append((today_close / today_open - 1) * 100)
+    return {
+        "overnight_avg":      round(float(np.mean(overnight)), 3),
+        "intraday_avg":       round(float(np.mean(intraday)), 3),
+        "overnight_pos_pct":  round(sum(1 for x in overnight if x > 0) / len(overnight) * 100, 1),
+        "intraday_pos_pct":   round(sum(1 for x in intraday  if x > 0) / len(intraday)  * 100, 1),
+    }
+
+
+def _get_earnings_surprise_history(ticker: str, quarters: int = 8) -> List[dict]:
+    """Returns recent quarterly EPS surprise history for PEAD signal."""
+    try:
+        t = yf.Ticker(ticker)
+        hist = t.earnings_history
+        if hist is None or (hasattr(hist, "empty") and hist.empty):
+            return []
+        records = []
+        for _, row in hist.tail(quarters).iterrows():
+            est = row.get("epsEstimate")
+            act = row.get("epsActual")
+            surprise = row.get("surprisePct")
+            if est is not None and act is not None:
+                records.append({
+                    "date": str(row.name.date()) if hasattr(row.name, "date") else str(row.name),
+                    "estimated": round(float(est), 2),
+                    "actual":    round(float(act), 2),
+                    "surprise_pct": round(float(surprise) * 100, 1) if surprise is not None else None,
+                    "beat": float(act) >= float(est),
+                })
+        return records
+    except Exception:
+        return []
+
+
 def _get_vix() -> Optional[float]:
     """Fetch current VIX level."""
     try:
@@ -286,12 +501,16 @@ def _scenario_label(implied_move: float, scenarios: List[List[dict]], idx: int) 
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def build_seed_doc(ticker: str, pred_len: int = 5) -> str:
+def build_seed_doc(ticker: str, pred_len: int = 5) -> Tuple[str, Dict[str, Any]]:
     """
     Build a MiroFish seed document structured as analytical perspective sections.
 
     Section headers act as entity names for MiroFish's ontology extractor, seeding
     agents that reason from technical data, macro context, supply chain risk, etc.
+
+    Returns (seed_text, key_facts). key_facts is a flat dict of authoritative
+    numbers for the downstream LLM post-processor to use as ground truth, so it
+    does not hallucinate P/E, ROE, dividend yield, or price targets.
     """
     ticker = ticker.upper()
     today  = datetime.now().strftime("%Y-%m-%d")
@@ -309,6 +528,11 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> str:
     vix          = _get_vix()
     spy          = _get_spy_trend()
     earnings     = _get_earnings_info(ticker)
+    fundamentals = _get_fundamentals(ticker)
+    vol_regime   = _get_volatility_regime(ohlcv)
+    rel_perf     = _get_relative_performance(ticker, co_info.get("sector") or "")
+    overnight    = _get_overnight_stats(ohlcv)
+    eps_history  = _get_earnings_surprise_history(ticker)
 
     current = tech["current"]
     sector  = (co_info.get("sector") or "").lower()
@@ -319,6 +543,19 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> str:
         f"Market Intelligence Brief: {today}",
         "",
     ]
+
+    # ── SIMULATION PARTICIPANTS ───────────────────────────────────────────────
+    # Placed before content sections so MiroFish NER picks these up as the dominant named entities
+    lines.append("── SIMULATION PARTICIPANTS ──────────────────────────────────────────────────")
+    lines.append("Seven specialist analysts provide perspectives on this stock:")
+    lines.append(f"- TECHNICAL ANALYST: interprets price action, RSI, volatility regime, relative performance, and overnight flow data for {ticker}")
+    lines.append(f"- GROWTH INVESTOR: evaluates revenue growth, earnings growth, margins, ROE, forward P/E, and PEG ratio for {ticker}")
+    lines.append(f"- VALUE INVESTOR: assesses trailing P/E, EV/EBITDA, price-to-book, debt/equity, dividend yield, and market cap for {ticker}")
+    lines.append(f"- MACRO STRATEGIST: frames {ticker} within the VIX regime, SPY trend, and Federal Reserve interest rate environment")
+    lines.append(f"- SUPPLY CHAIN RISK ANALYST: identifies geopolitical exposure, manufacturing concentration, and tariff risk for {ticker}")
+    lines.append(f"- BEARISH ANALYST: argues the downside case, challenges consensus, and identifies risks quantitative models miss for {ticker}")
+    lines.append(f"- EARNINGS CATALYST ANALYST: tracks the next earnings date, EPS surprise history, beat rate, and PEAD drift signal for {ticker}")
+    lines.append("")
 
     # ── TECHNICAL ANALYSIS PERSPECTIVE ───────────────────────────────────────
     lines.append("── TECHNICAL ANALYSIS PERSPECTIVE ──────────────────────────────────────────")
@@ -364,10 +601,58 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> str:
             f"| {c['date']} | ${c['open']:.2f} | ${c['high']:.2f} | "
             f"${c['low']:.2f} | ${c['close']:.2f} | {chg:+.2f}% |"
         )
+    # Volatility regime
+    if vol_regime.get("regime") and vol_regime["regime"] != "N/A":
+        lines.append(f"Volatility Regime: {vol_regime['regime']}")
+        vr_parts = []
+        if vol_regime.get("atr_14") is not None:
+            pct_str = f" ({vol_regime['atr_pct']}th percentile of 252-day ATR distribution)" if vol_regime.get("atr_pct") is not None else ""
+            vr_parts.append(f"ATR(14): ${vol_regime['atr_14']:.2f}{pct_str}")
+        if vol_regime.get("hv_20") is not None:
+            vr_parts.append(f"HV-20 (realized annualized): {vol_regime['hv_20']}%")
+        if vr_parts:
+            lines.append("  " + " | ".join(vr_parts))
+        if vol_regime.get("atr_pct") is not None and vol_regime["atr_pct"] <= 20:
+            lines.append("  Note: Volatility compression to bottom quintile historically precedes outsized directional moves.")
+
+    # Relative performance vs sector ETF
+    if rel_perf and rel_perf.get("etf"):
+        etf = rel_perf["etf"]
+        lines.append(f"Relative Performance vs {etf} ({co_info.get('sector', 'Sector')} ETF):")
+        for period_label in ["1m", "3m", "6m"]:
+            p = rel_perf.get(period_label, {})
+            if p.get("stock") is not None and p.get("etf") is not None:
+                rel = p["rel"]
+                direction = "outperformance" if rel >= 0 else "underperformance"
+                lines.append(
+                    f"  {period_label}: {ticker} {p['stock']:+.1f}% vs {etf} {p['etf']:+.1f}% "
+                    f"→ {rel:+.1f}% {direction}"
+                )
+        if rel_perf.get("label"):
+            lines.append(f"  Momentum Label: {rel_perf['label']}")
+            if "LAGGARD" in rel_perf["label"]:
+                lines.append("  Note: Jegadeesh & Titman (1993) — 6-month relative laggards tend to underperform over next 3-12 months.")
+            elif "LEADER" in rel_perf["label"]:
+                lines.append("  Note: Jegadeesh & Titman (1993) — 6-month relative leaders tend to continue outperforming.")
+
+    # Overnight vs intraday return attribution
+    if overnight:
+        on_signal = "institutional accumulation" if overnight["overnight_avg"] > 0 else "institutional distribution"
+        id_signal = "retail buying pressure" if overnight["intraday_avg"] > 0 else "retail distribution pressure"
+        lines.append("Return Attribution (20-day):")
+        lines.append(
+            f"  Overnight (close→open): avg {overnight['overnight_avg']:+.3f}% | "
+            f"positive {overnight['overnight_pos_pct']}% of sessions → {on_signal}"
+        )
+        lines.append(
+            f"  Intraday (open→close):  avg {overnight['intraday_avg']:+.3f}% | "
+            f"positive {overnight['intraday_pos_pct']}% of sessions → {id_signal}"
+        )
+
     lines.append("")
 
     # ── KRONOS OHLCV FOUNDATION MODEL ────────────────────────────────────────
-    lines.append(f"── KRONOS OHLCV FOUNDATION MODEL — Next {pred_len} Trading Days ────────────────────")
+    lines.append(f"── PRICE SCENARIO FORECASTS — Next {pred_len} Trading Days (Kronos Model) ─────────────")
     if scenarios:
         for idx, scenario in enumerate(scenarios):
             label = _scenario_label(
@@ -406,31 +691,94 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> str:
 
     # ── GROWTH INVESTOR PERSPECTIVE ───────────────────────────────────────────
     lines.append("── GROWTH INVESTOR PERSPECTIVE ─────────────────────────────────────────────────")
+    if fundamentals:
+        g_parts = []
+        if fundamentals.get("revenue_growth") is not None:
+            g_parts.append(f"Revenue Growth (YoY): {fundamentals['revenue_growth']:+.1f}%")
+        if fundamentals.get("earnings_growth") is not None:
+            g_parts.append(f"Earnings Growth (YoY): {fundamentals['earnings_growth']:+.1f}%")
+        if g_parts:
+            lines.append(" | ".join(g_parts))
+
+        g_parts2 = []
+        if fundamentals.get("forward_pe") is not None:
+            g_parts2.append(f"Forward P/E: {fundamentals['forward_pe']:.1f}x")
+        if fundamentals.get("peg_ratio") is not None:
+            g_parts2.append(f"PEG Ratio: {fundamentals['peg_ratio']:.2f}")
+        if fundamentals.get("ev_to_ebitda") is not None:
+            g_parts2.append(f"EV/EBITDA: {fundamentals['ev_to_ebitda']:.1f}x")
+        if g_parts2:
+            lines.append(" | ".join(g_parts2))
+
+        g_parts3 = []
+        if fundamentals.get("profit_margin") is not None:
+            g_parts3.append(f"Profit Margin: {fundamentals['profit_margin']:.1f}%")
+        if fundamentals.get("operating_margin") is not None:
+            g_parts3.append(f"Operating Margin: {fundamentals['operating_margin']:.1f}%")
+        if fundamentals.get("roe") is not None:
+            g_parts3.append(f"ROE: {fundamentals['roe']:.1f}%")
+        if g_parts3:
+            lines.append(" | ".join(g_parts3))
+
+        g_parts4 = []
+        if fundamentals.get("recommendation") is not None and fundamentals.get("analyst_count") is not None:
+            rec = fundamentals["recommendation"]
+            rec_label = "Strong Buy" if rec <= 1.5 else ("Buy" if rec <= 2.5 else ("Hold" if rec <= 3.5 else ("Sell" if rec <= 4.5 else "Strong Sell")))
+            g_parts4.append(f"Analyst Consensus: {rec:.1f}/5.0 ({rec_label})")
+        if fundamentals.get("analyst_target") is not None:
+            updown = ((fundamentals["analyst_target"] / current) - 1) * 100
+            g_parts4.append(
+                f"Price Target: ${fundamentals['analyst_target']:.2f} ({updown:+.1f}% from current)"
+                + (f" (N={fundamentals['analyst_count']})" if fundamentals.get("analyst_count") else "")
+            )
+        if g_parts4:
+            lines.append(" | ".join(g_parts4))
     lines.append(
-        f"From a growth-oriented investment perspective on {co_info['name']}: Focus on revenue "
-        f"trajectory, market share dynamics, and long-term secular tailwinds. Are current quantitative "
-        f"models capturing the compounding effect of margin expansion and reinvestment at scale? "
-        f"Does the near-term volatility represent an opportunity to build a position in a structural "
-        f"winner, or does it signal a genuine breakdown in the growth thesis that demands reassessment?"
+        f"Growth perspective on {ticker}: Evaluate whether revenue trajectory, margin expansion, "
+        f"and reinvestment rate justify the current growth premium. Does near-term volatility represent "
+        f"an entry opportunity in a structural winner, or a breakdown in the growth thesis?"
     )
     lines.append("")
 
     # ── VALUE INVESTOR PERSPECTIVE ────────────────────────────────────────────
     lines.append("── VALUE INVESTOR PERSPECTIVE ──────────────────────────────────────────────────")
+    if fundamentals:
+        v_parts = []
+        if fundamentals.get("pe_ratio") is not None:
+            v_parts.append(f"Trailing P/E: {fundamentals['pe_ratio']:.1f}x")
+        if fundamentals.get("forward_pe") is not None:
+            v_parts.append(f"Forward P/E: {fundamentals['forward_pe']:.1f}x")
+        if fundamentals.get("price_to_book") is not None:
+            v_parts.append(f"Price/Book: {fundamentals['price_to_book']:.1f}x")
+        if fundamentals.get("ev_to_ebitda") is not None:
+            v_parts.append(f"EV/EBITDA: {fundamentals['ev_to_ebitda']:.1f}x")
+        if v_parts:
+            lines.append(" | ".join(v_parts))
+
+        v_parts2 = []
+        if fundamentals.get("debt_to_equity") is not None:
+            v_parts2.append(f"Debt/Equity: {fundamentals['debt_to_equity']:.1f}%")
+        if fundamentals.get("dividend_yield") is not None:
+            v_parts2.append(f"Dividend Yield: {fundamentals['dividend_yield']:.2f}%")
+        if fundamentals.get("market_cap") is not None:
+            mc = fundamentals["market_cap"]
+            mc_str = f"${mc/1e12:.2f}T" if mc >= 1e12 else f"${mc/1e9:.1f}B"
+            v_parts2.append(f"Market Cap: {mc_str}")
+        if v_parts2:
+            lines.append(" | ".join(v_parts2))
+
     lines.append(
-        f"From a fundamental valuation standpoint on {co_info['name']}: What does the current "
-        f"price imply about normalized long-run earnings power and return on invested capital? "
-        f"Is the stock pricing in a durable competitive moat or extrapolating unsustainable "
-        f"near-term momentum? Does the short-term model spread diverge from the long-term "
-        f"fundamental trajectory, and what is the margin of safety at current levels?"
+        f"Value perspective on {ticker}: What does the current price imply about normalized "
+        f"long-run earnings power and return on invested capital? Is the stock pricing a durable moat "
+        f"or extrapolating unsustainable momentum? What is the margin of safety at current levels?"
     )
     lines.append("")
 
     # ── MARKET COMMENTATOR PERSPECTIVE ───────────────────────────────────────
     lines.append("── MARKET COMMENTATOR PERSPECTIVE ──────────────────────────────────────────────")
     lines.append(
-        f"From a market commentary and sentiment perspective on {ticker}: How is the financial "
-        f"media and retail investor narrative currently framing this stock — momentum play, "
+        f"From a market commentary and sentiment perspective on {ticker}: How is the market "
+        f"commentator and retail investor narrative currently framing this stock — momentum play, "
         f"turnaround story, or value trap? What headline catalyst would most rapidly shift "
         f"sentiment in either direction? Are options markets pricing complacency or genuine "
         f"tail-risk hedging relative to the technical picture and model forecasts?"
@@ -466,7 +814,7 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> str:
     lines.append("── SUPPLY CHAIN & GEOPOLITICAL RISK PERSPECTIVE ────────────────────────────────")
     if "technology" in sector or "consumer electronics" in sector.lower():
         lines.append(
-            f"{co_info['name']} operates with significant manufacturing concentration in China "
+            f"{ticker} operates with significant manufacturing concentration in China "
             f"(~85-90% of final assembly for key products). US-China trade policy, tariff regimes, "
             f"and export controls on semiconductors create structural cost and margin risk that "
             f"quantitative models do not capture. Potential retaliatory measures in the Chinese "
@@ -486,7 +834,7 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> str:
         )
     else:
         lines.append(
-            f"{co_info['name']} faces sector-specific supply chain dependencies and geopolitical "
+            f"{ticker} faces sector-specific supply chain dependencies and geopolitical "
             f"exposure. Tariff regime changes, input cost volatility, and market access restrictions "
             f"in key geographies represent risks not captured by historical price-based models."
         )
@@ -520,6 +868,34 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> str:
             )
     else:
         lines.append("Earnings date not available. Monitor for pre-earnings implied volatility expansion.")
+
+    if eps_history:
+        lines.append(f"Recent EPS Surprise History (last {len(eps_history)} quarters):")
+        for rec in eps_history:
+            beat_str = f"+{rec['surprise_pct']:.1f}% beat" if rec["beat"] and rec.get("surprise_pct") is not None else (
+                f"{rec['surprise_pct']:.1f}% miss" if rec.get("surprise_pct") is not None else ("beat" if rec["beat"] else "miss")
+            )
+            lines.append(f"  {rec['date']}: Est ${rec['estimated']:.2f} → Act ${rec['actual']:.2f} ({beat_str})")
+        beats = sum(1 for r in eps_history if r["beat"])
+        total = len(eps_history)
+        beat_rate = beats / total * 100
+        surprises = [r["surprise_pct"] for r in eps_history if r.get("surprise_pct") is not None]
+        avg_surprise = round(float(np.mean(surprises)), 1) if surprises else None
+        lines.append(
+            f"Beat Rate: {beats}/{total} quarters ({beat_rate:.0f}%)"
+            + (f" | Avg surprise: {avg_surprise:+.1f}%" if avg_surprise is not None else "")
+        )
+        if beat_rate >= 75 and avg_surprise is not None and avg_surprise > 3:
+            lines.append(
+                "PEAD Signal: Consistent EPS beater with large positive surprises. "
+                "Bernard & Thomas (1989) — stocks with >3% positive surprises drift +2-4% "
+                "in the following 20 trading days beyond what technical models predict."
+            )
+        elif beat_rate < 50:
+            lines.append(
+                "PEAD Signal: Below-50% beat rate increases downside risk around earnings. "
+                "Negative surprises tend to generate sharper post-earnings selling pressure."
+            )
     lines.append("")
 
     # NOTE: News headlines intentionally excluded from seed doc.
@@ -565,16 +941,156 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> str:
         f"(3) What are the 2-3 most critical non-obvious risks that quantitative models cannot capture "
         f"(regulatory, geopolitical, supply chain, behavioral)? "
         f"(4) Does the model spread signal genuine directional uncertainty or do models simply weight different risk factors differently? "
+        f"(5) Given the volatility regime, relative sector performance, overnight/intraday return split, and EPS beat history shown above — "
+        f"what specific near-term behavioral edge do these signals provide beyond what price momentum models capture, "
+        f"and does the PEAD drift signal strengthen or conflict with the Kronos base case? "
         f"Prioritize specific insight and scenario analysis over directional summary."
     )
 
-    return "\n".join(lines)
+    # ── KEY FACTS — authoritative values for the LLM post-processor ─────────
+    # Named explicitly so the LLM cannot mistake units. All *_pct fields are
+    # already in percent form (e.g. 34.2 means 34.2%). Null/None values are
+    # preserved so the consumer can decide whether to omit them.
+    key_facts: Dict[str, Any] = {
+        "ticker":              ticker,
+        "company_name":        co_info.get("name"),
+        "sector":              co_info.get("sector"),
+        "industry":            co_info.get("industry"),
+        "report_date":         today,
+        "current_price":       tech.get("current"),
+        "52w_high":            tech.get("high52"),
+        "52w_low":             tech.get("low52"),
+        "pct_from_52w_high":   tech.get("pct_from_high"),
+        "pct_from_52w_low":    tech.get("pct_from_low"),
+        "ma50":                tech.get("ma50"),
+        "ma200":               tech.get("ma200"),
+        "rsi_14":              tech.get("rsi"),
+        "mom_5d_pct":          tech.get("mom5"),
+        "mom_20d_pct":         tech.get("mom20"),
+        "vol_ratio_vs_20d":    tech.get("vol_ratio"),
+    }
+
+    if fundamentals:
+        key_facts.update({
+            "trailing_pe":                  fundamentals.get("pe_ratio"),
+            "forward_pe":                   fundamentals.get("forward_pe"),
+            "peg_ratio":                    fundamentals.get("peg_ratio"),
+            "ev_to_ebitda":                 fundamentals.get("ev_to_ebitda"),
+            "price_to_book":                fundamentals.get("price_to_book"),
+            "eps_ttm":                      fundamentals.get("eps_ttm"),
+            "revenue_growth_pct":           fundamentals.get("revenue_growth"),
+            "earnings_growth_pct":          fundamentals.get("earnings_growth"),
+            "profit_margin_pct":            fundamentals.get("profit_margin"),
+            "operating_margin_pct":         fundamentals.get("operating_margin"),
+            "roe_pct":                      fundamentals.get("roe"),
+            "debt_to_equity":               fundamentals.get("debt_to_equity"),
+            "dividend_yield_pct":           fundamentals.get("dividend_yield"),
+            "market_cap_usd":               fundamentals.get("market_cap"),
+            "analyst_target_price":         fundamentals.get("analyst_target"),
+            "analyst_count":                fundamentals.get("analyst_count"),
+            "analyst_recommendation_score": fundamentals.get("recommendation"),
+        })
+        if fundamentals.get("analyst_target") is not None and current:
+            key_facts["analyst_target_upside_pct"] = round(
+                (fundamentals["analyst_target"] / current - 1) * 100, 2
+            )
+
+    key_facts.update({
+        "atr_14":                    vol_regime.get("atr_14"),
+        "atr_percentile":            vol_regime.get("atr_pct"),
+        "hv_20_annualized_pct":      vol_regime.get("hv_20"),
+        "volatility_regime":         vol_regime.get("regime"),
+    })
+
+    if rel_perf:
+        key_facts["sector_etf"] = rel_perf.get("etf")
+        key_facts["sector_momentum_label"] = rel_perf.get("label")
+        for lbl in ("1m", "3m", "6m"):
+            p = rel_perf.get(lbl) or {}
+            key_facts[f"rel_perf_{lbl}_stock_pct"] = p.get("stock")
+            key_facts[f"rel_perf_{lbl}_etf_pct"]   = p.get("etf")
+            key_facts[f"rel_perf_{lbl}_diff_pct"]  = p.get("rel")
+
+    if overnight:
+        key_facts.update({
+            "overnight_avg_pct_20d":     overnight.get("overnight_avg"),
+            "intraday_avg_pct_20d":      overnight.get("intraday_avg"),
+            "overnight_positive_pct":    overnight.get("overnight_pos_pct"),
+            "intraday_positive_pct":     overnight.get("intraday_pos_pct"),
+        })
+
+    if eps_history:
+        beats = sum(1 for r in eps_history if r.get("beat"))
+        total = len(eps_history)
+        surprises = [r["surprise_pct"] for r in eps_history if r.get("surprise_pct") is not None]
+        avg_surprise = round(float(np.mean(surprises)), 1) if surprises else None
+        beat_rate_pct = round(beats / total * 100, 1) if total else None
+        if beat_rate_pct is not None and beat_rate_pct >= 75 and avg_surprise is not None and avg_surprise > 3:
+            pead = "active_positive_drift"
+        elif beat_rate_pct is not None and beat_rate_pct < 50:
+            pead = "negative_earnings_risk"
+        else:
+            pead = "neutral"
+        key_facts.update({
+            "eps_beat_rate_str":     f"{beats}/{total}",
+            "eps_beat_rate_pct":     beat_rate_pct,
+            "avg_eps_surprise_pct":  avg_surprise,
+            "pead_signal":           pead,
+        })
+
+    key_facts.update({
+        "vix":          vix,
+        "vix_regime":   _vix_label(vix) if vix is not None else None,
+        "spy_5d_pct":   spy.get("spy_5d"),
+        "spy_20d_pct":  spy.get("spy_20d"),
+    })
+
+    if earnings:
+        key_facts.update({
+            "next_earnings_date":  earnings.get("date"),
+            "days_to_earnings":    earnings.get("days_until"),
+        })
+
+    if scenarios:
+        ranked = sorted(scenarios, key=lambda s: s[-1]["close"])
+        targets = [s[-1]["close"] for s in ranked]
+        labels = ["kronos_bearish", "kronos_base", "kronos_bullish"]
+        # If fewer than 3 scenarios, collapse: 1 → base only, 2 → bearish+bullish
+        if len(ranked) == 1:
+            key_facts["kronos_base_target"] = round(targets[0], 2)
+            key_facts["kronos_base_implied_pct"] = round((targets[0] / current - 1) * 100, 2)
+        else:
+            for i, tgt in enumerate(targets):
+                if i == 0:
+                    k = "kronos_bearish"
+                elif i == len(targets) - 1:
+                    k = "kronos_bullish"
+                else:
+                    k = "kronos_base"
+                key_facts[f"{k}_target"] = round(tgt, 2)
+                key_facts[f"{k}_implied_pct"] = round((tgt / current - 1) * 100, 2)
+        key_facts["kronos_forecast_days"] = pred_len
+
+    if epm:
+        vals = list(epm.values())
+        key_facts.update({
+            "epm_spread_pct":            round(max(vals) - min(vals), 2),
+            "epm_most_optimistic_model": max(epm, key=lambda k: epm[k]),
+            "epm_most_optimistic_pct":   round(max(vals), 2),
+            "epm_most_pessimistic_model": min(epm, key=lambda k: epm[k]),
+            "epm_most_pessimistic_pct":  round(min(vals), 2),
+            "epm_model_count":           len(epm),
+        })
+
+    return "\n".join(lines), key_facts
 
 
 if __name__ == "__main__":
-    import sys
+    import sys, json
     ticker = sys.argv[1] if len(sys.argv) > 1 else "AAPL"
     print(f"Building seed doc for {ticker}...")
-    doc = build_seed_doc(ticker)
+    doc, key_facts = build_seed_doc(ticker)
     print(doc)
     print(f"\n--- {len(doc)} chars, ~{len(doc.split())} words ---")
+    print("\n--- KEY FACTS ---")
+    print(json.dumps(key_facts, indent=2, default=str))

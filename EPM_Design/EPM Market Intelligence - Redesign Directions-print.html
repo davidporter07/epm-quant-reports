@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>EPM Market Intelligence — Redesign Directions (Print)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@400;500;600;700&family=Source+Serif+4:ital,wght@0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  @page { size: 1500px 960px; margin: 0; }
+  html, body { margin: 0; padding: 0; background: #f0eee9; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  * { box-sizing: border-box; }
+  .page {
+    width: 1500px; height: 960px; overflow: hidden;
+    display: flex; flex-direction: column;
+    background: #f0eee9; page-break-after: always; break-after: page;
+    padding: 24px 30px; position: relative;
+  }
+  .page:last-child { page-break-after: auto; break-after: auto; }
+  .page-label {
+    font-family: Inter, sans-serif; font-size: 11px; letter-spacing: 1.4px;
+    text-transform: uppercase; color: rgba(60,50,40,0.7); font-weight: 600;
+    margin-bottom: 10px;
+  }
+  .frame {
+    background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 16px rgba(0,0,0,0.06);
+    overflow: hidden; flex-shrink: 0;
+  }
+  /* 1440-wide artboards scaled to fit 1440px available (no scale) or 1500 width */
+  .artboard-wrap { flex: 1; display: flex; align-items: flex-start; justify-content: center; }
+  .intro-page, .recommendation-page {
+    display: flex; flex-direction: column;
+  }
+  @media print {
+    html, body { background: white; }
+    .page { box-shadow: none; }
+  }
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" src="lib/data.jsx"></script>
+<script type="text/babel" src="lib/primitives.jsx"></script>
+
+<script type="text/babel" src="directions/a-editorial/system.jsx"></script>
+<script type="text/babel" src="directions/a-editorial/homepage.jsx"></script>
+<script type="text/babel" src="directions/a-editorial/markets.jsx"></script>
+<script type="text/babel" src="directions/a-editorial/forecasting.jsx"></script>
+<script type="text/babel" src="directions/a-editorial/portfolios.jsx"></script>
+<script type="text/babel" src="directions/a-editorial/fundsearch.jsx"></script>
+
+<script type="text/babel" src="directions/b-terminal/system.jsx"></script>
+<script type="text/babel" src="directions/b-terminal/homepage.jsx"></script>
+<script type="text/babel" src="directions/b-terminal/markets.jsx"></script>
+<script type="text/babel" src="directions/b-terminal/forecasting.jsx"></script>
+<script type="text/babel" src="directions/b-terminal/portfolios.jsx"></script>
+<script type="text/babel" src="directions/b-terminal/fundsearch.jsx"></script>
+
+<script type="text/babel" src="directions/c-executive/system.jsx"></script>
+<script type="text/babel" src="directions/c-executive/homepage.jsx"></script>
+<script type="text/babel" src="directions/c-executive/markets.jsx"></script>
+<script type="text/babel" src="directions/c-executive/forecasting.jsx"></script>
+<script type="text/babel" src="directions/c-executive/portfolios.jsx"></script>
+<script type="text/babel" src="directions/c-executive/fundsearch.jsx"></script>
+
+<script type="text/babel">
+
+function IntroPage() {
+  return (
+    <div className="page intro-page">
+      <div style={{ padding: '40px 50px', maxWidth: 1200 }}>
+        <div style={{ fontSize: 13, letterSpacing: 2, textTransform: 'uppercase', color: '#6B5B3E', fontWeight: 600, marginBottom: 14 }}>
+          EPM Market Intelligence · Redesign · V1
+        </div>
+        <div style={{ fontFamily: '"Source Serif 4", Georgia, serif', fontSize: 60, fontWeight: 600, color: '#1b1408', letterSpacing: -0.8, lineHeight: 1.05 }}>
+          Three distinct directions for a more polished, more intentional Market Intelligence.
+        </div>
+        <div style={{ fontFamily: '"Inter", sans-serif', fontSize: 18, color: '#4a3f2e', marginTop: 22, maxWidth: 900, lineHeight: 1.55 }}>
+          Each direction is a full system — not just a homepage — shown across the five core pages
+          (Homepage, Markets, Forecasting, Model Portfolios, Fund Search). Anchor them against the
+          current site: stronger nav, clearer page hierarchy, consistent cards, and a real brand voice.
+        </div>
+        <div style={{ marginTop: 40, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 24, fontFamily: 'Inter, sans-serif' }}>
+          {[
+            { t: 'A · Editorial / Premium', s: 'FT / CNBC Pro lineage — serif display, hairline rules, news-first hierarchy.' },
+            { t: 'B · Terminal / Data-dense', s: 'Bloomberg Terminal / Koyfin — compact sans+mono, rule-based panels, ⌘K command.' },
+            { t: 'C · Executive / Client-facing ★', s: 'Addepar / Koyfin Pro — navy masthead, disciplined cards, soft semantic chips.' },
+          ].map((d, i) => (
+            <div key={i} style={{ padding: 20, background: 'white', border: '1px solid #D9D3C4' }}>
+              <div style={{ fontFamily: '"Source Serif 4", serif', fontSize: 22, fontWeight: 600, color: '#1b1408', letterSpacing: -0.3 }}>{d.t}</div>
+              <div style={{ fontSize: 14, color: '#4a3f2e', marginTop: 8, lineHeight: 1.5 }}>{d.s}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FramePage({ label, children }) {
+  return (
+    <div className="page">
+      <div className="page-label">{label}</div>
+      <div className="artboard-wrap">
+        <div className="frame">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Rationale({ title, subtitle, body, type, spacing, components, palette }) {
+  return (
+    <div style={{
+      width: 1440, background: '#FFFBF3', border: '1px solid #D9D3C4',
+      padding: 36, fontFamily: '"Inter", sans-serif', color: '#2a2213',
+    }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr 1fr', gap: 32 }}>
+        <div>
+          <div style={{ fontSize: 11, letterSpacing: 1.4, color: '#7a6a49', textTransform: 'uppercase', fontWeight: 600 }}>{subtitle}</div>
+          <div style={{ fontFamily: '"Source Serif 4", Georgia, serif', fontSize: 28, fontWeight: 600, color: '#1b1408', letterSpacing: -0.3, marginTop: 4 }}>{title}</div>
+          <div style={{ fontSize: 14, lineHeight: 1.55, color: '#3e3422', marginTop: 10 }}>{body}</div>
+        </div>
+        <Spec label="Typography" items={type} />
+        <Spec label="Spacing & rhythm" items={spacing} />
+        <Spec label="Components" items={components} />
+      </div>
+      <div style={{ marginTop: 24, paddingTop: 20, borderTop: '1px solid #D9D3C4', display: 'flex', gap: 14, alignItems: 'center' }}>
+        <div style={{ fontSize: 11, letterSpacing: 1.2, color: '#7a6a49', textTransform: 'uppercase', fontWeight: 600, width: 90 }}>Palette</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {palette.map((p, k) => (
+            <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: '#fff', border: '1px solid #E5DFCB', fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 11 }}>
+              <div style={{ width: 16, height: 16, background: p.c, border: '1px solid rgba(0,0,0,0.08)' }} />
+              <span>{p.n}</span><span style={{ color: '#8a7b5b' }}>{p.c}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+function Spec({ label, items }) {
+  return (
+    <div>
+      <div style={{ fontSize: 11, letterSpacing: 1.4, color: '#7a6a49', textTransform: 'uppercase', fontWeight: 600, marginBottom: 8 }}>{label}</div>
+      {items.map((it, k) => (
+        <div key={k} style={{ display: 'flex', gap: 10, padding: '4px 0', fontSize: 13, color: '#3e3422' }}>
+          <span style={{ color: '#9a8a68', width: 90, flexShrink: 0 }}>{it[0]}</span>
+          <span style={{ fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 12 }}>{it[1]}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RecommendationBlock() {
+  return (
+    <div style={{
+      width: 1440, background: '#0B1F3A', color: '#f1ecdc', padding: 44,
+      fontFamily: '"Inter", sans-serif',
+    }}>
+      <div style={{ fontSize: 11, letterSpacing: 2, textTransform: 'uppercase', fontWeight: 600, color: '#C28A2B' }}>Recommendation</div>
+      <div style={{ fontFamily: '"Source Serif 4", Georgia, serif', fontSize: 36, fontWeight: 600, letterSpacing: -0.4, marginTop: 8, lineHeight: 1.15 }}>
+        Lead with <span style={{ color: '#C28A2B' }}>Direction C — Executive / Client-facing</span>,
+        borrow A's typographic gravitas for research content, keep B as a power-user mode.
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 32, marginTop: 26 }}>
+        <div>
+          <div style={{ fontSize: 12, letterSpacing: 1.2, color: '#C28A2B', textTransform: 'uppercase', fontWeight: 600 }}>Why C wins</div>
+          <div style={{ marginTop: 10, fontSize: 13.5, lineHeight: 1.55, color: '#e6dfce' }}>
+            It's the only direction that scales from internal EPM analyst to external client without rebuilding.
+            Cards are consistent, the navy masthead carries EPM brand equity, and pills keep the page calm as data density rises.
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 12, letterSpacing: 1.2, color: '#C28A2B', textTransform: 'uppercase', fontWeight: 600 }}>Borrow from A</div>
+          <div style={{ marginTop: 10, fontSize: 13.5, lineHeight: 1.55, color: '#e6dfce' }}>
+            Serif display for research titles, commentary, and quote callouts — only there.
+            Kicker eyebrows with uppercase tracking for section hierarchy. This gives EPM voice without losing product clarity.
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 12, letterSpacing: 1.2, color: '#C28A2B', textTransform: 'uppercase', fontWeight: 600 }}>Borrow from B</div>
+          <div style={{ marginTop: 10, fontSize: 13.5, lineHeight: 1.55, color: '#e6dfce' }}>
+            A "Dense" toggle on Markets / Watchlists — same data, compact rows, mono numerics, ticker-first.
+            Keep the ⌘K command bar as a global shortcut. Power features without compromising the executive surface.
+          </div>
+        </div>
+      </div>
+      <div style={{ marginTop: 28, paddingTop: 20, borderTop: '1px solid rgba(255,255,255,0.12)' }}>
+        <div style={{ fontSize: 12, letterSpacing: 1.2, color: '#C28A2B', textTransform: 'uppercase', fontWeight: 600, marginBottom: 12 }}>Shared fixes — apply regardless of direction</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 20, fontSize: 12.5, lineHeight: 1.5, color: '#e6dfce' }}>
+          <div><b style={{ color: '#fff' }}>Nav.</b> One horizontal tier; utility in secondary strip; no overflow.</div>
+          <div><b style={{ color: '#fff' }}>Page hierarchy.</b> Eyebrow + title + subtitle + section header pattern on every page.</div>
+          <div><b style={{ color: '#fff' }}>Cards.</b> One component, three variants: KPI, panel, table.</div>
+          <div><b style={{ color: '#fff' }}>Spacing.</b> 4/8/16/24/40/56 scale only.</div>
+          <div><b style={{ color: '#fff' }}>Numerics.</b> One mono family for all tabular numbers.</div>
+          <div><b style={{ color: '#fff' }}>Delta color.</b> Paired soft up/down chips — not raw text.</div>
+          <div><b style={{ color: '#fff' }}>Tables.</b> One skin: 11px uppercase header, 13–14px rows, hairline dividers.</div>
+          <div><b style={{ color: '#fff' }}>Brand.</b> Logo mark + single accent, appearing once per page.</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const ratioA = {
+    subtitle: 'Direction A', title: 'Editorial / Premium',
+    body: "Leads with a serif display face, hairline rules, and news-first hierarchy. Reads as journalism-grade research and gives EPM a distinctive voice. Trade-off: reading density drops; analysts moving fast will want more compression.",
+    type: [['Display', 'Source Serif 4 · 600'], ['Body', 'Inter Tight · 400/500'], ['Numerics', 'SF Mono · 500'], ['Kicker', 'Inter 600 · 1.4 tracking'], ['Scale', '52 / 34 / 22 / 16 / 14 / 12']],
+    spacing: [['Gutter', '56 px outer'], ['Section', '48–56 px'], ['Intra-card', '24 px'], ['Row height', '48–56 px'], ['Rules', '1–2 px hairline']],
+    components: [['Container', 'Hairline card, no shadow'], ['Section head', 'Kicker + serif H2 + rule'], ['Delta', 'Mono text, semantic color'], ['Buttons', 'Sharp, 1px border, upper'], ['Nav', 'Underline on accent']],
+    palette: [{ n: 'Ink', c: '#0E1A2B' }, { n: 'Paper', c: '#F6F1E6' }, { n: 'Rule', c: '#D9D3C4' }, { n: 'Accent', c: '#9A6B1F' }, { n: 'Up', c: '#1F6B43' }, { n: 'Down', c: '#A6301B' }],
+  };
+  const ratioB = {
+    subtitle: 'Direction B', title: 'Terminal / Data-dense',
+    body: "Compact sans + mono everywhere. Panels instead of cards. Command bar (⌘K) as first-class input. Maximum information density. Strongest for analysts; wrong for a client-facing future.",
+    type: [['UI', 'IBM Plex Sans · 500/600'], ['Numerics', 'IBM Plex Mono · 500'], ['Base size', '11–12 px'], ['Kicker', 'Mono 10.5 · 0.5 tracking'], ['Scale', '22 / 16 / 13 / 12 / 11 / 10.5']],
+    spacing: [['Gutter', '20 px outer'], ['Section', '12 px'], ['Intra-panel', '12 px'], ['Row height', '28–32 px'], ['Rules', '1 px line tokens']],
+    components: [['Container', 'Panel w/ titled header bar'], ['Section head', 'Mono uppercase in header'], ['Delta', 'Mono, +/- colored'], ['Buttons', 'Amber fill on black'], ['Nav', 'Tab w/ amber-fill active']],
+    palette: [{ n: 'BG', c: '#0B0F14' }, { n: 'Panel', c: '#11161D' }, { n: 'Line', c: '#1E2732' }, { n: 'Amber', c: '#E8A33D' }, { n: 'Up', c: '#36C58A' }, { n: 'Down', c: '#FF5A5A' }],
+  };
+  const ratioC = {
+    subtitle: 'Direction C ★', title: 'Executive / Client-facing',
+    body: "Navy masthead for brand carry-over, cool off-white canvas, disciplined cards with a single shadow token, soft up/down chips. Modern but credible, and scales from analyst density to client surface.",
+    type: [['Display', 'GT Sectra (research)'], ['UI', 'Söhne / Inter · 500/600'], ['Numerics', 'JetBrains Mono · 500'], ['Eyebrow', 'Inter 600 · 0.8 tracking · teal'], ['Scale', '32 / 24 / 20 / 14 / 13 / 11']],
+    spacing: [['Gutter', '40 px outer'], ['Section', '20–22 px'], ['Intra-card', '16–24 px'], ['Row height', '40–48 px'], ['Radius', '6 px / 999 (chips)']],
+    components: [['Card', 'White, 1px line, single shadow'], ['Section head', 'Teal eyebrow + H2 + action'], ['Pill', 'Soft bg + semantic fg'], ['Buttons', 'Navy fill / ghost / link'], ['Nav', 'Dark, amber underline active']],
+    palette: [{ n: 'Navy', c: '#0B1F3A' }, { n: 'Canvas', c: '#F4F6FA' }, { n: 'Line', c: '#E3E7EE' }, { n: 'Teal', c: '#1E7F74' }, { n: 'Amber', c: '#C28A2B' }, { n: 'Up', c: '#0F8A56' }, { n: 'Down', c: '#B3271C' }],
+  };
+
+  return (
+    <>
+      <IntroPage />
+
+      <FramePage label="Direction A · Editorial / Premium — Homepage"><EdaHomepage /></FramePage>
+      <FramePage label="Direction A · Editorial / Premium — Markets"><EdaMarkets /></FramePage>
+      <FramePage label="Direction A · Editorial / Premium — Forecasting"><EdaForecasting /></FramePage>
+      <FramePage label="Direction A · Editorial / Premium — Model Portfolios"><EdaPortfolios /></FramePage>
+      <FramePage label="Direction A · Editorial / Premium — Fund Search"><EdaFundSearch /></FramePage>
+      <FramePage label="Direction A · Rationale & specs"><Rationale {...ratioA} /></FramePage>
+
+      <FramePage label="Direction B · Terminal / Data-dense — Homepage"><TrmHomepage /></FramePage>
+      <FramePage label="Direction B · Terminal / Data-dense — Markets"><TrmMarkets /></FramePage>
+      <FramePage label="Direction B · Terminal / Data-dense — Forecasting"><TrmForecasting /></FramePage>
+      <FramePage label="Direction B · Terminal / Data-dense — Model Portfolios"><TrmPortfolios /></FramePage>
+      <FramePage label="Direction B · Terminal / Data-dense — Fund Search"><TrmFundSearch /></FramePage>
+      <FramePage label="Direction B · Rationale & specs"><Rationale {...ratioB} /></FramePage>
+
+      <FramePage label="Direction C · Executive / Client-facing — Homepage"><ExcHomepage /></FramePage>
+      <FramePage label="Direction C · Executive / Client-facing — Markets"><ExcMarkets /></FramePage>
+      <FramePage label="Direction C · Executive / Client-facing — Forecasting"><ExcForecasting /></FramePage>
+      <FramePage label="Direction C · Executive / Client-facing — Model Portfolios"><ExcPortfolios /></FramePage>
+      <FramePage label="Direction C · Executive / Client-facing — Fund Search"><ExcFundSearch /></FramePage>
+      <FramePage label="Direction C · Rationale & specs"><Rationale {...ratioC} /></FramePage>
+
+      <FramePage label="Recommendation & shared fixes"><RecommendationBlock /></FramePage>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+
+// Auto-print after fonts + render
+(async () => {
+  try { if (document.fonts && document.fonts.ready) await document.fonts.ready; } catch (e) {}
+  await new Promise(r => setTimeout(r, 900));
+  window.print();
+})();
+</script>
+</body>
+</html>

@@ -12,7 +12,7 @@
   <script>
     (function () {
       try {
-        var pref = localStorage.getItem('epm_theme_pref') || 'dark';
+        var pref = localStorage.getItem('epm_theme_pref') || 'light';
         var resolved = pref === 'system' ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : pref;
         var bg = resolved === 'light' ? '#f5f8fd' : '#061326';
         var chrome = resolved === 'light' ? '#f5f8fd' : '#061326';
@@ -23,108 +23,53 @@
       } catch (err) {
         document.documentElement.style.backgroundColor = '#061326';
       }
+      // Density bootstrap — set before first paint to avoid flicker
+      try {
+        var density = localStorage.getItem('epm_density_pref') || 'comfortable';
+        document.documentElement.dataset.density = density;
+      } catch (_) {}
     })();
   </script>
   <script>try{if(!sessionStorage.getItem("epm_splash_shown")&&location.pathname.indexOf("login")<0&&location.pathname.indexOf("reset")<0){var _sh=document.createElement("div");_sh.id="fvsShield";_sh.style.cssText="position:fixed;inset:0;z-index:9998;background:#040d1a";document.documentElement.appendChild(_sh);}}catch(e){}</script>
   <title>EPM Market Intelligence</title>
   <link rel="stylesheet" href="/static/css/styles.css?v=20260410a" />
   <link rel="stylesheet" href="/static/css/design-v2.css?v=20260410a" />
+  <link rel="stylesheet" href="/static/css/design-system.css?v=20260419a" />
+  <script src="/static/js/chrome.js?v=20260419a"></script>
   <script defer src="/static/js/site.js?v=20260410a"></script>
   <link rel="icon" type="image/png" href="/static/epm_logo_sq.png">
   <link rel="apple-touch-icon" href="/static/epm_logo_sq.png">
   <meta property="og:image" content="/static/epm_logo.png">
 </head>
-<body data-page="home">
-  <div id="settingsOverlay" class="settings-overlay"></div>
+<body data-page="home" data-ds="v3">
 
-  <aside id="settingsDrawer" class="settings-drawer">
-    <div class="section-title-row">
-      <h3>Settings</h3>
-      <button id="closeSettingsBtn" class="btn btn-ghost">Close</button>
-    </div>
-
-    <div class="settings-group">
-      <h4>Theme</h4>
-      <div class="radio-row">
-        <div class="radio-chip" data-pref-theme="dark">Dark</div>
-        <div class="radio-chip" data-pref-theme="light">Light</div>
-        <div class="radio-chip" data-pref-theme="system">System</div>
-      </div>
-    </div>
-
-    <div class="settings-group">
-      <h4>Animations</h4>
-      <div class="radio-row">
-        <div class="radio-chip" data-pref-animations="on">On</div>
-        <div class="radio-chip" data-pref-animations="off">Reduced</div>
-      </div>
-    </div>
-
-    <div class="settings-group">
-      <h4>Default chart range</h4>
-      <div class="radio-row">
-        <div class="radio-chip" data-pref-range="6m">6M</div>
-        <div class="radio-chip" data-pref-range="1y">1Y</div>
-        <div class="radio-chip" data-pref-range="3y">3Y</div>
-        <div class="radio-chip" data-pref-range="all">ALL</div>
-      </div>
-    </div>
-
-    <div class="settings-group">
-      <h4>News on search by default</h4>
-      <div class="radio-row">
-        <div class="radio-chip" data-pref-news="true">On</div>
-        <div class="radio-chip" data-pref-news="false">Off</div>
-      </div>
-    </div>
-  </aside>
+  <!-- chrome.js injects: settings overlay, settings drawer, topbar header -->
+  <div id="epmChrome"></div>
+  <script>if (window.EPMChrome) EPMChrome.render();</script>
 
   <div class="page-shell">
-    <header class="topbar fade-in">
-      <div class="brand-block">
-        <img class="brand-logo" src="/static/epm_logo.png?v=20260322f" alt="EPM Financial" />
-        <div class="brand-copy">
-          <h1>EPM Market Intelligence</h1>
-          <p>Interactive market monitoring, fund search, portfolio intelligence, and forecast expansion.</p>
-        </div>
-      </div>
-
-      <nav class="main-nav">
-        <a class="nav-link" href="/">Home</a>
-        <a class="nav-link" href="/markets">Markets</a>
-        <a class="nav-link" href="/forecasting">Forecasting</a>
-        <a class="nav-link" href="/portfolios">Model Portfolios</a>
-        <a class="nav-link" href="/search">Fund Search</a>
-      </nav>
-
-      <nav class="topbar-nav">
-        <a class="topbar-nav-link nav-link" href="/">Home</a>
-        <a class="topbar-nav-link nav-link" href="/markets">Markets</a>
-        <a class="topbar-nav-link nav-link" href="/forecasting">Forecasting</a>
-        <a class="topbar-nav-link nav-link" href="/portfolios">Portfolios</a>
-      </nav>
-
-      <div class="top-actions">
-        <button id="openSettingsBtn" class="btn btn-icon settings-gear-btn" type="button" aria-label="Open settings" title="Settings"></button>
-      </div>
-    </header>
 
     <section class="hero-grid hero-grid--wide">
-      <div class="card hero-card fade-in reveal-delay-1">
-        <div class="badge">EPM Market Intelligence</div>
-        <h2>Markets, forecasts, and portfolio insights — in one place.</h2>
-        <p class="card-subtitle">Search any fund or ticker for live price data, model forecasts, curated news, and sentiment. Navigate to Markets for macro context or Forecasting for model outputs.</p>
+      <div class="ds-card is-panel hero-card fade-in reveal-delay-1">
+        <div class="ds-eyebrow">EPM Market Intelligence</div>
+        <h2 class="ds-title is-display">Markets, forecasts, and portfolio insights &mdash; in one place.</h2>
+        <div class="ds-research">
+          <p>Search any fund or ticker for live price data, model forecasts, curated news, and sentiment. Navigate to Markets for macro context or Forecasting for model outputs.</p>
+        </div>
 
         <div class="search-bar">
           <input id="homeSearchInput" type="text" placeholder="Search a ticker, e.g. AAPL" />
-          <a id="homeSearchBtn" class="btn btn-primary" href="/search">Open Fund Search</a>
+          <a id="homeSearchBtn" class="ds-btn is-primary btn btn-primary" href="/search">Open Fund Search</a>
         </div>
       </div>
     </section>
 
-    <section class="card fade-in reveal-delay-2">
-      <div class="section-title-row">
-        <h3>Market Snapshot</h3>
+    <section class="ds-card is-panel fade-in reveal-delay-2">
+      <div class="ds-section-header">
+        <div>
+          <div class="ds-eyebrow">Live</div>
+          <h3 class="ds-title is-h3">Market Snapshot</h3>
+        </div>
         <span id="homeGeneratedAt" class="badge">Loading live data</span>
       </div>
       <div id="homeMarketStrip" class="market-strip">
@@ -132,30 +77,36 @@
       </div>
     </section>
 
-    <section class="dashboard-grid">
-      <div class="card fade-in reveal-delay-1">
-        <h3>Markets</h3>
-        <p class="card-subtitle">Macro dashboard, major index trends, and market read-through.</p>
-        <a class="btn btn-secondary" href="/markets">Open Markets</a>
+    <section class="ds-grid-3 dashboard-grid">
+      <div class="ds-card is-panel fade-in reveal-delay-1">
+        <div class="ds-eyebrow">Overview</div>
+        <h3 class="ds-title is-h3">Markets</h3>
+        <p class="ds-subtitle">Macro dashboard, major index trends, and market read-through.</p>
+        <a class="ds-btn is-ghost btn btn-secondary" href="/markets">Open Markets</a>
       </div>
 
-      <div class="card fade-in reveal-delay-2">
-        <h3>Forecasting</h3>
-        <p class="card-subtitle">Model forecasts, commentary, and future overlay management.</p>
-        <a class="btn btn-secondary" href="/forecasting">Open Forecasting</a>
+      <div class="ds-card is-panel fade-in reveal-delay-2">
+        <div class="ds-eyebrow">Models</div>
+        <h3 class="ds-title is-h3">Forecasting</h3>
+        <p class="ds-subtitle">Model forecasts, commentary, and future overlay management.</p>
+        <a class="ds-btn is-ghost btn btn-secondary" href="/forecasting">Open Forecasting</a>
       </div>
 
-      <div class="card fade-in reveal-delay-3">
-        <h3>Model Portfolios</h3>
-        <p class="card-subtitle">Strategy buckets, watchlists, and future clickable portfolio views.</p>
-        <a class="btn btn-secondary" href="/portfolios">Open Portfolios</a>
+      <div class="ds-card is-panel fade-in reveal-delay-3">
+        <div class="ds-eyebrow">Strategy</div>
+        <h3 class="ds-title is-h3">Model Portfolios</h3>
+        <p class="ds-subtitle">Strategy buckets, watchlists, and future clickable portfolio views.</p>
+        <a class="ds-btn is-ghost btn btn-secondary" href="/portfolios">Open Portfolios</a>
       </div>
     </section>
 
     <section class="two-col-grid">
-      <div class="card">
-        <div class="section-title-row">
-          <h3>Featured Watchlist</h3>
+      <div class="ds-card is-panel">
+        <div class="ds-section-header">
+          <div>
+            <div class="ds-eyebrow">Watchlist</div>
+            <h3 class="ds-title is-h3">Featured</h3>
+          </div>
           <span class="badge">Live symbols</span>
         </div>
         <div id="homeFeaturedCards" class="market-card-grid">
@@ -163,9 +114,12 @@
         </div>
       </div>
 
-      <div class="card">
-        <div class="section-title-row">
-          <h3>Portfolio Watchlist</h3>
+      <div class="ds-card is-panel">
+        <div class="ds-section-header">
+          <div>
+            <div class="ds-eyebrow">Portfolio</div>
+            <h3 class="ds-title is-h3">Portfolio Watchlist</h3>
+          </div>
           <span class="badge">Shared engine</span>
         </div>
         <div class="pw-watchlist-gate">
@@ -184,9 +138,12 @@
       </div>
     </section>
 
-    <section class="card fade-in">
-      <div class="section-title-row">
-        <h3>Latest Big News</h3>
+    <section class="ds-card is-panel fade-in">
+      <div class="ds-section-header">
+        <div>
+          <div class="ds-eyebrow">Curated</div>
+          <h3 class="ds-title is-h3">Latest Big News</h3>
+        </div>
         <span class="badge">Ranked feed</span>
       </div>
       <div id="homeTopNews" class="news-list news-list--wide">

@@ -11,27 +11,17 @@
   let _pollTimer = null;
 
   const STAGE_LABELS = [
-    { key: 'seed_doc',           label: 'Data',      full: 'Building Analysis Document' },
-    { key: 'ontology',           label: 'Ontology',  full: 'Generating Knowledge Ontology' },
-    { key: 'graph',              label: 'Graph',     full: 'Building Knowledge Graph' },
-    { key: 'simulation_create',  label: 'Create',    full: 'Creating Simulation' },
-    { key: 'simulation_prepare', label: 'Agents',    full: 'Preparing Agents' },
-    { key: 'simulation_running', label: 'Swarm',     full: 'Running Swarm Simulation' },
-    { key: 'report_generate',    label: 'Report',    full: 'Generating Report' },
-    { key: 'report_poll',        label: 'Writing',   full: 'Writing Report Sections' },
-    { key: 'completed',          label: 'Done',      full: 'Complete' },
+    { key: 'seed_doc',          label: 'Data',      full: 'Building Analysis Document' },
+    { key: 'council_personas',  label: 'Council',   full: 'Analyst Council Deliberating' },
+    { key: 'council_synthesis', label: 'Synthesis', full: 'Synthesizing Report' },
+    { key: 'completed',         label: 'Done',      full: 'Complete' },
   ];
 
   const STAGE_DESCS = {
-    seed_doc:           'Synthesizing Kronos forecasts, EPM models & recent news',
-    ontology:           'Extracting entities and building knowledge structure',
-    graph:              'Mapping relationships between market factors and entities',
-    simulation_create:  'Initializing the multi-agent swarm environment',
-    simulation_prepare: 'Spawning agents and loading their knowledge bases',
-    simulation_running: 'Agents deliberating across 72 simulation rounds',
-    report_generate:    'Synthesizing swarm consensus into structured analysis',
-    report_poll:        'Writing report sections from simulation insights',
-    completed:          'Analysis complete',
+    seed_doc:          'Synthesizing Kronos forecasts, EPM models, technicals & news',
+    council_personas:  'Seven specialist analysts writing grounded perspectives',
+    council_synthesis: 'Senior editor assembling the final institutional report',
+    completed:         'Analysis complete',
   };
 
   function _stageIndex(stage) {
@@ -78,21 +68,38 @@
     if (progress) progress.style.display = '';
     if (done) done.style.display = 'none';
 
+    const isQueued = status.status === 'queued';
     const pct = status.progress || 0;
     const stageIdx = _stageIndex(status.stage);
     const stageMeta = STAGE_LABELS[stageIdx] || STAGE_LABELS[0];
 
-    // Current stage name + description
+    // Current stage name + description — special case for queued state
     const nameEl = document.getElementById('dalCurrentStage');
     const descEl = document.getElementById('dalCurrentDesc');
-    if (nameEl) nameEl.textContent = stageMeta.full;
-    if (descEl) descEl.textContent = STAGE_DESCS[status.stage] || '';
+    if (nameEl) nameEl.textContent = isQueued ? 'Waiting in Queue' : stageMeta.full;
+    if (descEl) descEl.textContent = isQueued ? 'Another analysis is running — yours will start automatically' : (STAGE_DESCS[status.stage] || '');
 
     // Progress bar + pct
     const bar = document.getElementById('dalProgressBar');
     if (bar) bar.style.width = pct + '%';
     const pctEl = document.getElementById('dalProgressPct');
     if (pctEl) pctEl.textContent = pct + '%';
+
+    // ETA label — hide for queued jobs (queue info replaces it)
+    const etaEl = document.getElementById('dalEta');
+    if (etaEl) etaEl.style.display = isQueued ? 'none' : '';
+
+    // Queue position info
+    const queueEl = document.getElementById('dalQueueInfo');
+    if (queueEl) {
+      if (isQueued && status.queue_position) {
+        const waitStr = status.queue_wait_min > 0 ? ` — est. ~${status.queue_wait_min} min` : '';
+        queueEl.textContent = `Position ${status.queue_position} in queue${waitStr}`;
+        queueEl.style.display = '';
+      } else {
+        queueEl.style.display = 'none';
+      }
+    }
 
     // Horizontal pipeline dots
     const pipeline = document.getElementById('dalPipeline');
@@ -129,7 +136,7 @@
         const runBtn = document.getElementById('dalRunBtn');
         if (runBtn) {
           runBtn.disabled = false;
-          runBtn.textContent = 'Run Deep Swarm Analysis';
+          runBtn.textContent = 'Run Analyst Council';
           runBtn.onclick = () => _runDeepAnalysis(_currentTicker);
         }
         const lab = document.getElementById('deepAnalysisLab');
@@ -187,7 +194,7 @@
       _saveJob(ticker, data.job_id);
       _startPolling(data.job_id);
     } catch (err) {
-      if (btn) { btn.disabled = false; btn.textContent = 'Run Deep Swarm Analysis'; }
+      if (btn) { btn.disabled = false; btn.textContent = 'Run Analyst Council'; }
       const errEl = document.getElementById('dalError');
       if (errEl) { errEl.textContent = 'Could not start: ' + err.message; errEl.style.display = ''; }
     }
@@ -222,7 +229,7 @@
       const runBtn = document.getElementById('dalRunBtn');
       if (runBtn) {
         runBtn.disabled = false;
-        runBtn.textContent = 'Run Deep Swarm Analysis';
+        runBtn.textContent = 'Run Analyst Council';
         runBtn.onclick = () => _runDeepAnalysis(_currentTicker);
       }
       return;
@@ -245,7 +252,7 @@
     const btn = document.getElementById('dalRunBtn');
     if (btn) {
       btn.disabled = false;
-      btn.textContent = 'Run Deep Swarm Analysis';
+      btn.textContent = 'Run Analyst Council';
       btn.onclick = () => _runDeepAnalysis(_currentTicker);
     }
   };

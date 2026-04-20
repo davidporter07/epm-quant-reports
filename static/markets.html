@@ -12,7 +12,7 @@
   <script>
     (function () {
       try {
-        var pref = localStorage.getItem('epm_theme_pref') || 'dark';
+        var pref = localStorage.getItem('epm_theme_pref') || 'light';
         var resolved = pref === 'system' ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : pref;
         var bg = resolved === 'light' ? '#f5f8fd' : '#061326';
         var chrome = resolved === 'light' ? '#f5f8fd' : '#061326';
@@ -23,58 +23,39 @@
       } catch (err) {
         document.documentElement.style.backgroundColor = '#061326';
       }
+      // Density bootstrap — set before first paint to avoid flicker
+      try {
+        var density = localStorage.getItem('epm_density_pref') || 'comfortable';
+        document.documentElement.dataset.density = density;
+      } catch (_) {}
     })();
   </script>
   <script>try{if(!sessionStorage.getItem("epm_splash_shown")&&location.pathname.indexOf("login")<0&&location.pathname.indexOf("reset")<0){var _sh=document.createElement("div");_sh.id="fvsShield";_sh.style.cssText="position:fixed;inset:0;z-index:9998;background:#040d1a";document.documentElement.appendChild(_sh);}}catch(e){}</script>
   <title>Markets | EPM Market Intelligence</title>
   <link rel="stylesheet" href="/static/css/styles.css?v=20260410a" />
   <link rel="stylesheet" href="/static/css/design-v2.css?v=20260410a" />
+  <link rel="stylesheet" href="/static/css/design-system.css?v=20260419a" />
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <script src="/static/js/chrome.js?v=20260419a"></script>
   <script defer src="/static/js/site.js?v=20260410a"></script>
   <link rel="icon" type="image/png" href="/static/epm_logo_sq.png">
   <link rel="apple-touch-icon" href="/static/epm_logo_sq.png">
   <meta property="og:image" content="/static/epm_logo.png">
 </head>
-<body data-page="markets">
-  <div id="settingsOverlay" class="settings-overlay"></div>
-  <aside id="settingsDrawer" class="settings-drawer">
-    <div class="section-title-row"><h3>Settings</h3><button id="closeSettingsBtn" class="btn btn-ghost">Close</button></div>
-    <div class="settings-group"><h4>Theme</h4><div class="radio-row"><div class="radio-chip" data-pref-theme="dark">Dark</div><div class="radio-chip" data-pref-theme="light">Light</div><div class="radio-chip" data-pref-theme="system">System</div></div></div>
-    <div class="settings-group"><h4>Animations</h4><div class="radio-row"><div class="radio-chip" data-pref-animations="on">On</div><div class="radio-chip" data-pref-animations="off">Reduced</div></div></div>
-  </aside>
+<body data-page="markets" data-ds="v3">
+
+  <!-- chrome.js injects: settings overlay, settings drawer, topbar header -->
+  <div id="epmChrome"></div>
+  <script>if (window.EPMChrome) EPMChrome.render();</script>
 
   <div class="page-shell">
-    <header class="topbar fade-in">
-      <div class="brand-block">
-        <img class="brand-logo" src="/static/epm_logo.png?v=20260322f" alt="EPM Financial" />
-        <div class="brand-copy">
-          <h1>EPM Market Intelligence</h1>
-          <p>Markets &mdash; cross-asset dashboard with index trend, sector rotation, grouped movers, and a clearer macro read.</p>
-        </div>
-        <nav class="main-nav">
-          <a class="nav-link" href="/">Home</a>
-          <a class="nav-link" href="/markets">Markets</a>
-          <a class="nav-link" href="/forecasting">Forecasting</a>
-          <a class="nav-link" href="/portfolios">Model Portfolios</a>
-        </nav>
-      </div>
-      <nav class="topbar-nav">
-        <a class="topbar-nav-link nav-link" href="/">Home</a>
-        <a class="topbar-nav-link nav-link" href="/markets">Markets</a>
-        <a class="topbar-nav-link nav-link" href="/forecasting">Forecasting</a>
-        <a class="topbar-nav-link nav-link" href="/portfolios">Portfolios</a>
-      </nav>
-      <div class="top-actions">
-        <button id="openSettingsBtn" class="btn btn-icon settings-gear-btn" type="button" aria-label="Open settings" title="Settings"></button>
-      </div>
-    </header>
 
-    <!-- ── Index strip / tape ── -->
-    <section class="card fade-in" style="padding:14px 18px;">
-      <div class="section-title-row" style="margin-bottom:10px;">
+    <!-- ── Index strip ── -->
+    <section class="ds-card is-panel fade-in" style="padding:var(--s-3) var(--s-4);">
+      <div class="ds-section-header">
         <div>
-          <h2 style="font-size:14px;margin:0;">Markets &amp; Indexes</h2>
-          <p class="card-subtitle" style="margin:2px 0 0;font-size:11px;">Live cross-asset index tape &mdash; updated each trading day.</p>
+          <div class="ds-eyebrow">Live</div>
+          <h3 class="ds-title is-h3">Markets &amp; Indexes</h3>
         </div>
         <span id="marketsGeneratedAt" class="badge">Loading live data</span>
       </div>
@@ -82,78 +63,95 @@
     </section>
 
     <!-- ── Section: Sentiment & Posture ── -->
-    <div class="sec-divider fade-in">Sentiment &amp; Posture</div>
+    <div class="ds-section-divider fade-in">
+      <div class="ds-eyebrow">Sentiment &amp; Posture</div>
+    </div>
 
     <!-- ── Overview: EPM Gauge | Market Posture KPIs | Movers ── -->
     <div class="markets-overview-grid fade-in">
 
       <!-- EPM Market Sentiment Gauge -->
-      <div class="card epm-gauge-card">
-        <div class="section-title-row" style="margin-bottom:8px;">
-          <h3 style="font-size:13px;margin:0;">EPM Market Sentiment</h3>
-          <span class="badge">Composite</span>
+      <div class="ds-card is-panel epm-gauge-card">
+        <div class="ds-section-header" style="margin-bottom:var(--s-2);">
+          <div>
+            <div class="ds-eyebrow">Composite</div>
+            <h3 class="ds-title is-h3">EPM Market Sentiment</h3>
+          </div>
         </div>
         <div id="marketsEPMGauge"><div class="placeholder-item" style="height:160px;">Loading sentiment gauge...</div></div>
       </div>
 
       <!-- Market Posture KPIs -->
-      <div class="card">
-        <div class="section-title-row">
-          <h3>Market Posture</h3>
-          <span class="badge">Quick read</span>
+      <div class="ds-card is-panel">
+        <div class="ds-section-header">
+          <div>
+            <div class="ds-eyebrow">Quick Read</div>
+            <h3 class="ds-title is-h3">Market Posture</h3>
+          </div>
+          <span class="badge">Risk &amp; Macro</span>
         </div>
-        <p class="card-subtitle">Key risk &amp; macro metrics &mdash; VIX, yields, breadth, dollar, and credit spread.</p>
+        <p class="ds-subtitle">VIX, yields, breadth, dollar, and credit spread.</p>
         <div id="marketsRiskDashboard" class="market-kpi-grid"><div class="placeholder-item">Building market posture...</div></div>
       </div>
 
       <!-- Today's Movers -->
-      <div class="card">
-        <div class="section-title-row">
-          <h3>Today's Movers</h3>
-          <span class="badge">Today</span>
+      <div class="ds-card is-panel">
+        <div class="ds-section-header">
+          <div>
+            <div class="ds-eyebrow">Today</div>
+            <h3 class="ds-title is-h3">Today's Movers</h3>
+          </div>
+          <span class="badge">Live</span>
         </div>
-        <p class="card-subtitle">Top gainers and losers from the live broad-market feed.</p>
+        <p class="ds-subtitle">Top gainers and losers from the live broad-market feed.</p>
         <div id="marketsMoversBox" class="movers-box-shell"><div class="placeholder-item">Loading movers...</div></div>
       </div>
 
     </div><!-- /markets-overview-grid -->
 
     <!-- ── Section: Charts ── -->
-    <div class="sec-divider fade-in">Charts</div>
+    <div class="ds-section-divider fade-in">
+      <div class="ds-eyebrow">Charts</div>
+    </div>
 
     <!-- ── 5 Charts ── -->
     <div class="market-charts-grid fade-in">
-      <div class="card plot-shell chart-cell--global-index">
-        <div class="section-title-row"><h3>Global Index Comparison</h3><span class="badge">3Y returns</span></div>
+      <div class="ds-card is-panel plot-shell chart-cell--global-index">
+        <div class="ds-section-header"><div><div class="ds-eyebrow">3Y Returns</div><h3 class="ds-title is-h3">Global Index Comparison</h3></div></div>
         <div id="marketsIndexComparisonChart" class="plot-target plot-target--comparison"></div>
       </div>
-      <div class="card plot-shell chart-cell--equity-risk">
-        <div class="section-title-row"><h3>Equity Risk</h3><span class="badge">SPY vs VIX</span></div>
+      <div class="ds-card is-panel plot-shell chart-cell--equity-risk">
+        <div class="ds-section-header"><div><div class="ds-eyebrow">SPY vs VIX</div><h3 class="ds-title is-h3">Equity Risk</h3></div></div>
         <div id="marketsEquityRiskChart" class="plot-target plot-target--short"></div>
       </div>
-      <div class="card plot-shell chart-cell--rates-credit">
-        <div class="section-title-row"><h3>Rates &amp; Credit</h3><span class="badge">10Y + HYG</span></div>
+      <div class="ds-card is-panel plot-shell chart-cell--rates-credit">
+        <div class="ds-section-header"><div><div class="ds-eyebrow">10Y + HYG</div><h3 class="ds-title is-h3">Rates &amp; Credit</h3></div></div>
         <div id="marketsRatesCreditChart" class="plot-target plot-target--short"></div>
       </div>
-      <div class="card plot-shell chart-cell--sector-rotation">
-        <div class="section-title-row"><h3>Sector Rotation</h3><span class="badge">YTD</span></div>
+      <div class="ds-card is-panel plot-shell chart-cell--sector-rotation">
+        <div class="ds-section-header"><div><div class="ds-eyebrow">YTD</div><h3 class="ds-title is-h3">Sector Rotation</h3></div></div>
         <div id="marketsSectorRotationChart" class="plot-target plot-target--short"></div>
       </div>
-      <div class="card plot-shell chart-cell--commodities">
-        <div class="section-title-row"><h3>Dollar &amp; Commodities</h3><span class="badge">Rebased</span></div>
+      <div class="ds-card is-panel plot-shell chart-cell--commodities">
+        <div class="ds-section-header"><div><div class="ds-eyebrow">Rebased</div><h3 class="ds-title is-h3">Dollar &amp; Commodities</h3></div></div>
         <div id="marketsDollarCommoditiesChart" class="plot-target plot-target--short"></div>
       </div>
     </div>
 
     <!-- ── Section: Tactical Posture ── -->
-    <div class="sec-divider fade-in">Tactical Posture</div>
+    <div class="ds-section-divider fade-in">
+      <div class="ds-eyebrow">Tactical Posture</div>
+    </div>
 
     <!-- ── Risk On / Off ── -->
     <div class="two-col-grid fade-in">
-      <div class="card risk-on-card">
-        <div class="section-title-row">
+      <div class="ds-card is-panel risk-on-card">
+        <div class="ds-section-header">
           <div class="section-title-with-info">
-            <h3>Risk On <span class="risk-accent risk-accent--on">&#9650;</span></h3>
+            <div>
+              <div class="ds-eyebrow">Offense</div>
+              <h3 class="ds-title is-h3">Risk On <span class="risk-accent risk-accent--on">&#9650;</span></h3>
+            </div>
             <button class="info-icon-btn" type="button" aria-label="How Risk On is selected" data-tooltip="risk-on-tip">&#9432;</button>
           </div>
           <span class="badge badge--green">Offense</span>
@@ -164,10 +162,13 @@
         </div>
         <div id="marketsRiskOn" class="market-card-grid market-card-grid--compact"><div class="placeholder-item">Loading risk-on basket...</div></div>
       </div>
-      <div class="card risk-off-card">
-        <div class="section-title-row">
+      <div class="ds-card is-panel risk-off-card">
+        <div class="ds-section-header">
           <div class="section-title-with-info">
-            <h3>Risk Off <span class="risk-accent risk-accent--off">&#9660;</span></h3>
+            <div>
+              <div class="ds-eyebrow">Defense</div>
+              <h3 class="ds-title is-h3">Risk Off <span class="risk-accent risk-accent--off">&#9660;</span></h3>
+            </div>
             <button class="info-icon-btn" type="button" aria-label="How Risk Off is selected" data-tooltip="risk-off-tip">&#9432;</button>
           </div>
           <span class="badge badge--amber">Defense</span>
@@ -181,12 +182,20 @@
     </div>
 
     <!-- ── Section: Market Intelligence ── -->
-    <div class="sec-divider fade-in">Market Intelligence</div>
+    <div class="ds-section-divider fade-in">
+      <div class="ds-eyebrow">Market Intelligence</div>
+    </div>
 
     <!-- ── Trend table (full-width) ── -->
-    <div class="card fade-in" style="margin-bottom:var(--card-gap);">
-      <div class="section-title-row"><h3>Trend Table</h3><span class="badge">Cross-market</span></div>
-      <p class="card-subtitle">Cross-market ETFs ranked by trend state &mdash; daily, 1M, YTD, beta, and volatility.</p>
+    <div class="ds-card is-panel fade-in">
+      <div class="ds-section-header">
+        <div>
+          <div class="ds-eyebrow">Cross-Market</div>
+          <h3 class="ds-title is-h3">Trend Table</h3>
+        </div>
+        <span class="badge">ETFs ranked by trend</span>
+      </div>
+      <p class="ds-subtitle">Cross-market ETFs ranked by trend state &mdash; daily, 1M, YTD, beta, and volatility.</p>
       <div id="marketsTrendTable" class="table-shell"><div class="placeholder-item">Loading trend table...</div></div>
     </div>
 
@@ -195,26 +204,41 @@
 
       <!-- Col 1: OECD CLI -->
       <div class="markets-data-stack">
-        <div class="card">
-          <div class="section-title-row"><h3>OECD Leading Indicators</h3><span class="badge">Monthly CLI</span></div>
-          <p class="card-subtitle">CLI above 100 = above long-run trend (expansionary).</p>
+        <div class="ds-card is-panel">
+          <div class="ds-section-header">
+            <div>
+              <div class="ds-eyebrow">Monthly CLI</div>
+              <h3 class="ds-title is-h3">OECD Leading Indicators</h3>
+            </div>
+          </div>
+          <p class="ds-subtitle">CLI above 100 = above long-run trend (expansionary).</p>
           <div id="marketsOECDCLI" class="oecd-cli-grid"><div class="placeholder-item">Loading OECD data...</div></div>
         </div>
       </div>
 
       <!-- Col 2: Market Intelligence News -->
       <div class="markets-data-stack">
-        <div class="card">
-          <div class="section-title-row"><h3>Market Intelligence</h3><span class="badge">7-day news</span></div>
+        <div class="ds-card is-panel">
+          <div class="ds-section-header">
+            <div>
+              <div class="ds-eyebrow">7-Day News</div>
+              <h3 class="ds-title is-h3">Market Intelligence</h3>
+            </div>
+          </div>
           <div id="marketsWorldNews" class="world-news-list"><div class="placeholder-item">Loading market news...</div></div>
         </div>
       </div>
 
       <!-- Col 3: 4-week Economic Calendar -->
       <div class="markets-data-cal">
-        <div class="card">
-          <div class="section-title-row"><h3>Economic Calendar</h3><span class="badge">4-week outlook</span></div>
-          <p class="card-subtitle">Click any day to see scheduled releases. Red&nbsp;= high impact, amber&nbsp;= medium.</p>
+        <div class="ds-card is-panel">
+          <div class="ds-section-header">
+            <div>
+              <div class="ds-eyebrow">4-Week Outlook</div>
+              <h3 class="ds-title is-h3">Economic Calendar</h3>
+            </div>
+          </div>
+          <p class="ds-subtitle">Click any day to see scheduled releases. Red&nbsp;= high impact, amber&nbsp;= medium.</p>
           <div id="marketsEconCalendar" class="econ-cal-grid"><div class="placeholder-item">Loading calendar...</div></div>
           <div id="marketsEconDayPanel" class="econ-day-panel hidden"></div>
         </div>
@@ -223,20 +247,27 @@
     </div><!-- /markets-data-suite -->
 
     <!-- ── Section: Insider Activity ── -->
-    <div class="sec-divider fade-in">Insider Activity</div>
+    <div class="ds-section-divider fade-in">
+      <div class="ds-eyebrow">Insider Activity</div>
+    </div>
 
     <!-- ── SEC Insider Activity ── -->
-    <section class="card fade-in">
-      <div class="section-title-row">
+    <section class="ds-card is-panel fade-in">
+      <div class="ds-section-header">
         <div>
-          <h3>Insider Activity Monitor</h3>
-          <p class="card-subtitle">Open-market Form 4 transactions &mdash; 50 major S&amp;P 500 companies, rolling 30 days. Excludes RSU vesting and option exercises.</p>
+          <div class="ds-eyebrow">SEC Form 4 &middot; 50 Names</div>
+          <h3 class="ds-title is-h3">Insider Activity Monitor</h3>
         </div>
-        <span class="badge">SEC Form 4 &middot; 50 names</span>
+        <span class="badge">Rolling 30 days</span>
       </div>
+      <p class="ds-subtitle">Open-market Form 4 transactions &mdash; 50 major S&amp;P 500 companies, rolling 30 days. Excludes RSU vesting and option exercises.</p>
       <div id="marketsInsiderSummary" class="insider-summary-bar"><div class="placeholder-item">Loading insider summary...</div></div>
       <div id="marketsInsiderActivity" class="insider-activity-list" style="margin-top:12px;"><div class="placeholder-item">Loading insider transactions...</div></div>
     </section>
+
+    <div class="page-footer">
+      EPM Market Intelligence
+    </div>
 
   </div><!-- /page-shell -->
 </body>

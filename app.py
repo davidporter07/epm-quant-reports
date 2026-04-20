@@ -2020,7 +2020,6 @@ async def api_chat(body: ChatRequest) -> JSONResponse:
 
 
 _DEEP_TICKER_RE = re.compile(r'^[A-Z]{1,10}$')
-_MIROFISH_SIMS = Path(os.environ.get("MIROFISH_SIMS_DIR", "/opt/mirofish/backend/uploads/simulations"))
 
 
 @app.get("/deep-report")
@@ -2049,7 +2048,13 @@ def deep_analysis_status(job_id: str, request: Request) -> JSONResponse:
 
 @app.get("/api/deep/{job_id}/agents")
 def deep_analysis_agents(job_id: str, request: Request) -> JSONResponse:
-    """Return agent profiles and their simulation posts for a completed job."""
+    """Return council analyst submissions for a completed job.
+
+    Shape is back-compatible with the old MiroFish-era endpoint: each persona's
+    submission becomes one `agents[].posts[0]` entry and one `timeline[]` row
+    in council order (technical_analyst, growth_investor, value_investor,
+    macro_strategist, supply_chain_risk, bearish_analyst, earnings_catalyst).
+    """
     _require_user(request)
     status = get_job_status(job_id)
     if status is None:
@@ -2057,81 +2062,32 @@ def deep_analysis_agents(job_id: str, request: Request) -> JSONResponse:
     if status.get("status") != "completed":
         raise HTTPException(status_code=400, detail="Job not completed yet.")
 
-    sim_id = (status.get("result") or {}).get("simulation_id")
-    if not sim_id:
-        raise HTTPException(status_code=404, detail="Simulation ID not found in job.")
+    takes = ((status.get("result") or {}).get("takes") or [])
+    # Map persona name -> bio/persona description for the viewer
+    from local_council import PERSONAS
+    persona_meta = {p.name: p for p in PERSONAS}
 
-    sim_dir = _MIROFISH_SIMS / sim_id
-    if not sim_dir.exists():
-        raise HTTPException(status_code=404, detail="Simulation data not found.")
-
-    # Load agent profiles
-    profiles: list[dict] = []
-    profiles_path = sim_dir / "reddit_profiles.json"
-    if profiles_path.exists():
-        try:
-            raw = json.loads(profiles_path.read_text(encoding="utf-8"))
-            profiles = raw if isinstance(raw, list) else list(raw.values())
-        except Exception:
-            pass
-
-    # Build user_id → display_name map
-    id_to_name: dict[int, str] = {
-        p.get("user_id", i): p.get("name") or p.get("username", f"Agent {i}")
-        for i, p in enumerate(profiles)
-    }
-
-    # Load posts from SQLite — fetch all columns available for timeline view
-    posts_by_agent: dict[str, list[str]] = {}
-    timeline: list[dict] = []  # chronological across all agents
-    db_path = sim_dir / "reddit_simulation.db"
-    if db_path.exists():
-        try:
-            import sqlite3
-            conn = sqlite3.connect(str(db_path))
-            conn.row_factory = sqlite3.Row
-            c = conn.cursor()
-            # Fetch available columns — created_at for ordering, round_num if present
-            c.execute("PRAGMA table_info(post)")
-            col_names = {row["name"] for row in c.fetchall()}
-            has_round = "round_num" in col_names
-            has_ts    = "created_at" in col_names
-            select_cols = "user_id, content"
-            if has_round:
-                select_cols += ", round_num"
-            if has_ts:
-                select_cols += ", created_at"
-            order_by = "created_at ASC" if has_ts else "rowid ASC"
-            c.execute(f"SELECT {select_cols} FROM post ORDER BY {order_by}")
-            for row in c.fetchall():
-                uid = row["user_id"]
-                name = id_to_name.get(uid, f"Agent {uid}")
-                content = row["content"] or ""
-                posts_by_agent.setdefault(name, []).append(content)
-                entry: dict = {"agent": name, "content": content}
-                if has_round:
-                    entry["round"] = row["round_num"]
-                if has_ts:
-                    entry["ts"] = row["created_at"]
-                timeline.append(entry)
-            conn.close()
-        except Exception:
-            pass
-
-    # Build response
     agents = []
-    for i, p in enumerate(profiles):
-        name = p.get("name") or p.get("username", f"Agent {i}")
+    timeline = []
+    for idx, t in enumerate(takes):
+        pname = t.get("name", "")
+        title = t.get("title", pname.replace("_", " ").title() if pname else f"Analyst {idx+1}")
+        body  = (t.get("take") or "").strip()
+        meta  = persona_meta.get(pname)
+        bio   = meta.system_prompt.split(". ")[0] + "." if meta else ""
+        persona_desc = meta.system_prompt if meta else ""
         agents.append({
-            "name": name,
-            "username": p.get("username", ""),
-            "bio": p.get("bio", ""),
-            "persona": p.get("persona", ""),
-            "post_count": len(posts_by_agent.get(name, [])),
-            "posts": posts_by_agent.get(name, []),
+            "name": title,
+            "username": pname,
+            "bio": bio,
+            "persona": persona_desc,
+            "post_count": 1 if body else 0,
+            "posts": [body] if body else [],
         })
+        if body:
+            timeline.append({"agent": title, "content": body, "round": idx + 1})
 
-    return JSONResponse({"ok": True, "simulation_id": sim_id, "agents": agents, "timeline": timeline})
+    return JSONResponse({"ok": True, "agents": agents, "timeline": timeline})
 
 
 if __name__ == "__main__":

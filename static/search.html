@@ -12,7 +12,7 @@
   <script>
     (function () {
       try {
-        var pref = localStorage.getItem('epm_theme_pref') || 'dark';
+        var pref = localStorage.getItem('epm_theme_pref') || 'light';
         var resolved = pref === 'system' ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : pref;
         var bg = resolved === 'light' ? '#f5f8fd' : '#061326';
         var chrome = resolved === 'light' ? '#f5f8fd' : '#061326';
@@ -23,13 +23,20 @@
       } catch (err) {
         document.documentElement.style.backgroundColor = '#061326';
       }
+      // Density bootstrap — set before first paint to avoid flicker
+      try {
+        var density = localStorage.getItem('epm_density_pref') || 'comfortable';
+        document.documentElement.dataset.density = density;
+      } catch (_) {}
     })();
   </script>
   <script>try{if(!sessionStorage.getItem("epm_splash_shown")&&location.pathname.indexOf("login")<0&&location.pathname.indexOf("reset")<0){var _sh=document.createElement("div");_sh.id="fvsShield";_sh.style.cssText="position:fixed;inset:0;z-index:9998;background:#040d1a";document.documentElement.appendChild(_sh);}}catch(e){}</script>
   <title>Fund Search | EPM Market Intelligence</title>
   <link rel="stylesheet" href="/static/css/styles.css?v=20260410a" />
   <link rel="stylesheet" href="/static/css/design-v2.css?v=20260410a" />
+  <link rel="stylesheet" href="/static/css/design-system.css?v=20260419a" />
   <script src="/static/js/plotly-2.35.2.min.js"></script>
+  <script src="/static/js/chrome.js?v=20260419a"></script>
   <script defer src="/static/js/site.js?v=20260410a"></script>
   <script defer src="/static/js/search.js?v=20260325a"></script>
   <script defer src="/static/js/deep_analysis.js"></script>
@@ -140,10 +147,9 @@
     /* Horizontal pipeline track */
     .swarm-pipeline {
       display: flex; align-items: flex-start;
-      padding: 0 22px 14px;
-      overflow-x: auto; scrollbar-width: none;
+      padding: 12px 22px 14px;
+      /* overflow-x:auto intentionally removed — it caused overflow-y:hidden which clipped pip-dot pulse animation */
     }
-    .swarm-pipeline::-webkit-scrollbar { display: none; }
     .pip-step {
       display: flex; flex-direction: column; align-items: center;
       flex: 1; min-width: 0; position: relative; gap: 5px;
@@ -255,113 +261,57 @@
     }
   </style>
 </head>
-<body data-page="search">
-  <div id="settingsOverlay" class="settings-overlay"></div>
+<body data-page="search" data-ds="v3">
 
-  <aside id="settingsDrawer" class="settings-drawer">
-    <div class="section-title-row">
-      <h3>Settings</h3>
-      <button id="closeSettingsBtn" class="btn btn-ghost">Close</button>
-    </div>
-
-    <div class="settings-group">
-      <h4>Theme</h4>
-      <div class="radio-row">
-        <div class="radio-chip" data-pref-theme="dark">Dark</div>
-        <div class="radio-chip" data-pref-theme="light">Light</div>
-        <div class="radio-chip" data-pref-theme="system">System</div>
-      </div>
-    </div>
-
-    <div class="settings-group">
-      <h4>Animations</h4>
-      <div class="radio-row">
-        <div class="radio-chip" data-pref-animations="on">On</div>
-        <div class="radio-chip" data-pref-animations="off">Reduced</div>
-      </div>
-    </div>
-
-    <div class="settings-group">
-      <h4>Default chart range</h4>
-      <div class="radio-row">
-        <div class="radio-chip" data-pref-range="6m">6M</div>
-        <div class="radio-chip" data-pref-range="1y">1Y</div>
-        <div class="radio-chip" data-pref-range="3y">3Y</div>
-        <div class="radio-chip" data-pref-range="all">ALL</div>
-      </div>
-    </div>
-
-    <div class="settings-group">
-      <h4>News on search by default</h4>
-      <div class="radio-row">
-        <div class="radio-chip" data-pref-news="true">On</div>
-        <div class="radio-chip" data-pref-news="false">Off</div>
-      </div>
-    </div>
-  </aside>
+  <!-- chrome.js injects: settings overlay, settings drawer, topbar header -->
+  <div id="epmChrome"></div>
+  <script>if (window.EPMChrome) EPMChrome.render();</script>
 
   <div class="page-shell">
-    <header class="topbar fade-in">
-      <div class="brand-block">
-        <img class="brand-logo" src="/static/epm_logo.png?v=20260322f" alt="EPM Financial" />
-        <div class="brand-copy">
-          <h1>EPM Market Intelligence</h1>
-          <p>Fund Search — live ticker analysis with charting, quant data, and future model overlays.</p>
+
+    <!-- ── Search input ── -->
+    <div class="ds-card is-panel fade-in reveal-delay-1" style="padding:var(--s-3) var(--s-4);">
+      <div class="ds-section-header" style="margin-bottom:var(--s-3);">
+        <div>
+          <div class="ds-eyebrow">Fund Search</div>
+          <h2 class="ds-title is-h3">Search any ticker or fund</h2>
         </div>
       </div>
-
-      <nav class="main-nav">
-        <a class="nav-link" href="/">Home</a>
-        <a class="nav-link" href="/markets">Markets</a>
-        <a class="nav-link" href="/forecasting">Forecasting</a>
-        <a class="nav-link" href="/portfolios">Model Portfolios</a>
-        <a class="nav-link" href="/search">Fund Search</a>
-      </nav>
-
-      <nav class="topbar-nav">
-        <a class="topbar-nav-link nav-link" href="/">Home</a>
-        <a class="topbar-nav-link nav-link" href="/markets">Markets</a>
-        <a class="topbar-nav-link nav-link" href="/forecasting">Forecasting</a>
-        <a class="topbar-nav-link nav-link" href="/portfolios">Portfolios</a>
-      </nav>
-
-      <div class="top-actions">
-        <button id="openSettingsBtn" class="btn btn-icon settings-gear-btn" type="button" aria-label="Open settings" title="Settings"></button>
-      </div>
-    </header>
-
-    <div class="search-bar fade-in reveal-delay-1">
-      <div class="search-input-stack">
-        <div class="search-input-shell">
-          <span class="search-input-icon" aria-hidden="true">⌕</span>
-          <input id="tickerInput" type="text" placeholder="Enter ticker, e.g. AAPL" value="AAPL" autocomplete="off" autocapitalize="characters" spellcheck="false" />
+      <div class="search-bar">
+        <div class="search-input-stack">
+          <div class="search-input-shell">
+            <span class="search-input-icon" aria-hidden="true">⌕</span>
+            <input id="tickerInput" type="text" placeholder="Enter ticker, e.g. AAPL" value="AAPL" autocomplete="off" autocapitalize="characters" spellcheck="false" />
+          </div>
+          <div id="tickerSuggestions" class="ticker-suggestions hidden"></div>
         </div>
-        <div id="tickerSuggestions" class="ticker-suggestions hidden"></div>
+        <label class="inline">
+          <input id="includeNews" type="checkbox" checked />
+          Include news
+        </label>
+        <button id="runBtn" class="btn btn-primary ds-btn is-primary">Analyze</button>
       </div>
-
-      <label class="inline">
-        <input id="includeNews" type="checkbox" checked />
-        Include news
-      </label>
-      <button id="runBtn" class="btn btn-primary">Analyze</button>
     </div>
 
     <div id="status" class="status"></div>
 
     <div id="results" class="hidden">
-      <section id="searchSummaryHeader" class="card summary-card sticky-search-header fade-in reveal-delay-1">
-        <div class="section-title-row">
-          <h2 id="titleLine">Ticker Snapshot</h2>
+
+      <!-- ── Sticky summary header ── -->
+      <section id="searchSummaryHeader" class="ds-card is-panel card summary-card sticky-search-header fade-in reveal-delay-1">
+        <div class="ds-section-header">
+          <h2 id="titleLine" class="ds-title is-h3">Ticker Snapshot</h2>
           <span class="badge">Live Any-Ticker Engine</span>
         </div>
         <div id="summaryText"></div>
       </section>
 
+      <!-- ── Price chart + snapshot details ── -->
       <section class="chart-top-grid">
-        <div class="card fade-in reveal-delay-2">
+        <div class="ds-card is-panel card fade-in reveal-delay-2">
           <div class="chart-toolbar">
             <div class="toolbar-left">
-              <h3 style="margin:0;color:var(--accent);">Price Chart</h3>
+              <h3 class="ds-title is-h3" style="margin:0;">Price Chart</h3>
               <select id="periodSelect" class="chart-period-select">
                 <option value="5d">5D</option>
                 <option value="1m">1M</option>
@@ -375,7 +325,6 @@
                 <option value="all">ALL</option>
               </select>
             </div>
-
             <div class="toolbar-right">
               <div class="toggle-group">
                 <button class="toggle-chip active" data-toggle="ma20">MA20</button>
@@ -388,7 +337,6 @@
               <button id="expandChartBtn" class="btn btn-secondary">Expand</button>
             </div>
           </div>
-
           <div class="chart-range-tools">
             <div class="chart-date-range">
               <label class="chart-date-field">From <input id="customStartDate" type="date" /></label>
@@ -397,34 +345,31 @@
               <button id="clearDateRangeBtn" class="btn btn-ghost btn-sm" type="button">Clear</button>
             </div>
           </div>
-
           <div class="chart-wrap">
             <div id="chart"></div>
           </div>
           <div class="chart-footnote">YTD is the default view. Card thumbnails elsewhere use a 1M sparkline.</div>
         </div>
 
-        <div class="card fade-in reveal-delay-3 chart-side-card">
-          <div class="section-title-row">
-            <h3>Snapshot Details</h3>
-            <span class="badge">At a Glance</span>
+        <div class="ds-card is-panel card fade-in reveal-delay-3 chart-side-card">
+          <div class="ds-section-header">
+            <div>
+              <div class="ds-eyebrow">At a Glance</div>
+              <h3 class="ds-title is-h3">Snapshot Details</h3>
+            </div>
           </div>
-
           <div class="info-block">
             <div class="info-label">Ticker</div>
-            <div id="infoTicker" class="info-value">AAPL</div>
+            <div id="infoTicker" class="info-value ds-num">AAPL</div>
           </div>
-
           <div class="info-block">
             <div class="info-label">Name</div>
             <div id="infoName" class="info-value">Apple Inc.</div>
           </div>
-
           <div class="info-block">
             <div class="info-label">Description</div>
             <div id="infoDescription" class="info-paragraph">Loading description...</div>
           </div>
-
           <div id="topNewsSection" class="info-block">
             <div class="info-label">Most Relevant News</div>
             <div id="topNewsCard" class="top-news-stack"></div>
@@ -432,52 +377,52 @@
         </div>
       </section>
 
+      <!-- ── Metric cards ── -->
       <section class="two-col-grid">
-        <div class="card fade-in reveal-delay-1">
-          <h3>Price</h3>
+        <div class="ds-card is-panel card fade-in reveal-delay-1">
+          <h3 class="ds-title is-h3">Price</h3>
           <div id="priceCard" class="kv-grid"></div>
         </div>
-
-        <div class="card fade-in reveal-delay-2">
-          <h3>Returns</h3>
+        <div class="ds-card is-panel card fade-in reveal-delay-2">
+          <h3 class="ds-title is-h3">Returns</h3>
           <div id="returnsCard" class="kv-grid"></div>
         </div>
-
-        <div class="card fade-in reveal-delay-2">
-          <h3>Risk</h3>
+        <div class="ds-card is-panel card fade-in reveal-delay-2">
+          <h3 class="ds-title is-h3">Risk</h3>
           <div id="riskCard" class="kv-grid"></div>
         </div>
-
-        <div class="card fade-in reveal-delay-3">
-          <h3>Trend</h3>
+        <div class="ds-card is-panel card fade-in reveal-delay-3">
+          <h3 class="ds-title is-h3">Trend</h3>
           <div id="trendCard" class="kv-grid"></div>
         </div>
-
-        <div class="card fade-in reveal-delay-2">
-          <h3>Fundamentals</h3>
+        <div class="ds-card is-panel card fade-in reveal-delay-2">
+          <h3 class="ds-title is-h3">Fundamentals</h3>
           <div id="fundamentalsCard" class="kv-grid"></div>
         </div>
-
-        <div class="card fade-in reveal-delay-3">
-          <h3>Sentiment</h3>
+        <div class="ds-card is-panel card fade-in reveal-delay-3">
+          <h3 class="ds-title is-h3">Sentiment</h3>
           <div id="sentimentCard" class="kv-grid"></div>
         </div>
       </section>
 
-      <section id="recentNewsSection" class="card fade-in reveal-delay-3" style="margin-top:18px;">
-        <div class="section-title-row">
-          <h3>Recent News</h3>
-          <span class="badge">Provider News, Curated Layer Later</span>
+      <!-- ── Recent News ── -->
+      <section id="recentNewsSection" class="ds-card is-panel card fade-in reveal-delay-3" style="margin-top:18px;">
+        <div class="ds-section-header">
+          <div>
+            <div class="ds-eyebrow">Curated</div>
+            <h3 class="ds-title is-h3">Recent News</h3>
+          </div>
+          <span class="badge">Provider News</span>
         </div>
         <div id="newsCard" class="news-list"></div>
       </section>
 
-      <!-- ── DEEP ANALYSIS LAB ── -->
+      <!-- ── DEEP ANALYSIS LAB — untouched, deferred to Analyst Council pass ── -->
       <section id="deepAnalysisLab" style="display:none; margin-top:28px;">
         <div class="lab-header" style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
           <div>
             <div class="lab-title" style="font-size:18px;font-weight:800;background:linear-gradient(135deg,#d4a84b,#f0c878);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">Deep Analysis Lab</div>
-            <div style="font-size:12px;color:var(--muted);margin-top:2px;">On-demand swarm intelligence — Kronos + MiroFish + EPM ensemble</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:2px;">On-demand deep intelligence — Kronos + Analyst Council + EPM ensemble</div>
           </div>
           <span id="dalTickerBadge" style="margin-left:auto;font-size:10px;font-weight:700;padding:3px 9px;border-radius:4px;background:rgba(212,168,75,0.15);color:#d4a84b;border:1px solid rgba(212,168,75,0.3);text-transform:uppercase;letter-spacing:.08em;"></span>
         </div>
@@ -499,17 +444,17 @@
             <div style="background:var(--panel,rgba(8,18,40,0.93));border:1px solid rgba(212,168,75,0.35);border-radius:12px;padding:22px 24px;position:relative;overflow:hidden;">
               <div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#d4a84b,#f0c878);"></div>
               <span style="position:absolute;top:16px;right:16px;font-size:10px;font-weight:700;padding:3px 8px;border-radius:4px;text-transform:uppercase;letter-spacing:.08em;background:rgba(212,168,75,0.18);color:#d4a84b;border:1px solid rgba(212,168,75,0.3);">Deep</span>
-              <div style="font-size:17px;font-weight:700;margin-bottom:4px;">Deep Swarm Analysis</div>
+              <div style="font-size:17px;font-weight:700;margin-bottom:4px;">Council Deep Analysis</div>
               <div style="font-size:11px;color:var(--muted);margin-bottom:10px;">~22 min · Async · Notified on completion</div>
-              <div style="font-size:12px;color:var(--muted);line-height:1.6;margin-bottom:16px;">Kronos OHLCV forecast + MiroFish multi-agent swarm simulation synthesized with EPM ensemble.</div>
-              <button id="dalRunBtn" style="width:100%;padding:10px;border-radius:8px;border:none;font-size:13px;font-weight:700;cursor:pointer;background:linear-gradient(135deg,#d4a84b 0%,#a07828 100%);color:#0a1928;">Run Deep Swarm Analysis</button>
+              <div style="font-size:12px;color:var(--muted);line-height:1.6;margin-bottom:16px;">Kronos OHLCV forecast + 7-analyst Council deliberation synthesized with EPM ensemble.</div>
+              <button id="dalRunBtn" style="width:100%;padding:10px;border-radius:8px;border:none;font-size:13px;font-weight:700;cursor:pointer;background:linear-gradient(135deg,#d4a84b 0%,#a07828 100%);color:#0a1928;">Run Analyst Council</button>
             </div>
           </div>
           <!-- Powered by bar -->
           <div style="background:var(--panel-2,#09152a);border:1px solid var(--border);border-radius:8px;padding:10px 16px;display:flex;align-items:center;gap:16px;font-size:11px;color:var(--muted);flex-wrap:wrap;">
             <span>Powered by</span>
             <span style="display:flex;align-items:center;gap:6px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:600;"><span style="width:6px;height:6px;border-radius:50%;background:#d4a84b;display:inline-block;"></span><strong>Kronos</strong> OHLCV Foundation Model</span>
-            <span style="display:flex;align-items:center;gap:6px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:600;"><span style="width:6px;height:6px;border-radius:50%;background:#38bdf8;display:inline-block;"></span><strong>MiroFish</strong> Swarm Intelligence</span>
+            <span style="display:flex;align-items:center;gap:6px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:600;"><span style="width:6px;height:6px;border-radius:50%;background:#38bdf8;display:inline-block;"></span><strong>Analyst Council</strong> · 7 Analysts</span>
             <span style="display:flex;align-items:center;gap:6px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:600;"><span style="width:6px;height:6px;border-radius:50%;background:#22c55e;display:inline-block;"></span><strong>EPM</strong> 6-Model Ensemble</span>
           </div>
         </div>
@@ -549,7 +494,7 @@
               </div>
               <!-- Current stage info -->
               <div class="swarm-stage-info">
-                <div class="swarm-stage-kicker">Deep Swarm Analysis</div>
+                <div class="swarm-stage-kicker">Analyst Council</div>
                 <div class="swarm-stage-name" id="dalCurrentStage">Initializing…</div>
                 <div class="swarm-stage-desc" id="dalCurrentDesc">Preparing analysis pipeline</div>
               </div>
@@ -565,8 +510,9 @@
               </div>
               <div class="swarm-bar-meta">
                 <span class="swarm-pct" id="dalProgressPct">0%</span>
-                <span class="swarm-eta">~22 min · You can leave this page</span>
+                <span class="swarm-eta" id="dalEta">~22 min · You can leave this page</span>
               </div>
+              <div id="dalQueueInfo" style="display:none;margin-top:8px;font-size:11px;color:var(--muted,#7d94c0);text-align:center;"></div>
             </div>
           </div>
         </div>
@@ -576,7 +522,7 @@
           <div style="background:var(--panel,rgba(8,18,40,0.93));border:1px solid rgba(34,197,94,0.35);border-radius:12px;padding:20px 22px;display:flex;align-items:center;justify-content:space-between;gap:16px;">
             <div>
               <div style="font-size:14px;font-weight:700;color:#22c55e;margin-bottom:4px;">Analysis Complete</div>
-              <div style="font-size:12px;color:var(--muted);">Your Deep Swarm Analysis report is ready.</div>
+              <div style="font-size:12px;color:var(--muted);">Your Analyst Council report is ready.</div>
             </div>
             <div style="display:flex;align-items:center;gap:10px;">
               <button id="dalNewAnalysisBtn" style="padding:10px 16px;border-radius:8px;border:1px solid rgba(212,168,75,0.3);font-size:12px;font-weight:600;cursor:pointer;background:transparent;color:var(--muted);white-space:nowrap;">Run New Analysis</button>
@@ -585,12 +531,13 @@
           </div>
         </div>
       </section>
-    </div>
+
+    </div><!-- /#results -->
 
     <div class="page-footer">
       Fund Search — chart overlays, expandable view, and future forecast integration
     </div>
-  </div>
+  </div><!-- /.page-shell -->
 
   <div id="chartModal" class="modal">
     <div class="modal-inner modal-chart-inner">
@@ -609,5 +556,6 @@
       <div id="descriptionModalCopy" class="description-modal-copy"></div>
     </div>
   </div>
+
 </body>
 </html>

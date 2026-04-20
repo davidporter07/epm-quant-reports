@@ -1,0 +1,111 @@
+{
+  "tournament": "Quant Model Cup",
+  "start": "2020-01-01",
+  "end": "2025-12-31",
+  "data_quality": {
+    "survivorship_bias": "eliminated via point-in-time S&P 500 composition",
+    "composition_changes_tracked": 118,
+    "historical_universe_size": 609,
+    "earnings_source": "yfinance (limited)",
+    "pairs_universe": "point-in-time (no look-ahead)"
+  },
+  "spy_baseline": 0.1497,
+  "models": [
+    {
+      "model_name": "OVERNIGHT",
+      "total_return": 1.5042,
+      "cagr": 0.1655,
+      "sharpe": 0.7999,
+      "max_drawdown": -0.3413,
+      "win_rate": 0.5324,
+      "trade_count": 7046,
+      "avg_holding_days": 32.2,
+      "worst_year_return": -0.1532,
+      "beats_buyhold": true,
+      "spy_cagr": 0.1497,
+      "annual_returns": {
+        "2020": 0.3499,
+        "2021": 0.273,
+        "2022": -0.1532,
+        "2023": 0.2731,
+        "2024": 0.1709,
+        "2025": 0.1545
+      },
+      "elapsed_s": 2.7,
+      "rank": 1,
+      "advances": true
+    },
+    {
+      "model_name": "MOMENTUM",
+      "total_return": 0.0829,
+      "cagr": 0.0134,
+      "sharpe": 0.1721,
+      "max_drawdown": -0.345,
+      "win_rate": 0.4507,
+      "trade_count": 1675,
+      "avg_holding_days": 75.3,
+      "worst_year_return": -0.2815,
+      "beats_buyhold": false,
+      "spy_cagr": 0.1497,
+      "annual_returns": {
+        "2020": 0.0,
+        "2021": -0.1623,
+        "2022": 0.186,
+        "2023": -0.2815,
+        "2024": 0.4418,
+        "2025": 0.0521
+      },
+      "elapsed_s": 1.0,
+      "rank": 2,
+      "advances": false
+    },
+    {
+      "model_name": "PAIRS_Z",
+      "total_return": 0.053,
+      "cagr": 0.0087,
+      "sharpe": 0.1588,
+      "max_drawdown": -0.1228,
+      "win_rate": 0.5249,
+      "trade_count": 2071,
+      "avg_holding_days": 43.6,
+      "worst_year_return": -0.0895,
+      "beats_buyhold": false,
+      "spy_cagr": 0.1497,
+      "annual_returns": {
+        "2020": 0.0,
+        "2021": 0.08,
+        "2022": -0.0156,
+        "2023": 0.0234,
+        "2024": -0.0895,
+        "2025": 0.0629
+      },
+      "elapsed_s": 5.1,
+      "rank": 3,
+      "advances": false
+    },
+    {
+      "model_name": "PAIRS_DIVERGE",
+      "total_return": 0.0393,
+      "cagr": 0.0065,
+      "sharpe": 0.1218,
+      "max_drawdown": -0.1472,
+      "win_rate": 0.5056,
+      "trade_count": 2421,
+      "avg_holding_days": 25.6,
+      "worst_year_return": -0.0858,
+      "beats_buyhold": false,
+      "spy_cagr": 0.1497,
+      "annual_returns": {
+        "2020": 0.0,
+        "2021": 0.1607,
+        "2022": -0.0858,
+        "2023": 0.0889,
+        "2024": -0.0581,
+        "2025": -0.0449
+      },
+      "elapsed_s": 4.2,
+      "rank": 4,
+      "advances": false
+    }
+  ]
+}

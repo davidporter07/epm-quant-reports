@@ -210,6 +210,19 @@ def load_commentary() -> dict:
                     existing.update(bonds_overlay)
                     commentary["bonds_table"] = existing
 
+                    # Sync market_snapshot "10-Yr Yield" to match the authoritative
+                    # arbitrated value so page 1 and page 2 show consistent data.
+                    ten_yr = yc_yields.get("10-Year Yield")
+                    if ten_yr and ten_yr.get("level") is not None:
+                        snap = commentary.get("market_snapshot", {})
+                        if "10-Yr Yield" in snap:
+                            snap["10-Yr Yield"] = {
+                                "level":      ten_yr["level"],
+                                "change":     ten_yr.get("change"),
+                                "pct_change": ten_yr.get("pct_change"),
+                            }
+                            commentary["market_snapshot"] = snap
+
             # Attach full economics payload for use in report sections
             econ = arb.get("economics", {})
             if econ:

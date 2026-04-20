@@ -1,0 +1,833 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>EPM Market Intelligence — Gap Audit: Live vs Direction C</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+:root {
+  --navy: #0B1F3A;
+  --canvas: #F4F6FA;
+  --card: #ffffff;
+  --line: #E3E7EE;
+  --line-soft: #EEF1F6;
+  --ink: #1F2937;
+  --ink-soft: #3E4C63;
+  --mute: #6B7688;
+  --accent: #1E7F74;
+  --amber: #C28A2B;
+  --up: #0F8A56;
+  --up-soft: #E4F3EC;
+  --down: #B3271C;
+  --down-soft: #FBE8E5;
+  --warn: #9A4A00;
+  --warn-soft: #FEF3E2;
+  --r: 6px;
+  --shadow: 0 1px 2px rgba(11,31,58,0.04), 0 4px 16px rgba(11,31,58,0.07);
+  --sans: 'Inter', -apple-system, sans-serif;
+  --serif: 'Source Serif 4', Georgia, serif;
+  --mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { background: var(--canvas); color: var(--ink); font-family: var(--sans); font-size: 14px; line-height: 1.5; }
+body { max-width: 1120px; margin: 0 auto; padding: 0 40px 80px; }
+
+/* ── MASTHEAD ── */
+.masthead {
+  background: var(--navy); color: #E9EDF3;
+  margin: 0 -40px; padding: 20px 40px;
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 48px;
+}
+.masthead-logo { display: flex; align-items: center; gap: 12px; }
+.masthead-logo-mark {
+  width: 28px; height: 28px; background: var(--amber); color: var(--navy);
+  display: grid; place-items: center; font-weight: 700; font-size: 13px; border-radius: 4px;
+}
+.masthead-name { font-weight: 600; font-size: 16px; letter-spacing: -0.2px; }
+.masthead-name span { opacity: 0.65; font-weight: 400; }
+.masthead-meta { font-family: var(--mono); font-size: 11px; color: rgba(255,255,255,0.55); }
+
+/* ── HERO ── */
+.hero { margin-bottom: 56px; }
+.hero-eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 1.2px; text-transform: uppercase; color: var(--accent); margin-bottom: 10px; }
+.hero-title { font-family: var(--serif); font-size: 48px; font-weight: 600; color: var(--navy); letter-spacing: -0.6px; line-height: 1.1; margin-bottom: 16px; }
+.hero-sub { font-size: 17px; color: var(--ink-soft); line-height: 1.55; max-width: 780px; }
+
+/* ── SECTION HEADER ── */
+.section-head { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.section-head-left { }
+.section-eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: var(--accent); margin-bottom: 4px; }
+.section-title { font-size: 20px; font-weight: 600; color: var(--navy); letter-spacing: -0.2px; }
+.section-action { font-size: 13px; color: var(--accent); font-weight: 500; }
+
+/* ── CARD ── */
+.card { background: var(--card); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow); }
+.card-padded { padding: 24px; }
+
+/* ── PILLS ── */
+.pill { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 100px; font-size: 11.5px; font-weight: 600; font-family: var(--mono); }
+.pill-up { background: var(--up-soft); color: var(--up); }
+.pill-down { background: var(--down-soft); color: var(--down); }
+.pill-warn { background: var(--warn-soft); color: var(--warn); }
+.pill-neutral { background: var(--line-soft); color: var(--ink-soft); }
+.pill-accent { background: #D8EAE7; color: var(--accent); }
+.pill-amber { background: #FBF2DC; color: var(--amber); }
+
+/* ── PRIORITY BADGE ── */
+.priority {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 50%;
+  font-size: 12px; font-weight: 700; flex-shrink: 0;
+}
+.p1 { background: #FBE8E5; color: var(--down); }
+.p2 { background: #FBE8E5; color: var(--down); }
+.p3 { background: #FEF3E2; color: var(--warn); }
+.p4 { background: #FEF3E2; color: var(--warn); }
+.p5 { background: #FEF3E2; color: var(--warn); }
+.p6 { background: var(--line-soft); color: var(--ink-soft); }
+.p7 { background: var(--line-soft); color: var(--ink-soft); }
+.p8 { background: var(--line-soft); color: var(--ink-soft); }
+.p9 { background: var(--line-soft); color: var(--ink-soft); }
+.p10 { background: var(--line-soft); color: var(--ink-soft); }
+
+/* ── ISSUE CARD ── */
+.issue {
+  display: grid; grid-template-columns: 30px 1fr; gap: 16px;
+  padding: 20px 0; border-bottom: 1px solid var(--line-soft); align-items: flex-start;
+}
+.issue:last-child { border-bottom: none; }
+.issue-body { }
+.issue-title { font-weight: 600; font-size: 15px; color: var(--navy); margin-bottom: 6px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.issue-desc { color: var(--ink-soft); font-size: 13.5px; line-height: 1.55; margin-bottom: 10px; }
+.issue-fix { background: var(--line-soft); border-left: 3px solid var(--accent); padding: 10px 14px; font-size: 13px; color: var(--ink); line-height: 1.5; border-radius: 0 4px 4px 0; }
+.issue-fix strong { color: var(--navy); }
+
+/* ── SCREEN AUDIT ── */
+.screen-audit { }
+.screen-block { margin-bottom: 40px; }
+.screen-label { font-size: 12px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: var(--mute); margin-bottom: 14px; }
+.gap-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; margin-bottom: 10px; }
+.gap-col { padding: 14px 16px; }
+.gap-live { background: #1a1f2e; color: rgba(255,255,255,0.7); }
+.gap-live .gap-col-head { color: rgba(255,255,255,0.4); }
+.gap-target { background: #fff; }
+.gap-col-head { font-size: 10px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: var(--mute); margin-bottom: 8px; }
+.gap-col ul { padding-left: 16px; }
+.gap-col li { font-size: 13px; line-height: 1.6; margin-bottom: 3px; }
+.gap-live li { color: rgba(255,255,255,0.75); }
+.gap-target li { color: var(--ink-soft); }
+
+/* ── BRIEF ── */
+.brief-block { margin-bottom: 28px; }
+.brief-title { font-size: 13px; font-weight: 700; color: var(--navy); letter-spacing: 0.2px; text-transform: uppercase; margin-bottom: 10px; padding-bottom: 6px; border-bottom: 2px solid var(--navy); }
+.brief-item { display: grid; grid-template-columns: 100px 1fr; gap: 14px; padding: 10px 0; border-bottom: 1px solid var(--line-soft); font-size: 13.5px; }
+.brief-item:last-child { border-bottom: none; }
+.brief-item-key { color: var(--mute); font-weight: 500; padding-top: 1px; }
+.brief-item-val { color: var(--ink); line-height: 1.55; }
+.brief-item-val code { font-family: var(--mono); font-size: 12px; background: var(--line-soft); padding: 1px 5px; border-radius: 3px; color: var(--navy); }
+
+/* ── TYPE TAG ── */
+.type-tag { font-size: 10.5px; font-weight: 600; letter-spacing: 0.6px; text-transform: uppercase; padding: 2px 8px; border-radius: 100px; }
+.t-visual { background: #EEF5FF; color: #1E5FAA; }
+.t-interaction { background: #F0E8FF; color: #6B21A8; }
+.t-bug { background: #FBE8E5; color: var(--down); }
+
+/* ── UTIL ── */
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+.mb8 { margin-bottom: 8px; }
+.mb16 { margin-bottom: 16px; }
+.mb32 { margin-bottom: 32px; }
+.mb48 { margin-bottom: 48px; }
+.mt4 { margin-top: 4px; }
+.mt8 { margin-top: 8px; }
+.mt16 { margin-top: 16px; }
+.muted { color: var(--mute); font-size: 13px; }
+.mono { font-family: var(--mono); }
+hr.rule { border: none; border-top: 1px solid var(--line); margin: 40px 0; }
+.callout { padding: 16px 20px; background: var(--card); border: 1px solid var(--line); border-left: 3px solid var(--amber); border-radius: 0 var(--r) var(--r) 0; box-shadow: var(--shadow); margin-bottom: 24px; font-size: 13.5px; line-height: 1.55; }
+.callout strong { color: var(--navy); }
+
+@media print {
+  body { max-width: none; padding: 0 32px 40px; }
+  .masthead { margin: 0 -32px; }
+  .card { box-shadow: none; }
+  .page-break { page-break-before: always; break-before: page; }
+}
+</style>
+</head>
+<body>
+
+<!-- MASTHEAD -->
+<div class="masthead">
+  <div class="masthead-logo">
+    <div class="masthead-logo-mark">E</div>
+    <div class="masthead-name">EPM <span>Market Intelligence</span></div>
+  </div>
+  <div class="masthead-meta">GAP AUDIT · LIVE vs DIRECTION C · APR 19, 2026</div>
+</div>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="hero-eyebrow">Internal Design Review</div>
+  <div class="hero-title">Gap audit: live implementation vs Direction C.</div>
+  <div class="hero-sub">
+    A screen-by-screen analysis of where the live site diverges from the intended Direction C system —
+    Executive / Client-facing. Prioritized issues, classification by type (visual / interaction / bug),
+    exact fixes, and a Claude Code implementation brief.
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════ -->
+<!-- SECTION 1 — SCREEN-BY-SCREEN              -->
+<!-- ══════════════════════════════════════════ -->
+<div class="section-head mb32">
+  <div class="section-head-left">
+    <div class="section-eyebrow">Section 1</div>
+    <div class="section-title">Screen-by-screen gap analysis</div>
+  </div>
+</div>
+
+<div class="screen-block">
+  <div class="screen-label">Screen 1 — Homepage</div>
+  <div class="gap-row">
+    <div class="gap-col gap-live">
+      <div class="gap-col-head">Live — what's there</div>
+      <ul>
+        <li>Dark navy background, no light-mode canvas</li>
+        <li>Top bar: eye icon + search box + hamburger-style density toggle + avatar — <em>no section navigation</em></li>
+        <li>Three "Open X" launch cards (Markets, Forecasting, Portfolios) — nav workaround</li>
+        <li>Featured watchlist: stock cards with sparklines, prices, signal labels ("Strong uptrend" / "Downtrend")</li>
+        <li>Portfolio Watchlist panel alongside — two-column layout, card style slightly different</li>
+        <li>Latest Big News: three-column text grid, no kickers or source hierarchy</li>
+        <li>Footer: "EPM Market Intelligence" tiny text — wordmark appears nowhere prominently</li>
+      </ul>
+    </div>
+    <div class="gap-col gap-target">
+      <div class="gap-col-head">Direction C — intended</div>
+      <ul>
+        <li>Light canvas (#F4F6FA), white cards, navy masthead only</li>
+        <li>Full persistent nav in masthead: Homepage, Markets, Forecasting, Model Portfolios, Fund Search, Research, Watchlists</li>
+        <li>No launch cards — nav does the job</li>
+        <li>KPI strip: 5 index cards with sparkline + soft pill delta</li>
+        <li>Hero editorial card (lead story) + today's calendar right rail</li>
+        <li>Gainers / Decliners / Newswire in a 3-col row — consistent card shell</li>
+        <li>EPM wordmark in masthead, amber logotype, always visible</li>
+      </ul>
+    </div>
+  </div>
+  <div class="card card-padded" style="font-size:13px; color: var(--ink-soft); line-height:1.55;">
+    <strong style="color:var(--navy)">Headline gap:</strong> The homepage is doing navigation's job with the three "Open X" cards because the top bar has no section links. Remove those cards, add the nav. The dark-mode-only palette is the single biggest divergence from Direction C's visual system — everything else flows from fixing that.
+  </div>
+</div>
+
+<div class="screen-block">
+  <div class="screen-label">Screen 2 — Markets</div>
+  <div class="gap-row">
+    <div class="gap-col gap-live">
+      <div class="gap-col-head">Live — what's there</div>
+      <ul>
+        <li>Navigation: <strong>completely absent</strong> — no way to reach other sections</li>
+        <li>Page is extremely tall; almost everything shows "Loading…" empty states</li>
+        <li>Chart panels are large black rectangles — zero content visible</li>
+        <li>Section headers exist (CHARTS, SENTIMENT &amp; POSTURE, etc.) but hierarchy is weak — same weight as body text</li>
+        <li>"Sign in" button appears in the top-right — inconsistent with logged-in state shown on Homepage</li>
+        <li>Loading states: plain text "Loading indexes…" / "Loading trend data…" — no skeleton, no shimmer</li>
+        <li>No timestamp or data-as-of indicator on unavailable panels</li>
+      </ul>
+    </div>
+    <div class="gap-col gap-target">
+      <div class="gap-col-head">Direction C — intended</div>
+      <ul>
+        <li>Persistent nav always visible — Markets tab highlighted with amber underline</li>
+        <li>Sub-tabs: Overview / Equities / Rates / FX / Commodities / Crypto (segmented control)</li>
+        <li>Featured chart (SPX) + global indices right rail — data-first above fold</li>
+        <li>Sector performance: 8 metric cards with sparklines — compact, scannable</li>
+        <li>Gainers / Decliners: table-style rows with mono numerics + soft delta pills</li>
+        <li>Skeleton loaders while data fetches; panels labeled with data-as-of timestamp</li>
+      </ul>
+    </div>
+  </div>
+  <div class="card card-padded" style="font-size:13px; color: var(--ink-soft); line-height:1.55;">
+    <strong style="color:var(--navy)">Headline gap:</strong> This page is broken in its current state — the empty loading panels create a "ghost layout" that communicates nothing. Even when data loads, navigation is absent. This is the highest-severity page.
+  </div>
+</div>
+
+<div class="screen-block">
+  <div class="screen-label">Screen 3 — Forecasting (MAG7 Dashboard)</div>
+  <div class="gap-row">
+    <div class="gap-col gap-live">
+      <div class="gap-col-head">Live — what's there</div>
+      <ul>
+        <li>Navigation: present in top bar but minimal — no section links</li>
+        <li>Real data shows — this page works best of all five</li>
+        <li>Consensus Forecast cards per ticker: good data density, confidence badges are amber (on-brand)</li>
+        <li>Model Leaderboard: trophy/medal icons feel gamey for a professional platform</li>
+        <li>"Daily Commentary / Model Pipelines" tabs: good structure but tabs are hard to read (low contrast)</li>
+        <li>Page title "MAG7 Forecast Dashboard" is specific — no broader Forecasting section context</li>
+        <li>Card borders are dark on dark — individual items blend together</li>
+      </ul>
+    </div>
+    <div class="gap-col gap-target">
+      <div class="gap-col-head">Direction C — intended</div>
+      <ul>
+        <li>Eyebrow "EPM Research" + large display title "Forecasting"</li>
+        <li>Summary scenario cards (3-col): probability + delta vs consensus + EPM take</li>
+        <li>House views table: Metric / Consensus / EPM / Δ / Confidence (bar, not badge)</li>
+        <li>Confidence shown as 3-segment bar (Low/Med/High) — not a colored text badge</li>
+        <li>Fan chart for rate path with labeled scenarios</li>
+        <li>Muted, professional language — no trophy/gamification elements</li>
+      </ul>
+    </div>
+  </div>
+  <div class="card card-padded" style="font-size:13px; color: var(--ink-soft); line-height:1.55;">
+    <strong style="color:var(--navy)">Headline gap:</strong> The Forecasting page has the right data but the wrong framing. It's scoped to MAG7 instead of presenting as the top-level Forecasting section. Gamification elements (trophies) undermine credibility. The broader section structure (scenario cards, consensus table) is missing.
+  </div>
+</div>
+
+<div class="screen-block">
+  <div class="screen-label">Screen 4 — Model Portfolios</div>
+  <div class="gap-row">
+    <div class="gap-col gap-live">
+      <div class="gap-col-head">Live — what's there</div>
+      <ul>
+        <li>Navigation: absent once on this page</li>
+        <li>"Portfolio Leaders / Portfolio Laggards" framing is interesting but creates cognitive split</li>
+        <li>Card grid: 2-col for leaders, 2-col for laggards — too many cards, not enough hierarchy</li>
+        <li>Individual fund cards: price + sparkline + signal + 1M/YTD/Beta metrics + description blurb</li>
+        <li>Description text inside cards is too long — breaks scan rhythm</li>
+        <li>Portfolio Holdings section below: similar card pattern, very long scroll</li>
+        <li>No portfolio-level metrics (YTD, Sharpe, risk profile) — only individual fund cards</li>
+      </ul>
+    </div>
+    <div class="gap-col gap-target">
+      <div class="gap-col-head">Direction C — intended</div>
+      <ul>
+        <li>Two-up hero cards for featured portfolios: allocation bar + 4 KPIs + CTA buttons</li>
+        <li>Remaining models in a compact table: Name / Strategy / YTD / 1Y / Sharpe / Risk / Action</li>
+        <li>Filter row: All / Conservative / Moderate / Aggressive / Thematic</li>
+        <li>Portfolio-level framing first, holdings drill-down on detail page</li>
+        <li>No description blurbs inside cards — information on the detail page</li>
+      </ul>
+    </div>
+  </div>
+  <div class="card card-padded" style="font-size:13px; color: var(--ink-soft); line-height:1.55;">
+    <strong style="color:var(--navy)">Headline gap:</strong> The live page presents fund-level data where portfolio-level data is needed. Users see individual fund cards when they should see portfolios first. The scroll length is extreme — a table for the bottom portfolios would cut this by 70%.
+  </div>
+</div>
+
+<div class="screen-block">
+  <div class="screen-label">Screen 5 — Fund Search / Ticker Detail (AAPL)</div>
+  <div class="gap-row">
+    <div class="gap-col gap-live">
+      <div class="gap-col-head">Live — what's there</div>
+      <ul>
+        <li>Navigation: absent — single back path via browser</li>
+        <li>Search input with "AAPL" pre-filled — works as a search entry point</li>
+        <li>Detail view shows immediately with no results list step</li>
+        <li>Price chart: functional, good range selector (YTD / 6M / 1Y…)</li>
+        <li>Snapshot panel: description, recent news items — feels like a news aggregator</li>
+        <li>Data tables: Price, Returns, Risk, Trend, Fundamentals, Sentiment — dense but good</li>
+        <li>Deep Analysis Lab: two large amber CTA buttons — visually dominant, unclear value prop</li>
+        <li>"Powered by Gemini / Anthropic / EPM" attribution bar — trust signal but visually noisy</li>
+      </ul>
+    </div>
+    <div class="gap-col gap-target">
+      <div class="gap-col-head">Direction C — intended</div>
+      <ul>
+        <li>Search surface: filter chips (Category / Expense / AUM / Rating / 1Y Return) + results table</li>
+        <li>Results table: Ticker / Name / Category / AUM / Expense / YTD / 1Y / Trend sparkline / Rating</li>
+        <li>Ticker detail as a second step / drill-down, not the landing state</li>
+        <li>Data tables consistent with the rest of the product (same header style, row height, mono numerics)</li>
+        <li>AI analysis as a secondary affordance — not the primary CTA</li>
+      </ul>
+    </div>
+  </div>
+  <div class="card card-padded" style="font-size:13px; color: var(--ink-soft); line-height:1.55;">
+    <strong style="color:var(--navy)">Headline gap:</strong> The page skips the list/search step and goes straight to detail. The "Deep Analysis Lab" section with two large amber buttons visually overwhelms the actual financial data. The attribution bar at the bottom feels like a footnote that got promoted.
+  </div>
+</div>
+
+<hr class="rule page-break">
+
+<!-- ══════════════════════════════════════════ -->
+<!-- SECTION 2 — TOP 10 ISSUES                 -->
+<!-- ══════════════════════════════════════════ -->
+<div class="section-head mb32">
+  <div class="section-head-left">
+    <div class="section-eyebrow">Section 2</div>
+    <div class="section-title">Top 10 issues — priority order</div>
+  </div>
+  <div class="muted">Critical → High → Medium</div>
+</div>
+
+<div class="card card-padded mb48">
+  <div class="issue">
+    <div class="priority p1">1</div>
+    <div class="issue-body">
+      <div class="issue-title">
+        No persistent navigation — users get stranded on every non-homepage screen
+        <span class="pill pill-down">Critical</span>
+        <span class="type-tag t-interaction">Interaction</span>
+      </div>
+      <div class="issue-desc">
+        Once a user navigates away from the homepage, there are no section links to reach Markets, Forecasting, Portfolios, or Fund Search. The only escape is the browser back button. The homepage compensates with three "Open X" launch cards — a workaround that shouldn't exist. The top bar shows a search box, a density toggle icon, and an avatar, but no navigation.
+      </div>
+      <div class="issue-fix">
+        <strong>Fix:</strong> Add a full section nav to the top bar on every page. Use the Direction C pattern: dark navy bar, product name left, section links centered, search + avatar right. Active section gets amber bottom border. This is the single highest-leverage change — it fixes the navigation problem and removes the need for the homepage launch cards.
+      </div>
+    </div>
+  </div>
+
+  <div class="issue">
+    <div class="priority p2">2</div>
+    <div class="issue-body">
+      <div class="issue-title">
+        Markets page is a ghost layout — empty panels dominate the screen
+        <span class="pill pill-down">Critical</span>
+        <span class="type-tag t-bug">Bug / State</span>
+      </div>
+      <div class="issue-desc">
+        The Markets page shows mostly empty black rectangles where charts should be, with "Loading indexes…" / "Loading trend data…" plain-text placeholders. Whether this is a slow data fetch or a data availability issue, the result looks broken. No skeleton loaders, no error states, no "data unavailable" messaging with context.
+      </div>
+      <div class="issue-fix">
+        <strong>Fix:</strong> Implement a three-state system for every data panel: (1) <strong>Loading</strong> — animated shimmer skeleton at the correct panel height; (2) <strong>Loaded</strong> — actual content; (3) <strong>Unavailable</strong> — placeholder with a message like "Data temporarily unavailable · Last updated [timestamp]" and a retry affordance. Never show a black rectangle.
+      </div>
+    </div>
+  </div>
+
+  <div class="issue">
+    <div class="priority p3">3</div>
+    <div class="issue-body">
+      <div class="issue-title">
+        Dark-mode-only palette diverges entirely from Direction C's light-mode system
+        <span class="pill pill-warn">High</span>
+        <span class="type-tag t-visual">Visual</span>
+      </div>
+      <div class="issue-desc">
+        Direction C is a light-mode-first design: off-white canvas (#F4F6FA), white cards, dark navy masthead only. The live site is fully dark (#0B1F3A background + dark cards everywhere) — the structural opposite. This makes every other Direction C visual fix (cards, spacing, typography) harder to apply without addressing the foundation first.
+      </div>
+      <div class="issue-fix">
+        <strong>Fix:</strong> Swap the background to <code>#F4F6FA</code>, cards to <code>#FFFFFF</code> with <code>border: 1px solid #E3E7EE</code>. Keep the masthead nav dark navy. Apply <code>color: #1F2937</code> to body text. This is a CSS token change — if the codebase uses CSS variables or a theme object, it's a targeted swap, not a page-by-page rewrite.
+      </div>
+    </div>
+  </div>
+
+  <div class="issue">
+    <div class="priority p4">4</div>
+    <div class="issue-body">
+      <div class="issue-title">
+        Settings / density toggle is invisible in light mode (white on white)
+        <span class="pill pill-warn">High</span>
+        <span class="type-tag t-bug">Bug</span>
+      </div>
+      <div class="issue-desc">
+        The settings/density toggle icon in the top-right nav bar is rendered in a light color that disappears against a white background in light mode. Users cannot see or access it.
+      </div>
+      <div class="issue-fix">
+        <strong>Fix:</strong> Ensure all top-bar icon buttons use a color explicitly set relative to the masthead background, not the page background. Since the masthead will be dark navy, set icon fill to <code>rgba(255,255,255,0.75)</code> and hover to <code>#FFFFFF</code>. Never inherit color from the page body for nav elements.
+      </div>
+    </div>
+  </div>
+
+  <div class="issue">
+    <div class="priority p5">5</div>
+    <div class="issue-body">
+      <div class="issue-title">
+        EPM wordmark absent — product identity has no anchor
+        <span class="pill pill-warn">High</span>
+        <span class="type-tag t-visual">Visual</span>
+      </div>
+      <div class="issue-desc">
+        The top-left nav shows only an eye/telescope icon. "EPM Market Intelligence" appears only in tiny text at the very bottom of the page. The product has no persistent identity — a user navigating sub-pages never sees the product name. This is especially jarring if the product becomes client-facing.
+      </div>
+      <div class="issue-fix">
+        <strong>Fix:</strong> Replace the eye icon with a logotype: amber <code>E</code> badge (28×28px, 4px radius) + "EPM <span style='opacity:0.7'>Market Intelligence</span>" text in the masthead — matching Direction C exactly. The eye icon can be repurposed or retired.
+      </div>
+    </div>
+  </div>
+
+  <div class="issue">
+    <div class="priority p6">6</div>
+    <div class="issue-body">
+      <div class="issue-title">
+        Compact / density toggle — unintuitive control with unclear scope
+        <span class="pill pill-neutral">Medium</span>
+        <span class="type-tag t-interaction">Interaction</span>
+      </div>
+      <div class="issue-desc">
+        The hamburger-style icon in the top bar triggers a "compact mode" whose effect is ambiguous — it's unclear which elements change, and the toggle has no label or tooltip. Users cannot discover it without prior knowledge.
+      </div>
+      <div class="issue-fix">
+        <strong>Fix:</strong> Replace the icon-only toggle with a labeled button in the nav: a small <code>Dense</code> text button or segmented control ("Normal · Dense") visible only on Markets and Fund Search pages where density is relevant. Show a brief tooltip on hover. Scope it clearly to data tables only — not layout or card size.
+      </div>
+    </div>
+  </div>
+
+  <div class="issue">
+    <div class="priority p7">7</div>
+    <div class="issue-body">
+      <div class="issue-title">
+        Card inconsistency — four different card implementations across pages
+        <span class="pill pill-neutral">Medium</span>
+        <span class="type-tag t-visual">Visual</span>
+      </div>
+      <div class="issue-desc">
+        Stock cards, fund cards, portfolio cards, and news cards all have subtly different internal layouts, font sizes, delta color placements, and description blurb treatments. The product does not feel like one system.
+      </div>
+      <div class="issue-fix">
+        <strong>Fix:</strong> Define three card variants as shared components: (1) <strong>KPI card</strong> — metric label + large mono number + sparkline + delta pill; (2) <strong>Panel card</strong> — titled section with optional sub-content; (3) <strong>Table card</strong> — padded table with consistent header/row styles. Apply these across all pages. Remove ad-hoc card implementations.
+      </div>
+    </div>
+  </div>
+
+  <div class="issue">
+    <div class="priority p8">8</div>
+    <div class="issue-body">
+      <div class="issue-title">
+        Model Portfolios: fund-level cards when portfolio-level hierarchy is needed
+        <span class="pill pill-neutral">Medium</span>
+        <span class="type-tag t-interaction">Interaction</span>
+      </div>
+      <div class="issue-desc">
+        The Portfolio Universe page leads with individual fund cards (BUFR, CGDV, FLQM…) organized as Leaders vs Laggards. Users never see a portfolio-level overview (YTD, Sharpe, risk tier, allocation). The page is extremely long and hard to compare portfolios at a glance.
+      </div>
+      <div class="issue-fix">
+        <strong>Fix:</strong> Restructure to portfolio-first: two hero cards for featured portfolios with KPI row + allocation bar + CTAs; remaining portfolios as a compact table (Name / Strategy / YTD / 1Y / Sharpe / Risk). Fund-level detail moves to a drill-down page reached via "View holdings →".
+      </div>
+    </div>
+  </div>
+
+  <div class="issue">
+    <div class="priority p9">9</div>
+    <div class="issue-body">
+      <div class="issue-title">
+        Forecasting page: gamification elements undermine credibility
+        <span class="pill pill-neutral">Medium</span>
+        <span class="type-tag t-visual">Visual</span>
+      </div>
+      <div class="issue-desc">
+        The Model Leaderboard section uses trophy and medal icons (🥇🥈🥉) to rank model performance. On a professional financial platform, this framing is jarring — it reads as a game, not a research tool.
+      </div>
+      <div class="issue-fix">
+        <strong>Fix:</strong> Replace trophy icons with ordinal rank numbers (1, 2, 3) in a muted monospace style. Replace badge/medal metaphors with the Direction C confidence bar (three-segment bar, Low/Med/High). Relabel "Leaderboard" to "Model Rankings" or "Accuracy Summary". Remove all emoji from production UI.
+      </div>
+    </div>
+  </div>
+
+  <div class="issue">
+    <div class="priority p10">10</div>
+    <div class="issue-body">
+      <div class="issue-title">
+        Fund Search: missing results list, Deep Analysis Lab dominates
+        <span class="pill pill-neutral">Medium</span>
+        <span class="type-tag t-visual">Visual</span>
+      </div>
+      <div class="issue-desc">
+        The search page immediately shows a single ticker detail view with no prior results list. The "Deep Analysis Lab" section at the bottom has two large amber CTA buttons that visually compete with the financial data above. The attribution bar ("Powered by Gemini / Anthropic / EPM") is visually noisy.
+      </div>
+      <div class="issue-fix">
+        <strong>Fix:</strong> Add a results table step before detail view. Demote Deep Analysis Lab to a secondary card with one quiet button. Move attribution to a single footnote line at page bottom in muted mono text.
+      </div>
+    </div>
+  </div>
+</div>
+
+<hr class="rule page-break">
+
+<!-- ══════════════════════════════════════════ -->
+<!-- SECTION 3 — CLASSIFICATION SUMMARY        -->
+<!-- ══════════════════════════════════════════ -->
+<div class="section-head mb16">
+  <div class="section-head-left">
+    <div class="section-eyebrow">Section 3</div>
+    <div class="section-title">Issue classification</div>
+  </div>
+</div>
+
+<div class="grid3 mb48">
+  <div class="card card-padded">
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:14px;">
+      <span class="type-tag t-visual" style="font-size:11px;">Visual Polish</span>
+    </div>
+    <div style="font-size:13px; color:var(--ink-soft); line-height:1.6;">
+      <div style="margin-bottom:6px; display:flex; gap:8px; align-items:baseline;"><span style="font-family:var(--mono);color:var(--navy); font-size:12px;">#3</span> Dark-mode palette vs light system</div>
+      <div style="margin-bottom:6px; display:flex; gap:8px; align-items:baseline;"><span style="font-family:var(--mono);color:var(--navy); font-size:12px;">#5</span> Missing EPM wordmark</div>
+      <div style="margin-bottom:6px; display:flex; gap:8px; align-items:baseline;"><span style="font-family:var(--mono);color:var(--navy); font-size:12px;">#7</span> Card system inconsistency</div>
+      <div style="margin-bottom:6px; display:flex; gap:8px; align-items:baseline;"><span style="font-family:var(--mono);color:var(--navy); font-size:12px;">#9</span> Gamification elements</div>
+      <div style="display:flex; gap:8px; align-items:baseline;"><span style="font-family:var(--mono);color:var(--navy); font-size:12px;">#10</span> Deep Analysis Lab prominence</div>
+    </div>
+    <div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--line-soft); font-size:12px; color:var(--mute);">CSS + component changes · no logic changes</div>
+  </div>
+  <div class="card card-padded">
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:14px;">
+      <span class="type-tag t-interaction" style="font-size:11px;">Interaction Design</span>
+    </div>
+    <div style="font-size:13px; color:var(--ink-soft); line-height:1.6;">
+      <div style="margin-bottom:6px; display:flex; gap:8px; align-items:baseline;"><span style="font-family:var(--mono);color:var(--navy); font-size:12px;">#1</span> No persistent navigation</div>
+      <div style="margin-bottom:6px; display:flex; gap:8px; align-items:baseline;"><span style="font-family:var(--mono);color:var(--navy); font-size:12px;">#6</span> Density toggle — unintuitive</div>
+      <div style="display:flex; gap:8px; align-items:baseline;"><span style="font-family:var(--mono);color:var(--navy); font-size:12px;">#8</span> Portfolio page hierarchy</div>
+    </div>
+    <div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--line-soft); font-size:12px; color:var(--mute);">Component + routing changes · may need new views</div>
+  </div>
+  <div class="card card-padded">
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:14px;">
+      <span class="type-tag t-bug" style="font-size:11px;">Implementation Bugs</span>
+    </div>
+    <div style="font-size:13px; color:var(--ink-soft); line-height:1.6;">
+      <div style="margin-bottom:6px; display:flex; gap:8px; align-items:baseline;"><span style="font-family:var(--mono);color:var(--navy); font-size:12px;">#2</span> Markets ghost layout / empty states</div>
+      <div style="display:flex; gap:8px; align-items:baseline;"><span style="font-family:var(--mono);color:var(--navy); font-size:12px;">#4</span> Settings toggle invisible in light mode</div>
+    </div>
+    <div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--line-soft); font-size:12px; color:var(--mute);">Direct fixes · highest urgency regardless of design direction</div>
+  </div>
+</div>
+
+<hr class="rule page-break">
+
+<!-- ══════════════════════════════════════════ -->
+<!-- SECTION 4 — DIRECTION C FIXES             -->
+<!-- ══════════════════════════════════════════ -->
+<div class="section-head mb32">
+  <div class="section-head-left">
+    <div class="section-eyebrow">Section 4</div>
+    <div class="section-title">Exact fixes to reach Direction C</div>
+  </div>
+</div>
+
+<div class="callout">
+  <strong>Scope note.</strong> The following fixes are ordered by implementation sequence — earlier fixes unblock later ones. All are frontend-only unless noted. No new backend endpoints are required; these are presentation-layer changes to existing data.
+</div>
+
+<div class="grid2 mb32">
+  <div class="card card-padded">
+    <div class="brief-title">Phase 1 — Bugs (do first, unblock everything)</div>
+    <div class="brief-item">
+      <div class="brief-item-key">Fix #4</div>
+      <div class="brief-item-val">Audit all nav icon colors. Set explicitly to <code>rgba(255,255,255,0.75)</code> on dark masthead, <code>var(--ink-soft)</code> on light backgrounds. Do not inherit.</div>
+    </div>
+    <div class="brief-item">
+      <div class="brief-item-key">Fix #2a</div>
+      <div class="brief-item-val">Add shimmer skeleton components at the exact height of each chart/table panel. Show on every loading state, no more plain-text "Loading…".</div>
+    </div>
+    <div class="brief-item">
+      <div class="brief-item-key">Fix #2b</div>
+      <div class="brief-item-val">Add unavailable state: icon + "Data unavailable · Last refreshed [time]" + "Retry" link. Never show a black rectangle.</div>
+    </div>
+  </div>
+
+  <div class="card card-padded">
+    <div class="brief-title">Phase 2 — Foundation (palette + wordmark)</div>
+    <div class="brief-item">
+      <div class="brief-item-key">Fix #3</div>
+      <div class="brief-item-val">Set CSS tokens: <code>--bg: #F4F6FA</code>, <code>--card: #FFFFFF</code>, <code>--line: #E3E7EE</code>, <code>--ink: #1F2937</code>. Masthead stays <code>#0B1F3A</code>. Card shadow: <code>0 1px 2px rgba(11,31,58,.04), 0 4px 16px rgba(11,31,58,.07)</code>.</div>
+    </div>
+    <div class="brief-item">
+      <div class="brief-item-key">Fix #5</div>
+      <div class="brief-item-val">Replace eye icon with amber badge + "EPM <span style='opacity:0.6'>Market Intelligence</span>" wordmark in masthead. Badge: <code>28×28px, border-radius:4px, background:#C28A2B, color:#0B1F3A</code>.</div>
+    </div>
+    <div class="brief-item">
+      <div class="brief-item-key">Fix #7</div>
+      <div class="brief-item-val">Create three card components (KPI, Panel, Table). Delete ad-hoc card CSS. All financial data lives in one of these three shells.</div>
+    </div>
+  </div>
+</div>
+
+<div class="grid2 mb48">
+  <div class="card card-padded">
+    <div class="brief-title">Phase 3 — Navigation</div>
+    <div class="brief-item">
+      <div class="brief-item-key">Fix #1a</div>
+      <div class="brief-item-val">Add persistent section nav: Homepage · Markets · Forecasting · Model Portfolios · Fund Search · Watchlists. Active item: amber <code>2px</code> bottom border, <code>font-weight:600</code>, white.</div>
+    </div>
+    <div class="brief-item">
+      <div class="brief-item-key">Fix #1b</div>
+      <div class="brief-item-val">Remove the three "Open X" launch cards from the homepage. Replace with KPI index strip + hero news/calendar grid.</div>
+    </div>
+    <div class="brief-item">
+      <div class="brief-item-key">Fix #6</div>
+      <div class="brief-item-val">Replace hamburger density icon with labeled <code>Dense</code> toggle button. Show only on Markets + Fund Search. Scope effect to data tables only.</div>
+    </div>
+  </div>
+
+  <div class="card card-padded">
+    <div class="brief-title">Phase 4 — Page-specific polish</div>
+    <div class="brief-item">
+      <div class="brief-item-key">Fix #8</div>
+      <div class="brief-item-val">Restructure Portfolios: hero cards (portfolio-level KPIs + allocation bar) at top, compact table for remaining models below. Move fund-level cards to a drill-down route.</div>
+    </div>
+    <div class="brief-item">
+      <div class="brief-item-key">Fix #9</div>
+      <div class="brief-item-val">Remove trophy/medal icons from Forecasting. Replace with rank numbers. Relabel "Leaderboard" → "Model Rankings". Replace confidence badges with 3-segment bar indicators.</div>
+    </div>
+    <div class="brief-item">
+      <div class="brief-item-key">Fix #10</div>
+      <div class="brief-item-val">On Fund Search: add results table step before ticker detail. Demote Deep Analysis Lab to secondary card. Move attribution to a single muted footnote line.</div>
+    </div>
+  </div>
+</div>
+
+<hr class="rule page-break">
+
+<!-- ══════════════════════════════════════════ -->
+<!-- SECTION 5 — CLAUDE CODE BRIEF             -->
+<!-- ══════════════════════════════════════════ -->
+<div class="section-head mb16">
+  <div class="section-head-left">
+    <div class="section-eyebrow">Section 5</div>
+    <div class="section-title">Implementation brief for Claude Code</div>
+  </div>
+</div>
+
+<div class="callout">
+  <strong>How to use this brief.</strong> Hand this section directly to Claude Code as the prompt. Each task is self-contained and ordered by dependency. Start with Phase 1 bugs — they are safe, isolated fixes. Phases 2–4 build on each other.
+</div>
+
+<!-- Brief starts -->
+<div style="background:var(--navy); color:#E9EDF3; border-radius:var(--r); padding:32px 36px; font-family:var(--sans); font-size:13.5px; line-height:1.6; margin-bottom:48px;">
+
+<div style="font-size:11px; font-weight:600; letter-spacing:1.4px; text-transform:uppercase; color:#C28A2B; margin-bottom:10px;">Claude Code · Implementation Brief</div>
+<div style="font-family:'Source Serif 4', Georgia, serif; font-size:26px; font-weight:600; color:#fff; letter-spacing:-0.3px; margin-bottom:20px; line-height:1.15;">
+  EPM Market Intelligence — UI polish pass to align live site with Direction C design system
+</div>
+
+<div style="border-top:1px solid rgba(255,255,255,0.12); padding-top:20px; margin-bottom:20px;">
+<div style="font-size:11px; font-weight:600; letter-spacing:1px; text-transform:uppercase; color:#C28A2B; margin-bottom:10px;">Context</div>
+<div style="color:rgba(255,255,255,0.75);">
+We have a design reference (Direction C — Executive/Client-facing) that establishes a light-mode, card-based design system with a dark navy masthead, teal accent, amber brand highlight, and soft semantic delta pills.
+The live implementation diverges from this in several specific ways. This brief covers frontend-only changes — no new backend endpoints needed.
+</div>
+</div>
+
+<div style="border-top:1px solid rgba(255,255,255,0.12); padding-top:20px; margin-bottom:20px;">
+<div style="font-size:11px; font-weight:600; letter-spacing:1px; text-transform:uppercase; color:#C28A2B; margin-bottom:14px;">Phase 1 — Bug fixes (do these first)</div>
+
+<div style="margin-bottom:16px;">
+<div style="color:#fff; font-weight:600; margin-bottom:4px;">1A · Settings toggle invisible in light mode</div>
+<div style="color:rgba(255,255,255,0.7);">Find the settings/density toggle icon in the top navigation bar. Its color is currently inheriting from the page body and disappearing on light backgrounds. Fix: explicitly set the icon color to <span style="font-family:var(--mono); font-size:12px; color:#E8A33D;">rgba(255,255,255,0.75)</span> on the dark masthead, and ensure it never inherits from page background. Add hover state: <span style="font-family:var(--mono); font-size:12px; color:#E8A33D;">#FFFFFF</span> at <span style="font-family:var(--mono); font-size:12px; color:#E8A33D;">opacity:1</span>.</div>
+</div>
+
+<div style="margin-bottom:16px;">
+<div style="color:#fff; font-weight:600; margin-bottom:4px;">1B · Empty / loading states on Markets page</div>
+<div style="color:rgba(255,255,255,0.7);">Every chart and data panel needs three states: (1) Loading: animated shimmer skeleton at the correct panel dimensions — use a CSS animated gradient from <span style="font-family:var(--mono); font-size:12px; color:#E8A33D;">#E3E7EE → #F4F6FA → #E3E7EE</span>; (2) Loaded: actual content; (3) Unavailable: centered icon + "Data temporarily unavailable" message + timestamp + "Retry" button. Remove all plain-text "Loading…" strings.</div>
+</div>
+</div>
+
+<div style="border-top:1px solid rgba(255,255,255,0.12); padding-top:20px; margin-bottom:20px;">
+<div style="font-size:11px; font-weight:600; letter-spacing:1px; text-transform:uppercase; color:#C28A2B; margin-bottom:14px;">Phase 2 — Palette &amp; foundation tokens</div>
+
+<div style="margin-bottom:16px;">
+<div style="color:#fff; font-weight:600; margin-bottom:4px;">2A · Switch to light-mode canvas</div>
+<div style="color:rgba(255,255,255,0.7);">
+Find the global CSS token definitions (likely a theme file, tailwind config, or CSS variables). Update:
+<br/>— Page background: <span style="font-family:var(--mono); font-size:12px; color:#E8A33D;">#F4F6FA</span>
+<br/>— Card background: <span style="font-family:var(--mono); font-size:12px; color:#E8A33D;">#FFFFFF</span>
+<br/>— Card border: <span style="font-family:var(--mono); font-size:12px; color:#E8A33D;">1px solid #E3E7EE</span>
+<br/>— Card shadow: <span style="font-family:var(--mono); font-size:12px; color:#E8A33D;">0 1px 2px rgba(11,31,58,.04), 0 4px 16px rgba(11,31,58,.07)</span>
+<br/>— Body text: <span style="font-family:var(--mono); font-size:12px; color:#E8A33D;">#1F2937</span>
+<br/>— Muted text: <span style="font-family:var(--mono); font-size:12px; color:#E8A33D;">#6B7688</span>
+<br/>— Masthead stays: <span style="font-family:var(--mono); font-size:12px; color:#E8A33D;">#0B1F3A</span> (dark navy)
+<br/>Keep existing dark-mode as an opt-in toggle if it already exists; make light-mode the default.
+</div>
+</div>
+
+<div style="margin-bottom:16px;">
+<div style="color:#fff; font-weight:600; margin-bottom:4px;">2B · Delta pills — replace raw colored text</div>
+<div style="color:rgba(255,255,255,0.7);">
+Replace all raw <span style="font-family:var(--mono); font-size:12px; color:#E8A33D;">color: green</span> / <span style="font-family:var(--mono); font-size:12px; color:#E8A33D;">color: red</span> delta values with a Pill component:
+<br/>Up: <span style="font-family:var(--mono); font-size:12px; color:#E8A33D;">background:#E4F3EC; color:#0F8A56; border-radius:100px; padding:3px 10px; font-weight:600</span>
+<br/>Down: <span style="font-family:var(--mono); font-size:12px; color:#E8A33D;">background:#FBE8E5; color:#B3271C; border-radius:100px; padding:3px 10px; font-weight:600</span>
+<br/>Use monospace font inside pills for numerics.
+</div>
+</div>
+
+<div style="margin-bottom:0;">
+<div style="color:#fff; font-weight:600; margin-bottom:4px;">2C · EPM wordmark in masthead</div>
+<div style="color:rgba(255,255,255,0.7);">
+Replace the eye/telescope icon in the top-left with:
+<br/>— An amber square badge: <span style="font-family:var(--mono); font-size:12px; color:#E8A33D;">28×28px, border-radius:4px, background:#C28A2B, color:#0B1F3A, font-weight:700, font-size:13px</span> containing the letter "E"
+<br/>— Text: "EPM" in white 600 weight + " Market Intelligence" in <span style="font-family:var(--mono); font-size:12px; color:#E8A33D;">rgba(255,255,255,0.65)</span> 400 weight, font-size:15px.
+<br/>These should be wrapped in a flex row with <span style="font-family:var(--mono); font-size:12px; color:#E8A33D;">gap:12px; align-items:center</span>.
+</div>
+</div>
+</div>
+
+<div style="border-top:1px solid rgba(255,255,255,0.12); padding-top:20px; margin-bottom:20px;">
+<div style="font-size:11px; font-weight:600; letter-spacing:1px; text-transform:uppercase; color:#C28A2B; margin-bottom:14px;">Phase 3 — Persistent navigation</div>
+
+<div style="margin-bottom:16px;">
+<div style="color:#fff; font-weight:600; margin-bottom:4px;">3A · Add section nav links to the masthead — all pages</div>
+<div style="color:rgba(255,255,255,0.7);">
+The top bar currently shows: [eye icon] [search] [density icon] [avatar]. 
+<br/>New layout: [wordmark] [nav links] [flex spacer] [search] [avatar]
+<br/>Nav links: Homepage · Markets · Forecasting · Model Portfolios · Fund Search · Watchlists
+<br/>Each link: <span style="font-family:var(--mono); font-size:12px; color:#E8A33D;">padding:20px 16px; font-size:13px; font-weight:500; color:rgba(255,255,255,0.72)</span>
+<br/>Active: <span style="font-family:var(--mono); font-size:12px; color:#E8A33D;">color:#fff; font-weight:600; border-bottom:2px solid #C28A2B</span>
+<br/>This nav must appear on every page at the same height, never hidden.
+</div>
+</div>
+
+<div style="margin-bottom:0;">
+<div style="color:#fff; font-weight:600; margin-bottom:4px;">3B · Remove homepage launch cards</div>
+<div style="color:rgba(255,255,255,0.7);">
+The three "Open Markets / Open Forecasting / Open Portfolios" cards on the homepage exist only because navigation is absent. Once the nav is in place, remove these cards entirely. Replace that space with either: (a) the KPI index strip (5 benchmark cards with sparklines), or (b) the hero editorial/news card + calendar right rail from Direction C.
+</div>
+</div>
+</div>
+
+<div style="border-top:1px solid rgba(255,255,255,0.12); padding-top:20px; margin-bottom:20px;">
+<div style="font-size:11px; font-weight:600; letter-spacing:1px; text-transform:uppercase; color:#C28A2B; margin-bottom:14px;">Phase 4 — Page-level polish</div>
+
+<div style="margin-bottom:16px;">
+<div style="color:#fff; font-weight:600; margin-bottom:4px;">4A · Density toggle — label it and scope it</div>
+<div style="color:rgba(255,255,255,0.7);">Change the hamburger icon to a small labeled button: text "Dense" with a toggle state ("Normal" when active). Show this button only on Markets and Fund Search pages. When active, reduce table row height by ~30% and hide description blurbs inside cards. Do not change card sizes or layout columns.</div>
+</div>
+
+<div style="margin-bottom:16px;">
+<div style="color:#fff; font-weight:600; margin-bottom:4px;">4B · Forecasting: remove gamification, add structure</div>
+<div style="color:rgba(255,255,255,0.7);">
+(1) In the Model Leaderboard / Model Rankings section, replace trophy/medal emoji icons with rank numbers (1, 2, 3) in a small monospace circle badge.
+<br/>(2) Replace colored text confidence badges ("HIGH CONFIDENCE", "MEDIUM CONFIDENCE") with a 3-segment bar: 3 small rectangles (e.g., 18×5px each, gap:2px), filled from left based on confidence level. Low=1 filled, Med=2, High=3. Fill color: <span style="font-family:var(--mono); font-size:12px; color:#E8A33D;">#1E7F74</span>.
+<br/>(3) Add a page header: eyebrow "EPM Research" (teal, 11px, uppercase) + title "Forecasting" (32px, bold, navy).
+</div>
+</div>
+
+<div style="margin-bottom:16px;">
+<div style="color:#fff; font-weight:600; margin-bottom:4px;">4C · Model Portfolios: portfolio-first hierarchy</div>
+<div style="color:rgba(255,255,255,0.7);">
+Restructure the page so the first section shows portfolio-level cards (not fund-level). Each portfolio card should show: name, strategy tag, YTD return, 1Y return, Sharpe ratio, risk tier, and an allocation bar. The current fund-level cards (Portfolio Leaders / Laggards) should move to a drill-down page accessible via a "View holdings →" link inside each portfolio card.
+</div>
+</div>
+
+<div style="margin-bottom:0;">
+<div style="color:#fff; font-weight:600; margin-bottom:4px;">4D · Fund Search: demote AI CTA, fix attribution</div>
+<div style="color:rgba(255,255,255,0.7);">
+(1) The "Deep Analysis Lab" section with two large amber buttons should become a smaller secondary card with one button, visually lighter than the financial data above it.
+<br/>(2) The "Powered by Gemini / Anthropic / EPM" attribution bar should collapse to a single line of muted monospace text at the very bottom of the page: "Analysis powered by Gemini · Anthropic · EPM Models" at <span style="font-family:var(--mono); font-size:12px; color:#E8A33D;">font-size:11px; color:#6B7688</span>.
+</div>
+</div>
+</div>
+
+<div style="border-top:1px solid rgba(255,255,255,0.12); padding-top:20px;">
+<div style="font-size:11px; font-weight:600; letter-spacing:1px; text-transform:uppercase; color:#C28A2B; margin-bottom:10px;">What NOT to change</div>
+<div style="color:rgba(255,255,255,0.7);">
+— Do not change routing logic, API calls, or data models<br/>
+— Do not redesign the chart components (price charts are functional)<br/>
+— Do not change the existing dark-mode toggle if one exists — just make light mode the default<br/>
+— Do not change the Fund Search's ticker detail data tables (Price / Returns / Risk / etc.) — they are good<br/>
+— Do not change the Forecasting page's consensus forecast data cards — the data structure is correct<br/>
+— Preserve all existing functionality; these are presentation-layer changes only
+</div>
+</div>
+
+</div>
+<!-- Brief ends -->
+
+<!-- FOOTNOTE -->
+<div style="font-family:var(--mono); font-size:11px; color:var(--mute); text-align:center; border-top:1px solid var(--line); padding-top:16px;">
+  EPM Market Intelligence · Gap Audit v1 · Apr 19, 2026 · Design: Claude / Composer
+</div>
+
+</body>
+</html>

@@ -12,69 +12,44 @@
   <script>
     (function () {
       try {
-        var pref = localStorage.getItem('epm_theme_pref') || 'dark';
+        var pref = localStorage.getItem('epm_theme_pref') || 'light';
         var resolved = pref === 'system' ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : pref;
         var bg = resolved === 'light' ? '#f5f8fd' : '#061326';
-        var chrome = resolved === 'light' ? '#f5f8fd' : '#061326';
         document.documentElement.dataset.theme = resolved;
         document.documentElement.style.backgroundColor = bg;
         var themeMeta = document.getElementById('themeColorMeta');
-        if (themeMeta) themeMeta.setAttribute('content', chrome);
+        if (themeMeta) themeMeta.setAttribute('content', bg);
       } catch (err) {
         document.documentElement.style.backgroundColor = '#061326';
       }
     })();
   </script>
   <script>try{if(!sessionStorage.getItem("epm_splash_shown")&&location.pathname.indexOf("login")<0&&location.pathname.indexOf("reset")<0){var _sh=document.createElement("div");_sh.id="fvsShield";_sh.style.cssText="position:fixed;inset:0;z-index:9998;background:#040d1a";document.documentElement.appendChild(_sh);}}catch(e){}</script>
+  <script>
+    (function () {
+      try {
+        var density = localStorage.getItem('epm_density_pref') || 'comfortable';
+        document.documentElement.dataset.density = density;
+      } catch (e) {}
+    })();
+  </script>
   <title>Model Portfolios | EPM Market Intelligence</title>
   <link rel="stylesheet" href="/static/css/styles.css?v=20260410a" />
   <link rel="stylesheet" href="/static/css/design-v2.css?v=20260410a" />
+  <link rel="stylesheet" href="/static/css/design-system.css?v=20260419a" />
+  <script src="/static/js/chrome.js?v=20260419a"></script>
   <script defer src="/static/js/site.js?v=20260410a"></script>
   <link rel="icon" type="image/png" href="/static/epm_logo_sq.png">
   <link rel="apple-touch-icon" href="/static/epm_logo_sq.png">
   <meta property="og:image" content="/static/epm_logo.png">
 </head>
-<body data-page="portfolios">
-  <div id="settingsOverlay" class="settings-overlay"></div>
-  <aside id="settingsDrawer" class="settings-drawer">
-    <div class="section-title-row">
-      <h3>Settings</h3>
-      <button id="closeSettingsBtn" class="btn btn-ghost">Close</button>
-    </div>
-    <div class="settings-group"><h4>Theme</h4><div class="radio-row"><div class="radio-chip" data-pref-theme="dark">Dark</div><div class="radio-chip" data-pref-theme="light">Light</div><div class="radio-chip" data-pref-theme="system">System</div></div></div>
-    <div class="settings-group"><h4>Animations</h4><div class="radio-row"><div class="radio-chip" data-pref-animations="on">On</div><div class="radio-chip" data-pref-animations="off">Reduced</div></div></div>
-  </aside>
+<body data-page="portfolios" data-ds="v3">
+  <div id="epmChrome"></div>
+  <script>if (window.EPMChrome) EPMChrome.render();</script>
 
   <div class="page-shell">
-    <header class="topbar fade-in">
-      <div class="brand-block">
-        <img class="brand-logo" src="/static/epm_logo.png?v=20260322f" alt="EPM Financial" />
-        <div class="brand-copy">
-          <h1>EPM Market Intelligence</h1>
-          <p>Model Portfolios — browse the monitored funds, see the strongest and weakest names, and click any holding to open full ticker analysis.</p>
-        </div>
-      </div>
-      <nav class="main-nav">
-        <a class="nav-link" href="/">Home</a>
-        <a class="nav-link" href="/markets">Markets</a>
-        <a class="nav-link" href="/forecasting">Forecasting</a>
-        <a class="nav-link" href="/portfolios">Model Portfolios</a>
-        <a class="nav-link" href="/search">Fund Search</a>
-      </nav>
 
-      <nav class="topbar-nav">
-        <a class="topbar-nav-link nav-link" href="/">Home</a>
-        <a class="topbar-nav-link nav-link" href="/markets">Markets</a>
-        <a class="topbar-nav-link nav-link" href="/forecasting">Forecasting</a>
-        <a class="topbar-nav-link nav-link" href="/portfolios">Portfolios</a>
-      </nav>
-
-      <div class="top-actions">
-        <button id="openSettingsBtn" class="btn btn-icon settings-gear-btn" type="button" aria-label="Open settings" title="Settings"></button>
-      </div>
-    </header>
-
-    <!-- Auth gate — shown to guests, hidden for members -->
+    <!-- Auth gate — hard block for guests; removed for members via data-auth-state="member" -->
     <div class="auth-gate-overlay auth-gate-overlay--hard" id="portfoliosGate" aria-live="polite">
       <div class="auth-gate-card">
         <div class="auth-gate-icon">&#128196;</div>
@@ -91,31 +66,53 @@
     <!-- Gated content — hidden for guests -->
     <div class="auth-gated-content portfolios-content">
 
-    <section class="card fade-in" style="margin-top:22px;">
-      <div class="section-title-row">
-        <h2>Portfolio universe</h2>
-        <span id="portfoliosGeneratedAt" class="badge">Loading live data</span>
-      </div>
-      <p class="card-subtitle">Full monitored portfolio list. Click any card to open the Fund Search engine for that holding.</p>
-    </section>
+      <!-- Page header -->
+      <section class="ds-card is-panel fade-in" style="margin-top:22px;">
+        <div class="ds-eyebrow">Model Portfolios</div>
+        <div class="ds-section-header" style="margin-top:var(--s-1);">
+          <h2 class="ds-title is-h2">Portfolio Universe</h2>
+          <span id="portfoliosGeneratedAt" class="badge">Loading live data</span>
+        </div>
+        <p class="ds-subtitle">Full monitored portfolio list. Click any card to open the Fund Search engine for that holding.</p>
+      </section>
 
-    <section class="two-col-grid">
-      <div class="card">
-        <div class="section-title-row"><h3>Portfolio Leaders</h3><span class="badge">Daily strength</span></div>
-        <div id="portfolioLeaders" class="market-card-grid market-card-grid--compact"><div class="placeholder-item">Loading leaders...</div></div>
-      </div>
-      <div class="card">
-        <div class="section-title-row"><h3>Portfolio Laggards</h3><span class="badge">Daily weakness</span></div>
-        <div id="portfolioLaggards" class="market-card-grid market-card-grid--compact"><div class="placeholder-item">Loading laggards...</div></div>
-      </div>
-    </section>
+      <!-- Leaders / Laggards -->
+      <section class="two-col-grid" style="margin-top:18px;">
+        <div class="ds-card is-panel">
+          <div class="ds-eyebrow">Today's Strength</div>
+          <div class="ds-section-header" style="margin-top:var(--s-1);">
+            <h3 class="ds-title is-h3">Portfolio Leaders</h3>
+            <span class="badge">Daily strength</span>
+          </div>
+          <div id="portfolioLeaders" class="market-card-grid market-card-grid--compact">
+            <div class="placeholder-item">Loading leaders...</div>
+          </div>
+        </div>
+        <div class="ds-card is-panel">
+          <div class="ds-eyebrow">Today's Weakness</div>
+          <div class="ds-section-header" style="margin-top:var(--s-1);">
+            <h3 class="ds-title is-h3">Portfolio Laggards</h3>
+            <span class="badge">Daily weakness</span>
+          </div>
+          <div id="portfolioLaggards" class="market-card-grid market-card-grid--compact">
+            <div class="placeholder-item">Loading laggards...</div>
+          </div>
+        </div>
+      </section>
 
-    <section class="card">
-      <div class="section-title-row"><h3>Portfolio Holdings</h3><span class="badge">Scrollable + clickable</span></div>
-      <div id="portfolioUniverseGrid" class="market-card-grid portfolio-grid-scroll"><div class="placeholder-item">Loading portfolio universe...</div></div>
-    </section>
+      <!-- Full holdings universe -->
+      <section class="ds-card is-panel" style="margin-top:18px;">
+        <div class="ds-eyebrow">Full Universe</div>
+        <div class="ds-section-header" style="margin-top:var(--s-1);">
+          <h3 class="ds-title is-h3">Portfolio Holdings</h3>
+          <span class="badge">Scrollable + clickable</span>
+        </div>
+        <div id="portfolioUniverseGrid" class="market-card-grid portfolio-grid-scroll">
+          <div class="placeholder-item">Loading portfolio universe...</div>
+        </div>
+      </section>
 
     </div><!-- /auth-gated-content -->
-  </div>
+  </div><!-- /page-shell -->
 </body>
 </html>

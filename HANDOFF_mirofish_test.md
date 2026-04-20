@@ -1,138 +1,105 @@
 # Handoff: Deep Analysis Feature
-Updated: 2026-04-16 (session 4)
+Updated: 2026-04-20 (session 7)
 
-## Status: LIVE — Auth fixed, zombie auto-cleanup, report prompt hardened, agent viewer wired
+## Status: LIVE — MiroFish replaced with Local Analyst Council
 
 ---
 
 ## What Works
-- Fund Search page → Deep Analysis Lab section → Run Deep Swarm Analysis
-- FIFO job queue, progress polling every 10s, localStorage job persistence across page nav
-- Redesigned progress UI: animated agent network SVG, current stage card, horizontal pipeline tracker
+- Fund Search page → Deep Analysis Lab → Run Analyst Council
+- FIFO job queue with deduplication — submitting same ticker while active returns existing job
+- Progress polling every 10s, localStorage job persistence across page nav
+- Progress UI: current stage card, horizontal pipeline tracker (4 stages)
+- **Queue visibility**: when waiting behind another job, shows "Waiting in Queue — Position X — est. ~Y min"
+- **Auto-retry**: first failure requeues with retry_count=1; second failure marks failed
 - Report page: Copy Link + Download PDF + Run New Analysis buttons
-- "Run New Analysis" button on done panel clears old job, scrolls to lab, resets run button state
-- "Run New Analysis" button on report page navigates back to Fund Search anchored to lab section
-- SVG animations force-run even when OS has prefers-reduced-motion enabled
-- **Agent Activity section** on report page: expandable per-agent cards showing bio + all simulation posts
-- 401 on deep analysis start now opens auth drawer with friendly message instead of raw HTTP error
+- Agent viewer: By Agent tab (7 persona cards, expandable) + Transcript tab (deliberation timeline)
+- Transcript tab is the DEFAULT view
+- Report rendered from `enhanced_markdown` (synthesized 6-section report); falls back to raw council transcript
 
 ---
 
-## Session Fixes Applied (2026-04-16, session 4)
+## Session 7 Changes (2026-04-20): MiroFish → Local Analyst Council
 
-### Auth Cookie Fix (root cause of all 401 errors)
-- **Root cause**: Security hardening (2026-04-13) removed `storeToken` from frontend JS with a comment
-  "tokens are now set as HttpOnly cookies by the server" — but `set_cookie()` was never implemented
-  in `app.py`. The JWT was returned in the login JSON body, discarded by the frontend, and no cookie
-  was ever written. Every auth-gated route returned 401 for all users always.
-- **Fix**: `api_login` and `api_register` now call `_set_auth_cookie(response, token, remember_me)`,
-  which sets `epm_token` as `HttpOnly`, `Secure`, `SameSite=lax` with correct `max_age`
-- Added `/api/auth/logout` route — calls `delete_cookie("epm_token")`; previously missing entirely
-- `api_change_username` now refreshes the cookie with the re-issued token
-- `SECURE_COOKIES` env var (default `true`): set `SECURE_COOKIES=false` for local HTTP dev
-- **Impact**: All auth-gated features were broken (deep analysis, user prefs, forecasting page).
-  Users appeared signed in due to optimistic `localStorage.epm_username` state but all API calls failed.
+### Root Cause for Replacement
+AAPL job `deep_AAPL_67ea19e2` confirmed MiroFish was structurally broken:
+- `has_seed: True`, `has_key_facts: True`, `has_raw_md: False`
+- MiroFish hung 60+ minutes, produced no raw markdown, job auto-failed
+- Root causes: NER lottery picks unpredictable "dominant agent" each run; 25-40 min base runtime;
+  numbers hallucinated because they aren't injected into the simulation; one entity (e.g. "Federal Reserve")
+  dominates 7/8 posts in a 72-round sim
 
-### Zombie Sim Auto-Cleanup
-- **Root cause**: MiroFish never cleans up `run_parallel_simulation.py` child processes.
-  Accumulated zombies compete for Ollama GPU causing IPC stalls and poll timeouts.
-  Previously required manual `pgrep + kill` each session.
-- **Fix**: Added `_kill_zombie_sims()` to `deep_analysis_worker.py` — runs `pgrep -f
-  run_parallel_simulation.py` + `kill -9` on any found PIDs, waits 1s for GPU release.
-  Called automatically just before `simulation_create` in every pipeline run.
+### New Architecture: `local_council.py` (NEW)
+Seven deterministic financial persona agents, each making one Ollama call grounded in KEY_FACTS:
 
-### LLM Post-Processing Prompt Hardened
-- Added explicit rule to strip MiroFish internal tool names: `interview_agents`, `quick_search`,
-  `insight_forge`, `panorama_search` — these were leaking verbatim into report text
-- Banned blockquote formatting (`>`) entirely — fabricated quotes were persisting as blockquotes
-  attributed to unnamed "spokespersons" and "firms"
-- Added deduplication rule: each statistic appears exactly once across the report
-- Total rules: 8 numbered mandatory rules (up from 4 loose bullet points)
+| Persona | `name` key | Focus |
+|---------|------------|-------|
+| Technical Analyst | `technical_analyst` | Price action, chart patterns, ATR regime |
+| Growth Investor | `growth_investor` | Revenue growth, margin expansion, forward multiples |
+| Value Investor | `value_investor` | P/E, P/B, FCF yield, dividend, intrinsic value |
+| Macro Strategist | `macro_strategist` | VIX, SPY correlation, macro risks |
+| Supply Chain Risk Analyst | `supply_chain_risk` | Concentration, geopolitical exposure |
+| Bearish Analyst | `bearish_analyst` | Downside case, risks, valuation ceiling |
+| Earnings Catalyst Analyst | `earnings_catalyst` | Upcoming catalysts, guidance, PEAD signal |
 
-### Copy Link Bug Fixed
-- `copyReportLink()` was defined inside the IIFE — invisible to `onclick="copyReportLink()"`
-  global scope. Button did nothing.
-- Fixed by making it `window.copyReportLink = function() {...}`
-- Added `execCommand('copy')` fallback for browsers that block the clipboard API
+Synthesis step: all 7 takes + KEY_FACTS → 6-section institutional report via one qwen2.5:14b call.
 
-### Agent Activity Viewer Wired Correctly
-- Was triggered on a blind 800ms setTimeout — failed silently if auth returned 401 (which it always did)
-- Now called directly from `renderReport()` after report content is visible
-- Shows "Loading agent data…" immediately, surfaces HTTP error codes if fetch fails
-- Old redundant second script block removed
+**6 report sections:**
+1. `## Quantitative Snapshot` — KEY_FACTS table (exact values, no hallucination)
+2. `## Quantitative Signals` — EPM ensemble signals, Kronos forecasts, PEAD
+3. `## Kronos Scenario Breakdown` — base/bull/bear/crash scenarios with probabilities
+4. `## Council Perspectives & Tensions` — council disagreements and consensus
+5. `## Market Participant Reactions` — institutional vs retail behavior prediction
+6. `## Critical Risks Beyond the Models` — tail risks not captured by quant models
 
-### Agent Activity — What MiroFish Actually Produces
-- **Finding**: 72-round simulation for AAPL produced only 5 total posts (1 per agent)
-- Agents do NOT deliberate — each makes one isolated statement then goes silent
-- Raw Reddit posts are a sparse side-effect of the simulation; the actual analysis comes from
-  MiroFish's internal IPC interview layer (not accessible via API)
-- Agent posts are in Chinese — MiroFish has no language constraint; qwen2.5 defaults to Chinese
-- **Recommendation**: Relabel section "Agent Perspective Snapshots" (not "activity/conversations")
-  and add note that these are domain-perspective statements, not a conversation log
-- Next improvement: add `simulation_requirement` to force English-language posts
-- Elle Fanning / ASML still appeared as agents (sim ran before news contamination fix)
+### Pipeline: `deep_analysis_worker.py` (REWRITTEN)
+All MiroFish code removed (`_mf_post`, `_mf_get`, `_poll`, `_kill_zombie_sims`,
+`_postprocess_with_llm`, CJK validators, zombie kill on timeout).
 
----
+New lean pipeline:
+```
+Step 0: build_seed_doc(ticker)     → seed_text + key_facts    (5%)
+Step 1: run_council(...)           → 7 persona calls           (15-85%)
+                                   → 1 synthesis call          (85-95%)
+Step 2: persist result             → completed                 (100%)
+```
 
-## Session Fixes Applied (2026-04-16, session 3)
+New STAGES:
+```python
+STAGES = {
+    "queued":             ("Queued",                     0),
+    "seed_doc":           ("Building analysis document", 5),
+    "council_personas":   ("Council deliberating",      15),
+    "council_synthesis":  ("Synthesizing report",       85),
+    "completed":          ("Complete",                 100),
+    "failed":             ("Failed",                    -1),
+}
+```
 
-### App.py Deep Routes Restored
-- `deep_analysis_start`, `deep_analysis_status`, `/deep-report` routes were silently removed from
-  app.py by a `sync_to_server()` overwrite during a prior session
-- **Root cause**: `deep_analysis.py` and `deep_analysis_worker.py` were only on the server, not in
-  the local repo — when sync pushed local app.py it overwrote the server version without these routes
-- **Fix**: pulled both files from server to local repo, restored all deep analysis routes to app.py,
-  added worker start/stop to FastAPI startup/shutdown events
-- **Going forward**: `deep_analysis.py`, `deep_analysis_worker.py`, `static/deep-report.html` are
-  now local files and will sync correctly via `post_run.sync_to_server()`
+Queue wait estimate: 35 min → 7 min per job (7 personas × ~45s + synthesis ~60s = ~6 min).
 
-### Agent Activity Viewer
-- New endpoint: `GET /api/deep/{job_id}/agents` — reads `reddit_profiles.json` and `reddit_simulation.db`
-  from MiroFish sim directory, returns agent names, bios, and all posts
-- MiroFish sim data path: `/opt/mirofish/backend/uploads/simulations/{sim_id}/`
-  - `reddit_profiles.json` — agent name/bio/persona
-  - `reddit_simulation.db` — SQLite, `post` table, `user_id` + `content` columns
-  - Configurable via `MIROFISH_SIMS_DIR` env var (default: above path)
-- UI: collapsible `<details>` cards per agent in "Simulation Agent Activity" section below report
-- MiroFish `/<sim_id>/agent-stats` and `/<sim_id>/posts` REST endpoints are **broken** (Flask 308
-  redirect strips the sim_id) — data must be read from SQLite directly
+### Frontend: `static/js/deep_analysis.js` (edited)
+Replaced 8 MiroFish STAGE_LABELS with 4 council stages:
+```js
+const STAGE_LABELS = [
+  { key: 'seed_doc',          label: 'Data',      full: 'Building Analysis Document' },
+  { key: 'council_personas',  label: 'Council',   full: 'Analyst Council Deliberating' },
+  { key: 'council_synthesis', label: 'Synthesis', full: 'Synthesizing Report' },
+  { key: 'completed',         label: 'Done',      full: 'Complete' },
+];
+```
 
-### News Entity Contamination Fix
-- Agent names were being extracted from news headlines (Elle Fanning, ASML, Amazon) instead of
-  analytical section headers (Technical Analysis Perspective, Federal Reserve, etc.)
-- **Fix**: changed news section header label to include
-  "background context — do not create agents from these headlines"
-- This is a soft LLM instruction — agents should now be seeded from section headers
+### Agents Endpoint: `app.py` (edited)
+`/api/deep/{job_id}/agents` now reads from `result.takes` (council submissions) instead of MiroFish SQLite.
+Response shape is back-compatible with deep-report.html By Agent + Transcript tabs.
 
-### Report Quality Fixes
-- **Supply chain text**: removed "Current US-China tariff escalation" (factually incorrect assertion);
-  replaced with structural risk framing: "US-China trade policy, tariff regimes, and export controls
-  create structural cost and margin risk"
-- **VIX bug**: `yf.download("^VIX", auto_adjust=True)` returned 1748 instead of ~17; fixed by
-  switching to `yf.Ticker("^VIX").history()` with a 5–150 sanity check
-- **LLM post-processing prompt**: added explicit rules — no "interviews with stakeholders" language,
-  no fabricated external quotes ("said a spokesperson"), use ONLY seed doc numbers (ignore MiroFish
-  numbers which are often wrong), don't assert specific current geopolitical events
-- **EPM Enhanced badge**: now only shown when `enhanced_markdown !== markdown_content`; previously
-  showed even when LLM post-processing failed silently and returned raw MiroFish content
+### Branding: `static/deep-report.html` (edited)
+`'Deep Swarm Analysis · Powered by Kronos + MiroFish + EPM Ensemble · '`
+→ `'Deep Analysis · Powered by Kronos + Analyst Council + EPM Ensemble · '`
 
-### Timeout Fix
-- `report_poll` timeout increased: 100×15s (25 min) → 160×15s (40 min)
-- Root cause: MiroFish IPC interview stalls for ~3 min per section when system is under load;
-  previous timeout was too tight and caused the worker to stop polling before report completed
-
-### Auth / 401 Fix
-- `_runDeepAnalysis` in `deep_analysis.js`: 401 response now shows "Sign in required" message and
-  calls `openAuthDrawer()` instead of displaying raw "HTTP 401" error
-
-### CSP Fix (session 2, same session context)
-- Added `https://static.cloudflareinsights.com` to `script-src` in `add_security_headers` middleware
-- Stops Cloudflare beacon from being blocked and logging console CSP errors
-
-### Zombie Sim Process Cleanup
-- Old MiroFish simulation processes from April 14 were still running (PIDs 841732, 1042541)
-- These competed with new simulations for Ollama GPU, causing IPC timeouts mid-report
-- Killed manually; MiroFish does not auto-clean child processes after sim completion
+### yfinance 401 Fix: `deep_analysis.py` (edited)
+Added 2-attempt retry with 4s backoff in `_get_fundamentals` for transient Yahoo Finance 401 errors.
+yfinance 1.2.0 is installed at `/opt/epm-market-intelligence/.venv`. Confirmed working.
 
 ---
 
@@ -140,75 +107,93 @@ Updated: 2026-04-16 (session 4)
 
 ### Job Queue
 - Jobs: `data/jobs/{job_id}.json` — persist indefinitely
+- Schema fields: `job_id`, `ticker`, `status`, `stage`, `progress`, `retry_count`, `created_at`,
+  `started_at`, `completed_at`, `updated_at`, `error`, `result`, `seed_text`, `key_facts`
 - One background thread, FIFO, one job at a time
-- Jobs reset to `queued` on app restart if interrupted
-- Report URL shareable: `/deep-report?job_id=xxx&ticker=XXX`
-- localStorage: 1 job per ticker (overwritten on new run — by design)
-- Job file stores `seed_text`, `simulation_id`, `graph_id`, `report_id` for recovery
+- Jobs reset to `queued` on app restart if interrupted (`_reset_interrupted_jobs`)
+- Deduplication: submitting ticker with active job returns existing job_id
+- Auto-retry: first failure → queued with retry_count=1; second → failed
 
 ### Pipeline Stages & Timings
 | Stage | Time | Progress % |
 |-------|------|-----------|
-| seed_doc | ~8s | 5% |
-| ontology | ~2 min (blocking POST, 180s timeout) | 8-15% |
-| graph | ~1-6 min (36-iteration poll) | 16-25% |
-| simulation_create | instant | 30% |
-| simulation_prepare | ~12.5 min (130×10s poll) | 31-54% |
-| simulation_running | instant start | 55% |
-| report_generate | ~15-30 min (160×15s poll) | 60-95% |
-| LLM post-processing | ~1-2 min (qwen2.5:14b Ollama call) | 96% |
+| seed_doc | ~8s | 5-12% |
+| council_personas | ~5-6 min (7 × ~45s persona calls) | 15-85% |
+| council_synthesis | ~60-90s (synthesis call) | 85-95% |
 | completed | — | 100% |
 
+**Total target: 5-8 min** (vs MiroFish 25-60+ min)
+
+### Job Result Schema
+```json
+{
+  "markdown_content":  "...",     // raw council transcript (per-persona takes)
+  "enhanced_markdown": "...",     // synthesized 6-section report
+  "title":   "AAPL Deep Analysis",
+  "summary": "",
+  "sections": [],
+  "takes": [                      // structured per-persona submissions
+    {"name": "technical_analyst", "title": "Technical Analyst", "body": "..."},
+    ...
+  ]
+}
+```
+
 ### API Endpoints
-- `POST /api/deep/{ticker}` — auth required, enqueues job, returns `{job_id}`
-- `GET /api/deep/{job_id}/status` — auth required, returns progress + result when done
-- `GET /api/deep/{job_id}/agents` — auth required, returns agent profiles + posts from sim SQLite
+- `POST /api/deep/{ticker}` — auth required, enqueues/deduplicates, returns `{job_id}`
+- `GET /api/deep/{job_id}/status` — includes `queue_position`, `queue_wait_min` when queued
+- `GET /api/deep/{job_id}/agents` — returns 7 persona cards + chronological timeline from `takes`
 - `GET /deep-report?job_id=xxx&ticker=XXX` — report display page
-
----
-
-## MiroFish Key Facts
-- `total_rounds` always = 72 (hardcoded, `rounds` param ignored)
-- Agent count = qualifying graph nodes from seed doc named entities
-- Minimum viable seed: ~1000 chars with named entities
-- Named entities come from section headers in the seed doc
-- News headlines section now labeled "background context" to prevent entity extraction from headlines
-- Kronos sample_count=3 appears to be ignored; only 1 forecast returned
-- Report generator drops quantitative data — mitigated by LLM post-processing layer
-- MiroFish `/<sim_id>/agent-stats` REST endpoint broken (Flask routing bug, 308 redirect strips sim_id)
-  — read SQLite files directly instead
-- MiroFish does NOT auto-clean zombie simulation child processes after sim completes
 
 ---
 
 ## Server Setup
 ```bash
-# MiroFish (port 5001)
-cd /opt/mirofish/backend && source /opt/mirofish/venv/bin/activate && nohup python run.py >> /opt/mirofish/mirofish.log 2>&1 &
-
-# Kronos (port 8100)
-cd /opt/kronos && source venv/bin/activate && nohup python api.py > /opt/kronos/kronos.log 2>&1 &
-
 # SSH
 ssh -i ~/.ssh/epm_server dporter02@192.168.1.145
 
-# Kill zombie MiroFish sim processes if they accumulate
-pgrep -a python | grep run_parallel_simulation  # identify PIDs
-kill <PID1> <PID2>
+# Restart service after deploys
+sudo systemctl restart epm.service
+journalctl -u epm.service -n 20 --no-pager
+
+# Kronos (port 8100) — must be running for seed_doc step
+cd /opt/kronos && source venv/bin/activate && nohup python api.py > /opt/kronos/kronos.log 2>&1 &
+
+# Ollama (port 11434) — must be running for council step
+# Check: curl http://localhost:11434/api/tags
+
+# GitNexus (npx broken on Node 24 — use direct node call)
+node "C:\Users\david\AppData\Roaming\npm\node_modules\gitnexus\dist\cli\index.js" analyze
 ```
 
 ---
 
 ## Known Issues / Watch Points
-- MiroFish not auto-started on boot — must be manually started after server reboots
-- MiroFish main Flask process can crash without warning (crashed ~3am on 2026-04-16); no watchdog
-- Ontology stage is the most likely timeout point (~2 min synchronous call)
-- If MiroFish is down when worker runs, job fails with clean user error message
-- Job files never cleaned up — will grow over time (no purge mechanism yet)
-- `seed_text` stored in job JSON — adds ~3-5KB per job file
-- Kronos reliable horizon: ~7-10 days for OHLCV-only model
-- MiroFish report generator drops quant numbers — mitigated by post-processing, not fully solved
-- Agent exclusion not yet implemented — no MiroFish API for removing individual graph nodes;
-  next approach would be a pre-simulation agent review/approval step before simulation_create
-- `deep_analysis.py` / `deep_analysis_worker.py` / `static/deep-report.html` must be kept in local
-  repo to avoid sync overwrites removing server-only files
+- **yfinance fundamentals**: 401 Invalid Crumb errors are transient at the server IP. 2-attempt retry with 4s
+  backoff added. If fundamentals are consistently null (PE, ROE etc.), consider `curl_cffi` browser
+  impersonation: `pip install curl_cffi` then wrap `yf.Ticker(ticker, session=cf.Session(impersonate="chrome")).info`
+- **Stale failed job**: `deep_AAPL_67ea19e2.json` in `failed` status on server. Non-blocking — `failed` jobs
+  don't interfere with new analyses. Can delete: requires `epmapp` user access (service account).
+- **Job files never cleaned up**: `data/jobs/` grows over time; no purge mechanism
+- **Ollama not auto-started on boot**: if council calls fail with connection refused, check `ollama serve`
+- **Kronos not auto-started on boot**: if seed_doc step fails, check Kronos at port 8100
+- **synthesis fallback**: if enhanced_markdown is empty, falls back to raw council transcript so user
+  sees something; logged as WARNING in service logs
+- `deep_analysis.py` / `deep_analysis_worker.py` / `local_council.py` / `static/deep-report.html`
+  / `static/js/deep_analysis.js` / `app.py` must stay in sync between local and server
+
+---
+
+## Next Test: End-to-End Validation
+1. Visit Fund Search page → enter AAPL → click "Run Analyst Council"
+2. Progress bar should advance: Data (12%) → Council (15-85%, slow linear) → Synthesis (85-95%) → Done
+3. Total runtime: ~5-8 min
+4. Open report — confirm all 6 sections present, KEY_FACTS numbers match, no MiroFish/swarm/ontology references
+5. "By Agent" tab — should show exactly 7 persona cards, each with one post
+6. Transcript tab — 7 sequential entries in council deliberation order
+
+## MiroFish Notes (historical reference only — no longer used)
+- MiroFish processes fully removed from pipeline. `mirofish` dir still on server at `/opt/mirofish/`
+  but EPM no longer calls it.
+- All previous sessions' MiroFish fixes (NER persona shaping, zombie kill, CJK filter, English directives)
+  are obsolete — those problems are solved by design in the new deterministic council approach.

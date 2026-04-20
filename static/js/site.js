@@ -2392,7 +2392,8 @@ function mountGlobalHeaderSearch() {
   } else if (!menuPopover.parentElement || menuPopover.parentElement !== document.body) {
     document.body.appendChild(menuPopover);
   }
-  mainNav?.remove();
+  // Keep .main-nav in DOM for Direction C inline desktop nav; hamburger still works via popover
+  // mainNav?.remove();
 
   const params = new URLSearchParams(window.location.search);
   const startTicker = normalizeTickerValue(params.get('ticker') || params.get('t') || '');

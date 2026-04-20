@@ -463,7 +463,7 @@ function renderPodiumLeaderboard(forecastTickers, chartDataMap) {
     return;
   }
 
-  const MEDALS = ['🥇', '🥈', '🥉'];
+  const MEDALS = ['#1', '#2', '#3'];
   const MEDAL_CLASSES = ['gold', 'silver', 'bronze'];
   const PLATFORM_ORDER = [1, 0, 2]; // silver left, gold center, bronze right
 

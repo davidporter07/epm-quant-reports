@@ -1,0 +1,1080 @@
+/* ==========================================================================
+   EPM Design System — Direction C (Executive / Client-facing)
+   All component selectors are scoped to body[data-ds="v3"] to avoid bleeding
+   into pages not yet migrated. Token variables are global (--ds-* / --s-*)
+   and use distinct prefixes that don't clash with styles.css / design-v2.css.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. DESIGN TOKENS — global (safe: --ds-* names not used by legacy CSS)
+   -------------------------------------------------------------------------- */
+
+:root {
+  /* Direction C palette — light canvas defaults */
+  --ds-navy:   #0B1F3A;
+  --ds-canvas: #F4F6FA;
+  --ds-paper:  #FFFFFF;
+  --ds-line:   #E3E7EE;
+  --ds-teal:   #1E7F74;   /* eyebrow / section accent */
+  --ds-amber:  #C28A2B;   /* active nav link */
+  --ds-up:     #0F8A56;
+  --ds-down:   #B3271C;
+  --ds-ink:    #0E1A2B;
+  --ds-muted:  #6B7A92;
+
+  --ds-up-bg:   rgba(15, 138, 86, 0.09);
+  --ds-down-bg: rgba(179, 39, 28, 0.09);
+  --ds-neu-bg:  rgba(107, 122, 146, 0.10);
+
+  /* Spacing scale */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 16px;
+  --s-4: 24px;
+  --s-5: 40px;
+  --s-6: 56px;
+
+  /* Border radius */
+  --ds-r:      6px;
+  --ds-r-chip: 999px;
+
+  /* Type families */
+  --font-sans:  'Inter', system-ui, sans-serif;
+  --font-serif: 'Source Serif 4', Georgia, 'Times New Roman', serif;
+  --font-mono:  'JetBrains Mono', ui-monospace, monospace;
+
+  /* Type scale */
+  --t-display: 32px;
+  --t-h2:      24px;
+  --t-h3:      20px;
+  --t-body:    14px;
+  --t-small:   13px;
+  --t-eyebrow: 11px;
+
+  /* Shadows (light mode) */
+  --ds-shadow: 0 1px 2px rgba(11,31,58,.06), 0 1px 0 rgba(11,31,58,.04);
+  --ds-shadow-md: 0 2px 8px rgba(11,31,58,.08), 0 1px 2px rgba(11,31,58,.04);
+}
+
+/* Dark-mode token remap */
+[data-theme="dark"] {
+  --ds-navy:   #0d2445;
+  --ds-canvas: #061326;
+  --ds-paper:  #0e1e33;
+  --ds-line:   #1e3050;
+  --ds-teal:   #22a394;
+  --ds-amber:  #d4a84b;
+  --ds-ink:    #e8edf4;
+  --ds-muted:  #7a93b8;
+
+  --ds-up-bg:   rgba(34, 163, 148, 0.12);
+  --ds-down-bg: rgba(220, 80, 60, 0.12);
+  --ds-neu-bg:  rgba(122, 147, 184, 0.12);
+
+  --ds-shadow:    0 1px 3px rgba(0,0,0,.3), 0 1px 0 rgba(0,0,0,.2);
+  --ds-shadow-md: 0 2px 10px rgba(0,0,0,.35), 0 1px 3px rgba(0,0,0,.2);
+}
+
+/* Density overrides */
+body[data-density="dense"] {
+  --s-4: 14px;
+  --s-3: 10px;
+  --t-body: 12px;
+  --t-small: 11px;
+}
+
+/* --------------------------------------------------------------------------
+   2. MASTHEAD / NAV RESKIN — scoped to body[data-ds="v3"]
+      Overrides legacy .topbar / .main-nav styles with Direction C treatment.
+   -------------------------------------------------------------------------- */
+
+body[data-ds="v3"] .topbar {
+  background: var(--ds-navy) !important;
+  border-color: transparent !important;
+  border-radius: 0 !important;
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 200 !important;
+  backdrop-filter: none !important;
+  box-shadow: 0 1px 0 rgba(255,255,255,.06) !important;
+  padding: 0 var(--s-4) !important;
+  height: 56px !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: var(--s-3) !important;
+}
+
+body[data-ds="v3"] .topbar .brand-block {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-shrink: 0;
+}
+
+body[data-ds="v3"] .topbar .brand-logo {
+  height: 28px;
+  width: auto;
+}
+
+body[data-ds="v3"] .topbar .brand-copy,
+body[data-ds="v3"] .topbar .brand-block .brand-copy {
+  display: none !important; /* beats design-v2.css @media(≥1100px) .brand-copy{display:flex!important} */
+}
+
+body[data-ds="v3"] .topbar .main-nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  margin-left: var(--s-3);
+}
+
+body[data-ds="v3"] .topbar .main-nav .nav-link {
+  color: rgba(255,255,255,0.72) !important;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 12px;
+  border-radius: var(--ds-r);
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+body[data-ds="v3"] .topbar .main-nav .nav-link:hover {
+  background: rgba(255,255,255,0.08);
+  color: #fff !important;
+}
+
+/* Direction C: amber underline for active nav link (inline desktop nav) */
+body[data-ds="v3"] .topbar .main-nav .nav-link.active {
+  color: #fff !important;
+  border-bottom: 2px solid var(--ds-amber);
+  padding-bottom: 4px;
+}
+
+/* --------------------------------------------------------------------------
+   RESPONSIVE NAV — Direction C inline horizontal nav
+   Desktop (≥900px): show .main-nav inline, hide hamburger toggle + brand h1
+   Mobile  (<900px): hide .main-nav, show hamburger toggle
+   -------------------------------------------------------------------------- */
+
+/* Desktop: inline nav visible, hamburger hidden */
+@media (min-width: 900px) {
+  body[data-ds="v3"] .topbar .main-nav {
+    display: flex !important;
+  }
+  body[data-ds="v3"] .topbar #menuToggleBtn,
+  body[data-ds="v3"] .topbar .menu-toggle {
+    display: none !important;
+  }
+  /* Hide h1 text on desktop — logo image carries the brand */
+  body[data-ds="v3"] .topbar .brand-copy {
+    display: none !important;
+  }
+  /* Remove legacy active-nav background box — Direction C uses amber underline only */
+  body[data-ds="v3"] .topbar .main-nav .nav-link.active {
+    background: transparent !important;
+  }
+  /* Compact brand-block so nav takes the center */
+  body[data-ds="v3"] .topbar .brand-block {
+    flex-shrink: 0;
+    gap: var(--s-2);
+  }
+  /* Search slot stays compact inside brand-block */
+  body[data-ds="v3"] .topbar .header-search-slot {
+    max-width: 260px;
+  }
+  /* Remove auto margin from top-actions — main-nav fills the middle */
+  body[data-ds="v3"] .topbar .top-actions {
+    margin-left: 0;
+  }
+}
+
+/* Mobile: hide inline nav, show hamburger */
+@media (max-width: 899px) {
+  body[data-ds="v3"] .topbar .main-nav {
+    display: none !important;
+  }
+  body[data-ds="v3"] .topbar #menuToggleBtn,
+  body[data-ds="v3"] .topbar .menu-toggle {
+    display: flex !important;
+  }
+  body[data-ds="v3"] .topbar .top-actions {
+    margin-left: auto;
+  }
+}
+
+/* Hide the legacy topbar-nav (mobile dup) — chrome.js replaces it */
+body[data-ds="v3"] .topbar .topbar-nav {
+  display: none !important;
+}
+
+body[data-ds="v3"] .topbar .top-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-left: auto;
+}
+
+/* Settings gear icon in new masthead — override design-v2.css panel background */
+body[data-ds="v3"] .topbar .settings-gear-btn {
+  background: transparent !important;
+  border: 1px solid rgba(255,255,255,0.22) !important;
+  color: rgba(255,255,255,0.85) !important;
+  border-radius: var(--ds-r) !important;
+  width: 32px !important;
+  height: 32px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  box-shadow: none !important;
+  padding: 0 !important;
+  overflow: visible !important;
+}
+
+body[data-ds="v3"] .topbar .settings-gear-btn::before {
+  content: none !important; /* kill legacy gradient overlay from styles.css */
+}
+
+body[data-ds="v3"] .topbar .settings-gear-btn > svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  fill: none;
+  display: block;
+}
+
+body[data-ds="v3"] .topbar .settings-gear-btn:hover {
+  background: rgba(255,255,255,0.10) !important;
+  border-color: rgba(255,255,255,0.4) !important;
+  color: #fff !important;
+}
+
+/* Sign-in and user-badge in new masthead */
+body[data-ds="v3"] .topbar-signin-btn {
+  background: rgba(255,255,255,0.12);
+  border: 1px solid rgba(255,255,255,0.22);
+  color: #fff;
+  border-radius: var(--ds-r);
+  padding: 5px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+body[data-ds="v3"] .topbar-signin-btn:hover {
+  background: rgba(255,255,255,0.20);
+}
+
+body[data-ds="v3"] .user-badge {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  color: rgba(255,255,255,0.85);
+  font-size: 13px;
+}
+
+body[data-ds="v3"] .user-badge-name {
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body[data-ds="v3"] .user-badge-logout {
+  color: rgba(255,255,255,0.45) !important;
+}
+
+body[data-ds="v3"] .user-badge-logout:hover {
+  color: rgba(255,255,255,0.85) !important;
+}
+
+/* Density toggle button — scoped to Markets page only in this pass */
+body[data-ds="v3"] .topbar .ds-density-btn {
+  background: transparent !important;
+  border: 1px solid rgba(255,255,255,0.22) !important;
+  color: rgba(255,255,255,0.85) !important;
+  border-radius: var(--ds-r) !important;
+  width: 32px !important;
+  height: 32px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer;
+  font-size: 14px !important;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  line-height: 1;
+  padding: 0 !important;
+}
+
+body[data-ds="v3"][data-density="dense"] .topbar .ds-density-btn {
+  background: rgba(255,255,255,0.16) !important;
+  border-color: var(--ds-amber) !important;
+  color: #fff !important;
+}
+
+body[data-ds="v3"] .topbar .ds-density-btn:hover {
+  background: rgba(255,255,255,0.10) !important;
+  border-color: rgba(255,255,255,0.4) !important;
+  color: #fff !important;
+}
+
+/* Hide density toggle on every page except Markets (first-pass scope). */
+body[data-ds="v3"]:not([data-page="markets"]) #dsDensityBtn {
+  display: none !important;
+}
+
+/* Page canvas */
+body[data-ds="v3"] {
+  background: var(--ds-canvas);
+  color: var(--ds-ink);
+  font-family: var(--font-sans);
+  font-size: var(--t-body);
+}
+
+/* Page shell gets a top-padding to account for flush sticky nav */
+body[data-ds="v3"] .page-shell {
+  padding-top: var(--s-4) !important;
+}
+
+/* --------------------------------------------------------------------------
+   3. CARD PRIMITIVES
+   -------------------------------------------------------------------------- */
+
+body[data-ds="v3"] .ds-card {
+  background: var(--ds-paper);
+  border: 1px solid var(--ds-line);
+  border-radius: var(--ds-r);
+  box-shadow: var(--ds-shadow);
+  padding: var(--s-4);
+}
+
+body[data-ds="v3"] .ds-card.is-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+body[data-ds="v3"] .ds-card.is-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding: var(--s-3) var(--s-4);
+}
+
+body[data-ds="v3"] .ds-card.is-table {
+  padding: 0;
+  overflow: hidden;
+}
+
+/* --------------------------------------------------------------------------
+   4. TYPOGRAPHY PRIMITIVES
+   -------------------------------------------------------------------------- */
+
+body[data-ds="v3"] .ds-eyebrow {
+  color: var(--ds-teal);
+  font-size: var(--t-eyebrow);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  line-height: 1;
+}
+
+body[data-ds="v3"] .ds-title {
+  color: var(--ds-ink);
+  font-size: var(--t-h2);
+  font-weight: 700;
+  line-height: 1.2;
+  margin: 0;
+}
+
+body[data-ds="v3"] .ds-title.is-display {
+  font-size: var(--t-display);
+  line-height: 1.1;
+}
+
+body[data-ds="v3"] .ds-title.is-h3 {
+  font-size: var(--t-h3);
+}
+
+body[data-ds="v3"] .ds-subtitle {
+  color: var(--ds-muted);
+  font-size: var(--t-small);
+  line-height: 1.5;
+  margin: 0;
+}
+
+body[data-ds="v3"] .ds-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------------------------
+   5. CHIP PRIMITIVES
+   -------------------------------------------------------------------------- */
+
+body[data-ds="v3"] .ds-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--ds-r-chip);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+body[data-ds="v3"] .ds-chip.up {
+  color: var(--ds-up);
+  background: var(--ds-up-bg);
+}
+
+body[data-ds="v3"] .ds-chip.down {
+  color: var(--ds-down);
+  background: var(--ds-down-bg);
+}
+
+body[data-ds="v3"] .ds-chip.neutral {
+  color: var(--ds-muted);
+  background: var(--ds-neu-bg);
+}
+
+/* --------------------------------------------------------------------------
+   6. BUTTON PRIMITIVES
+   -------------------------------------------------------------------------- */
+
+body[data-ds="v3"] .ds-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: var(--ds-r);
+  padding: 8px 18px;
+  cursor: pointer;
+  text-decoration: none;
+  border: 1px solid transparent;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  white-space: nowrap;
+  font-family: var(--font-sans);
+}
+
+body[data-ds="v3"] .ds-btn.is-primary {
+  background: var(--ds-navy);
+  color: #fff;
+  border-color: var(--ds-navy);
+}
+
+body[data-ds="v3"] .ds-btn.is-primary:hover {
+  background: #0d2855;
+  border-color: #0d2855;
+}
+
+body[data-ds="v3"] .ds-btn.is-ghost {
+  background: transparent;
+  color: var(--ds-ink);
+  border-color: var(--ds-line);
+}
+
+body[data-ds="v3"] .ds-btn.is-ghost:hover {
+  background: var(--ds-canvas);
+  border-color: var(--ds-muted);
+}
+
+/* --------------------------------------------------------------------------
+   7. KPI PRIMITIVE
+   -------------------------------------------------------------------------- */
+
+body[data-ds="v3"] .ds-kpi__eyebrow {
+  color: var(--ds-muted);
+  font-size: var(--t-eyebrow);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+body[data-ds="v3"] .ds-kpi__value {
+  font-size: var(--t-h2);
+  font-weight: 700;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ds-ink);
+  line-height: 1.1;
+}
+
+body[data-ds="v3"] .ds-kpi__delta {
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+
+/* --------------------------------------------------------------------------
+   8. RESEARCH / EDITORIAL TYPOGRAPHY — scoped to .ds-research
+   -------------------------------------------------------------------------- */
+
+body[data-ds="v3"] .ds-research {
+  font-family: var(--font-serif);
+}
+
+body[data-ds="v3"] .ds-research .research-title,
+body[data-ds="v3"] .ds-research h1 {
+  font-family: var(--font-serif);
+  font-size: var(--t-display);
+  font-weight: 600;
+  line-height: 1.15;
+  color: var(--ds-ink);
+}
+
+body[data-ds="v3"] .ds-research .research-body,
+body[data-ds="v3"] .ds-research p {
+  font-family: var(--font-serif);
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--ds-ink);
+}
+
+body[data-ds="v3"] .ds-research .research-quote {
+  border-left: 2px solid var(--ds-teal);
+  padding-left: var(--s-3);
+  font-family: var(--font-serif);
+  font-style: italic;
+  color: var(--ds-muted);
+  margin: var(--s-3) 0;
+}
+
+/* --------------------------------------------------------------------------
+   9. SECTION HEADER ROW RESKIN (replaces .section-title-row)
+   -------------------------------------------------------------------------- */
+
+body[data-ds="v3"] .ds-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  margin-bottom: var(--s-3);
+}
+
+body[data-ds="v3"] .ds-section-header .ds-title {
+  font-size: var(--t-h3);
+}
+
+/* --------------------------------------------------------------------------
+   10. SETTINGS DRAWER — Direction C reskin
+   -------------------------------------------------------------------------- */
+
+body[data-ds="v3"] .settings-drawer {
+  background: var(--ds-paper);
+  border-left: 1px solid var(--ds-line);
+  box-shadow: -4px 0 24px rgba(11,31,58,.12);
+}
+
+body[data-ds="v3"] .settings-drawer h3 {
+  color: var(--ds-ink);
+  font-size: var(--t-h3);
+  font-weight: 700;
+}
+
+body[data-ds="v3"] .settings-drawer h4 {
+  color: var(--ds-muted);
+  font-size: var(--t-eyebrow);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* --------------------------------------------------------------------------
+   11. PAGE LAYOUT HELPERS
+   -------------------------------------------------------------------------- */
+
+/* Replaces .dashboard-grid for the home page */
+body[data-ds="v3"] .ds-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--s-3);
+}
+
+body[data-ds="v3"] .ds-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--s-3);
+}
+
+@media (max-width: 900px) {
+  body[data-ds="v3"] .ds-grid-3 {
+    grid-template-columns: 1fr;
+  }
+  body[data-ds="v3"] .ds-grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  body[data-ds="v3"] #dsDensityBtn {
+    display: none;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   12. TABLE PRIMITIVE
+   -------------------------------------------------------------------------- */
+
+body[data-ds="v3"] .ds-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--t-small);
+}
+
+body[data-ds="v3"] .ds-table thead th {
+  font-size: var(--t-eyebrow);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ds-muted);
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--ds-line);
+  text-align: left;
+  white-space: nowrap;
+}
+
+body[data-ds="v3"] .ds-table tbody td {
+  padding: 10px var(--s-3);
+  border-bottom: 1px solid var(--ds-line);
+  color: var(--ds-ink);
+}
+
+body[data-ds="v3"] .ds-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+body[data-ds="v3"] .ds-table tbody tr:hover td {
+  background: rgba(11,31,58,.03);
+}
+
+body[data-ds="v3"] .ds-table td.ds-num,
+body[data-ds="v3"] .ds-table th.ds-num {
+  text-align: right;
+}
+
+/* --------------------------------------------------------------------------
+   13. SECTION DIVIDER — replaces .sec-divider on migrated pages
+   -------------------------------------------------------------------------- */
+
+body[data-ds="v3"] .ds-section-divider {
+  padding: var(--s-3) 0 var(--s-2);
+  border-bottom: 1px solid var(--ds-line);
+  margin-bottom: var(--s-3);
+}
+
+body[data-ds="v3"] .ds-section-divider .ds-eyebrow {
+  margin-bottom: 0;
+}
+
+/* --------------------------------------------------------------------------
+   14. DENSE MODE — shared compact rules (all migrated pages)
+       Card padding and section-level spacing compress on all data-ds="v3"
+       pages when dense. Page-specific reductions are below.
+   -------------------------------------------------------------------------- */
+
+body[data-ds="v3"][data-density="dense"] .ds-card.is-panel {
+  padding: var(--s-2) var(--s-3) !important;
+}
+
+body[data-ds="v3"][data-density="dense"] .ds-section-header {
+  margin-bottom: var(--s-1);
+}
+
+body[data-ds="v3"][data-density="dense"] .ds-section-divider {
+  padding: var(--s-2) 0 var(--s-1);
+  margin-bottom: var(--s-2);
+}
+
+body[data-ds="v3"][data-density="dense"] .page-footer {
+  padding: var(--s-2) 0;
+}
+
+/* --------------------------------------------------------------------------
+   14.5. SKELETON SHIMMER — Direction C loading state
+        Upgrades legacy .placeholder-item on Markets to a clean Direction C
+        skeleton. Scoped so it doesn't fight the existing v2 shimmer on
+        non-migrated pages. Also exposes a reusable .ds-skeleton primitive.
+   -------------------------------------------------------------------------- */
+
+@keyframes ds-skeleton-shimmer {
+  0%   { background-position: -240px 0; }
+  100% { background-position: 240px 0; }
+}
+
+body[data-page="markets"][data-ds="v3"] .placeholder-item {
+  color: var(--ds-muted) !important;
+  background: linear-gradient(
+    100deg,
+    var(--ds-canvas) 20%,
+    rgba(11, 31, 58, 0.04) 40%,
+    var(--ds-canvas) 60%
+  ) !important;
+  background-size: 480px 100% !important;
+  background-repeat: no-repeat;
+  border: 1px solid var(--ds-line) !important;
+  border-radius: var(--ds-r) !important;
+  padding: 14px 16px !important;
+  font-size: var(--t-small);
+}
+
+body[data-page="markets"][data-ds="v3"] .placeholder-item::after {
+  content: none !important; /* kill v2 overlay so only the v3 gradient is visible */
+}
+
+body[data-page="markets"][data-ds="v3"][data-animations="on"] .placeholder-item {
+  animation: ds-skeleton-shimmer 1.6s linear infinite;
+}
+
+[data-theme="dark"] body[data-page="markets"][data-ds="v3"] .placeholder-item,
+body[data-page="markets"][data-ds="v3"][data-theme="dark"] .placeholder-item {
+  background: linear-gradient(
+    100deg,
+    var(--ds-paper) 20%,
+    rgba(255, 255, 255, 0.045) 40%,
+    var(--ds-paper) 60%
+  ) !important;
+  background-size: 480px 100% !important;
+  background-repeat: no-repeat;
+  border-color: var(--ds-line) !important;
+  color: var(--ds-muted) !important;
+}
+
+/* Forecasting podium — Direction C rank badges (text, not emoji).
+   Restyles .podium-medal to look like a deliberate mono numeric rank. */
+body[data-page="forecasting"][data-ds="v3"] .podium-medal {
+  font-family: var(--font-mono) !important;
+  font-size: 15px !important;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  color: var(--ds-muted);
+}
+
+body[data-page="forecasting"][data-ds="v3"] .podium-slot.gold .podium-medal {
+  color: var(--ds-amber);
+}
+
+body[data-page="forecasting"][data-ds="v3"] .podium-slot.silver .podium-medal {
+  color: var(--ds-muted);
+}
+
+body[data-page="forecasting"][data-ds="v3"] .podium-slot.bronze .podium-medal {
+  color: #8a5f1a;
+}
+
+[data-theme="dark"] body[data-page="forecasting"][data-ds="v3"] .podium-slot.bronze .podium-medal {
+  color: #c79a55;
+}
+
+/* Reusable skeleton block primitive for future v3 loading states */
+body[data-ds="v3"] .ds-skeleton {
+  display: block;
+  background: linear-gradient(
+    100deg,
+    var(--ds-canvas) 20%,
+    rgba(11, 31, 58, 0.06) 40%,
+    var(--ds-canvas) 60%
+  );
+  background-size: 480px 100%;
+  background-repeat: no-repeat;
+  border-radius: var(--ds-r);
+  min-height: 14px;
+}
+
+body[data-ds="v3"][data-animations="on"] .ds-skeleton {
+  animation: ds-skeleton-shimmer 1.6s linear infinite;
+}
+
+/* --------------------------------------------------------------------------
+   14a. DENSE MODE — Markets-specific
+        Subtitles hidden, chart heights reduced, KPI grid tightened.
+        Scoped to data-page="markets" so these do not bleed to Search etc.
+   -------------------------------------------------------------------------- */
+
+body[data-page="markets"][data-ds="v3"][data-density="dense"] .ds-subtitle {
+  display: none;
+}
+
+body[data-page="markets"][data-ds="v3"][data-density="dense"] .plot-target {
+  min-height: 200px !important;
+}
+
+body[data-page="markets"][data-ds="v3"][data-density="dense"] .plot-target.plot-target--short {
+  min-height: 160px !important;
+}
+
+body[data-page="markets"][data-ds="v3"][data-density="dense"] .plot-target.plot-target--comparison {
+  min-height: 200px !important;
+}
+
+body[data-page="markets"][data-ds="v3"][data-density="dense"] .market-kpi-grid {
+  gap: var(--s-1);
+}
+
+body[data-page="markets"][data-ds="v3"][data-density="dense"] .market-kpi-pill {
+  padding: 6px 8px;
+}
+
+body[data-page="markets"][data-ds="v3"][data-density="dense"] .market-kpi-pill .value {
+  font-size: 18px;
+}
+
+/* --------------------------------------------------------------------------
+   14b. DENSE MODE — Search-specific
+        Tightens KV metric grid rows and news items on Fund Search.
+   -------------------------------------------------------------------------- */
+
+body[data-page="search"][data-ds="v3"][data-density="dense"] .kv-grid {
+  gap: 2px;
+}
+
+body[data-page="search"][data-ds="v3"][data-density="dense"] .kv-row {
+  padding: 3px 0;
+  font-size: 12px;
+}
+
+body[data-page="search"][data-ds="v3"][data-density="dense"] .news-item {
+  padding: var(--s-1) 0;
+}
+
+/* --------------------------------------------------------------------------
+   15. DEEP REPORT PAGE — moved from deep-report.html inline <style>
+       Scoped to data-page="deep-report" via class names that are unique to
+       the report layout. Print rules kept at end.
+   -------------------------------------------------------------------------- */
+
+.report-page { max-width: 960px; margin: 0 auto; padding: 32px 24px 80px; }
+
+.report-header {
+  background: linear-gradient(160deg, #07112a, rgba(5,12,28,0.95));
+  border: 1px solid rgba(212,168,75,0.35);
+  border-radius: 14px;
+  padding: 28px 32px;
+  margin-bottom: 20px;
+  position: relative;
+  overflow: hidden;
+}
+.report-header::before {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0; height: 4px;
+  background: linear-gradient(90deg, #d4a84b 0%, #f0c878 50%, #d4a84b 100%);
+}
+.report-ticker { font-size: 42px; font-weight: 900; color: #d4a84b; line-height: 1; }
+.report-title  { font-size: 16px; color: var(--text, #e8eeff); margin-top: 6px; opacity: 0.85; }
+.report-meta   { font-size: 11px; color: var(--muted, #7d94c0); margin-top: 6px; }
+
+.report-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .12em;
+  background: rgba(30,127,116,0.12); color: #1E7F74;
+  border: 1px solid rgba(30,127,116,0.3);
+  padding: 4px 12px; border-radius: 20px; margin-bottom: 14px;
+}
+
+.section-card {
+  background: var(--panel, rgba(8,18,40,0.93));
+  border: 1px solid var(--border, rgba(28,52,96,0.62));
+  border-radius: 10px;
+  padding: 22px 24px;
+  margin-bottom: 16px;
+}
+.section-card h2     { font-size: 15px; font-weight: 700; color: #d4a84b; margin-bottom: 14px; }
+.section-card p,
+.section-card li     { font-size: 13px; color: var(--muted, #7d94c0); line-height: 1.75; }
+.section-card strong { color: var(--text, #e8eeff); }
+.section-card ul,
+.section-card ol     { padding-left: 20px; }
+.section-card h3     { font-size: 13px; font-weight: 700; color: var(--text, #e8eeff); margin: 14px 0 6px; }
+
+.back-link {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--muted, #7d94c0);
+  text-decoration: none; margin-bottom: 20px;
+}
+.back-link:hover { color: var(--text, #e8eeff); }
+
+.loading-state { text-align: center; padding: 60px 20px; color: var(--muted, #7d94c0); }
+.error-state   {
+  padding: 20px;
+  background: rgba(239,68,68,0.1);
+  border: 1px solid rgba(239,68,68,0.3);
+  border-radius: 8px;
+  color: #ef4444;
+  font-size: 13px;
+}
+
+.summary-card {
+  background: rgba(212,168,75,0.06);
+  border: 1px solid rgba(212,168,75,0.2);
+  border-radius: 10px;
+  padding: 16px 20px;
+  margin-bottom: 20px;
+  font-size: 13px;
+  color: var(--text, #e8eeff);
+  line-height: 1.7;
+}
+
+.md-content h1,
+.md-content h2,
+.md-content h3     { color: var(--text, #e8eeff); margin: 16px 0 8px; }
+.md-content p      { font-size: 13px; color: var(--muted, #7d94c0); line-height: 1.75; margin-bottom: 10px; }
+.md-content ul,
+.md-content ol     { padding-left: 20px; margin-bottom: 10px; }
+.md-content li     { font-size: 13px; color: var(--muted, #7d94c0); line-height: 1.7; }
+.md-content strong { color: var(--text, #e8eeff); }
+
+@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.5; } }
+.pulsing { animation: pulse 1.5s ease-in-out infinite; }
+
+.report-actions {
+  display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap;
+}
+.report-actions button {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 8px 16px; border-radius: 8px; font-size: 12px; font-weight: 600;
+  cursor: pointer; transition: opacity .15s;
+}
+.report-actions button:hover { opacity: .8; }
+
+.btn-copy {
+  background: transparent;
+  border: 1px solid rgba(212,168,75,0.35);
+  color: var(--muted, #7d94c0);
+}
+.btn-pdf {
+  background: linear-gradient(135deg,#d4a84b,#a07828);
+  border: none; color: #0a1928;
+}
+
+@media print {
+  body { background: #fff !important; color: #111 !important; }
+  .back-link, .report-actions, #loadingState, #errorState { display: none !important; }
+  .report-page { max-width: 100%; padding: 0; }
+  .report-header {
+    background: #f8f4ec !important; border: 1px solid #ccc !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .report-ticker  { color: #8a5f1a !important; -webkit-text-fill-color: #8a5f1a !important; }
+  .report-pill    { background: #e6f4f2 !important; color: #155f58 !important; border-color: #ccc !important; }
+  .section-card   {
+    background: #fff !important; border: 1px solid #ddd !important;
+    break-inside: avoid; page-break-inside: avoid;
+  }
+  .section-card h2 { color: #8a5f1a !important; }
+  .section-card p,
+  .section-card li { color: #333 !important; }
+  .section-card strong { color: #111 !important; }
+  .summary-card   { background: #fdf8ee !important; border-color: #ccc !important; color: #222 !important; }
+  .report-title,
+  .report-meta    { color: #444 !important; }
+}
+
+/* --------------------------------------------------------------------------
+   16. DEEP REPORT — Agent deliberation section
+       Moved from second inline <style> block in deep-report.html.
+   -------------------------------------------------------------------------- */
+
+#agentActivity { margin: 32px auto; max-width: 860px; padding: 0 16px 40px; }
+.agent-section-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 14px; flex-wrap: wrap; gap: 10px;
+}
+.agent-section-title {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .1em; color: rgba(212,168,75,0.7);
+}
+.agent-section-note { font-size: 11px; color: var(--muted, #7d94c0); font-style: italic; }
+
+.agent-tabs {
+  display: flex; gap: 4px;
+  background: rgba(8,18,40,0.8);
+  border: 1px solid rgba(28,52,96,0.5);
+  border-radius: 8px; padding: 3px;
+}
+.agent-tab {
+  padding: 5px 14px; border-radius: 6px; font-size: 11px; font-weight: 600;
+  cursor: pointer; border: none; background: transparent;
+  color: var(--muted, #7d94c0); transition: all .15s;
+}
+.agent-tab.active { background: rgba(212,168,75,0.15); color: #d4a84b; }
+
+.agent-card {
+  border: 1px solid rgba(28,52,96,0.55);
+  border-radius: 8px; margin-bottom: 8px; overflow: hidden;
+  background: var(--panel, rgba(8,18,40,0.93));
+}
+.agent-summary {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 11px 16px; cursor: pointer; list-style: none; gap: 10px;
+}
+.agent-summary::-webkit-details-marker { display: none; }
+.agent-name      { font-weight: 700; font-size: 13px; color: var(--text, #e8eeff); }
+.agent-post-count {
+  font-size: 11px; color: var(--muted, #7d94c0);
+  background: rgba(28,52,96,0.5); padding: 2px 9px; border-radius: 10px; white-space: nowrap;
+}
+.agent-bio {
+  font-size: 12px; color: var(--muted, #7d94c0); padding: 8px 16px 6px;
+  font-style: italic; border-top: 1px solid rgba(28,52,96,0.4); line-height: 1.6;
+}
+.agent-posts  { padding: 8px 16px 12px; display: flex; flex-direction: column; gap: 6px; }
+.agent-post {
+  font-size: 13px; line-height: 1.65; padding: 9px 12px;
+  background: rgba(5,12,28,0.7); border-radius: 6px;
+  border-left: 2px solid rgba(212,168,75,0.5); color: var(--muted, #7d94c0);
+}
+.agent-empty {
+  font-size: 13px; color: var(--muted, #7d94c0); padding: 16px; text-align: center;
+  border: 1px dashed rgba(28,52,96,0.4); border-radius: 8px;
+}
+
+#agentTimeline { display: flex; flex-direction: column; gap: 0; }
+.tl-entry   { display: flex; gap: 12px; align-items: flex-start; }
+.tl-avatar  {
+  width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 800; color: #0a1928;
+}
+.tl-bubble  {
+  flex: 1; background: rgba(8,18,40,0.93);
+  border: 1px solid rgba(28,52,96,0.55); border-radius: 0 8px 8px 8px; padding: 10px 14px;
+}
+.tl-meta        { display: flex; align-items: baseline; gap: 8px; margin-bottom: 5px; }
+.tl-agent-name  { font-size: 12px; font-weight: 700; color: var(--text, #e8eeff); }
+.tl-round       { font-size: 10px; color: var(--muted, #7d94c0); }
+.tl-content     { font-size: 13px; line-height: 1.65; color: var(--muted, #7d94c0); }
+
+.script-header {
+  padding: 16px 0 20px; border-bottom: 1px solid rgba(28,52,96,0.4); margin-bottom: 8px;
+}
+.script-title {
+  font-size: 11px; font-weight: 800; letter-spacing: .16em;
+  color: rgba(212,168,75,0.8); text-transform: uppercase; margin-bottom: 4px;
+}
+.script-meta    { font-size: 11px; color: var(--muted, #7d94c0); margin-bottom: 6px; }
+.script-divider { font-size: 11px; color: rgba(28,52,96,0.6); letter-spacing: .02em; }
+.script-line    { padding: 16px 0; border-bottom: 1px solid rgba(28,52,96,0.25); }
+.script-reply   { padding-left: 28px; border-left: 2px solid rgba(28,52,96,0.4); margin-left: 14px; }
+.script-speaker { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.script-dot     { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.script-name    { font-size: 11px; font-weight: 800; letter-spacing: .1em; color: var(--text, #e8eeff); }
+.script-round   {
+  font-size: 10px; color: var(--muted, #7d94c0);
+  background: rgba(28,52,96,0.35); padding: 1px 7px; border-radius: 4px;
+}
+.script-dialogue {
+  font-size: 13px; line-height: 1.75; color: var(--muted, #7d94c0);
+  padding-left: 16px; border-left: 2px solid rgba(212,168,75,0.2);
+}
