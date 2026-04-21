@@ -2345,7 +2345,7 @@ function mountGlobalHeaderSearch() {
   (mainNav ? [...mainNav.querySelectorAll('a')] : []).forEach((link) => {
     const href = link.getAttribute('href') || '#';
     const label = (link.textContent || '').trim();
-    if (!label || href === '#' || href === '/search') return;
+    if (!label || href === '#') return;
     if (!linkRecords.some((record) => record.href === href)) linkRecords.push({ href, label });
   });
   [
@@ -2353,10 +2353,11 @@ function mountGlobalHeaderSearch() {
     { href: '/markets', label: 'Markets' },
     { href: '/forecasting', label: 'Forecasting' },
     { href: '/portfolios', label: 'Model Portfolios' },
-    { href: '/download/current-report', label: 'Download Report' },
+    { href: '/search', label: 'Fund Search' },
   ].forEach((record) => {
     if (!linkRecords.some((item) => item.href === record.href)) linkRecords.push(record);
   });
+  const menuLinksMarkup = linkRecords.map((record) => `<a class="menu-link" href="${record.href}">${escapeHtml(record.label)}</a>`).join('');
 
   let menuToggle = brandBlock.querySelector('#menuToggleBtn');
   let menuPopover = document.getElementById('headerMenuPopover') || brandBlock.querySelector('#headerMenuPopover');
@@ -2386,12 +2387,14 @@ function mountGlobalHeaderSearch() {
     menuPopover.innerHTML = `
       <div class="header-menu-panel">
         <div class="header-menu-label">Navigate</div>
-        <div class="header-menu-links">${linkRecords.map((record) => `<a class="menu-link" href="${record.href}">${escapeHtml(record.label)}</a>`).join('')}</div>
+        <div class="header-menu-links">${menuLinksMarkup}</div>
       </div>`;
     document.body.appendChild(menuPopover);
   } else if (!menuPopover.parentElement || menuPopover.parentElement !== document.body) {
     document.body.appendChild(menuPopover);
   }
+  const menuLinks = menuPopover.querySelector('.header-menu-links');
+  if (menuLinks) menuLinks.innerHTML = menuLinksMarkup;
   // Keep .main-nav in DOM for Direction C inline desktop nav; hamburger still works via popover
   // mainNav?.remove();
 
