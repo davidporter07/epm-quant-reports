@@ -104,6 +104,10 @@ body[data-ds="v3"] .topbar {
   gap: var(--s-3) !important;
 }
 
+body[data-ds="v3"] .topbar.is-scrolled {
+  box-shadow: 0 1px 0 rgba(255,255,255,.06), 0 12px 24px rgba(11,31,58,.14) !important;
+}
+
 body[data-ds="v3"] .topbar .brand-block {
   display: flex;
   align-items: center;
@@ -138,6 +142,7 @@ body[data-ds="v3"] .topbar .main-nav .nav-link {
   text-decoration: none;
   transition: background 0.15s, color 0.15s;
   white-space: nowrap;
+  position: relative;
 }
 
 body[data-ds="v3"] .topbar .main-nav .nav-link:hover {
@@ -150,6 +155,19 @@ body[data-ds="v3"] .topbar .main-nav .nav-link.active {
   color: #fff !important;
   border-bottom: 2px solid var(--ds-amber);
   padding-bottom: 4px;
+  font-weight: 600;
+}
+
+body[data-ds="v3"] .topbar .main-nav .nav-link.active::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -6px;
+  width: 5px;
+  height: 5px;
+  margin-left: -2.5px;
+  border-radius: 50%;
+  background: var(--ds-amber);
 }
 
 /* --------------------------------------------------------------------------
@@ -214,6 +232,77 @@ body[data-ds="v3"] .topbar .top-actions {
   align-items: center;
   gap: var(--s-2);
   margin-left: auto;
+}
+
+body[data-ds="v3"] .page-context-strip {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: var(--s-3);
+  padding: 14px var(--s-4) 16px;
+  background: linear-gradient(180deg, rgba(11,31,58,0.03), rgba(11,31,58,0));
+  border-bottom: 1px solid rgba(11,31,58,0.08);
+}
+
+body[data-ds="v3"] .page-context-main {
+  min-width: 0;
+  max-width: 760px;
+}
+
+body[data-ds="v3"] .page-context-eyebrow {
+  color: var(--ds-teal);
+  font-size: var(--t-eyebrow);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+body[data-ds="v3"] .page-context-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+body[data-ds="v3"] .page-context-title {
+  margin: 0;
+  color: var(--ds-ink);
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+body[data-ds="v3"] .page-context-active {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: var(--ds-r-chip);
+  background: rgba(194,138,43,0.08);
+  border: 1px solid rgba(194,138,43,0.18);
+  color: #8a5f1a;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+body[data-ds="v3"] .page-context-active::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ds-amber);
+  flex-shrink: 0;
+}
+
+body[data-ds="v3"] .page-context-subtitle {
+  margin: 0;
+  color: var(--ds-muted);
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 /* Settings gear icon in new masthead — override design-v2.css panel background */
@@ -340,7 +429,7 @@ body[data-ds="v3"] {
 
 /* Page shell gets a top-padding to account for flush sticky nav */
 body[data-ds="v3"] .page-shell {
-  padding-top: var(--s-4) !important;
+  padding-top: 18px !important;
 }
 
 /* --------------------------------------------------------------------------
@@ -566,6 +655,14 @@ body[data-ds="v3"] .ds-section-header .ds-title {
   font-size: var(--t-h3);
 }
 
+body[data-ds="v3"] .page-shell > .ds-card.is-panel:first-child,
+body[data-ds="v3"] .page-shell > .ds-section-divider:first-child,
+body[data-ds="v3"] .page-shell > .two-col-grid:first-child,
+body[data-ds="v3"] .page-shell > .ds-grid-3:first-child,
+body[data-ds="v3"] .page-shell > .hero-grid:first-child {
+  margin-top: 0 !important;
+}
+
 /* --------------------------------------------------------------------------
    10. SETTINGS DRAWER — Direction C reskin
    -------------------------------------------------------------------------- */
@@ -613,6 +710,14 @@ body[data-ds="v3"] .ds-grid-2 {
   }
   body[data-ds="v3"] .ds-grid-2 {
     grid-template-columns: 1fr;
+  }
+  body[data-ds="v3"] .page-context-strip {
+    flex-direction: column;
+    gap: var(--s-3);
+    padding: 12px var(--s-4) 14px;
+  }
+  body[data-ds="v3"] .page-context-title {
+    font-size: 21px;
   }
 }
 
@@ -732,6 +837,20 @@ body[data-page="markets"][data-ds="v3"] .placeholder-item::after {
   content: none !important; /* kill v2 overlay so only the v3 gradient is visible */
 }
 
+body[data-ds="v3"]:not([data-page="markets"]) .placeholder-item {
+  color: var(--ds-muted) !important;
+  background: rgba(255,255,255,0.72) !important;
+  border: 1px dashed rgba(11,31,58,0.12) !important;
+  border-radius: var(--ds-r) !important;
+  padding: 14px 16px !important;
+  box-shadow: none !important;
+}
+
+body[data-ds="v3"]:not([data-page="markets"]) .placeholder-item::after,
+body[data-ds="v3"]:not([data-page="markets"]) .placeholder-item::before {
+  content: none !important;
+}
+
 body[data-page="markets"][data-ds="v3"][data-animations="on"] .placeholder-item {
   animation: ds-skeleton-shimmer 1.6s linear infinite;
 }
@@ -776,6 +895,26 @@ body[data-page="forecasting"][data-ds="v3"] .podium-slot.bronze .podium-medal {
 
 [data-theme="dark"] body[data-page="forecasting"][data-ds="v3"] .podium-slot.bronze .podium-medal {
   color: #c79a55;
+}
+
+[data-theme="dark"] body[data-ds="v3"] .page-context-strip,
+body[data-ds="v3"][data-theme="dark"] .page-context-strip {
+  background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0));
+  border-bottom-color: rgba(255,255,255,0.08);
+}
+
+[data-theme="dark"] body[data-ds="v3"] .page-context-active,
+body[data-ds="v3"][data-theme="dark"] .page-context-active {
+  background: rgba(212,168,75,0.12);
+  border-color: rgba(212,168,75,0.24);
+  color: #f0c878;
+}
+
+[data-theme="dark"] body[data-ds="v3"]:not([data-page="markets"]) .placeholder-item,
+body[data-ds="v3"][data-theme="dark"]:not([data-page="markets"]) .placeholder-item {
+  background: rgba(14,30,51,0.72) !important;
+  border-color: rgba(255,255,255,0.08) !important;
+  color: var(--ds-muted) !important;
 }
 
 /* Reusable skeleton block primitive for future v3 loading states */

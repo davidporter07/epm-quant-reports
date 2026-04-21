@@ -37,6 +37,34 @@
     { href: '/search',      label: 'Fund Search' },
   ];
 
+  var PAGE_META = {
+    home: {
+      eyebrow: 'Platform Overview',
+      title: 'Home',
+      subtitle: 'Start with a market snapshot, then move into macro, forecasts, portfolios, or search.'
+    },
+    markets: {
+      eyebrow: 'Macro Dashboard',
+      title: 'Markets',
+      subtitle: 'Follow cross-market posture, major charts, and live macro context.'
+    },
+    forecasting: {
+      eyebrow: 'Model Output',
+      title: 'Forecasting',
+      subtitle: 'Review MAG7 consensus forecasts, model commentary, and leaderboard history.'
+    },
+    portfolios: {
+      eyebrow: 'Strategy Monitor',
+      title: 'Portfolios',
+      subtitle: 'Track leaders, laggards, and the full monitored holdings universe.'
+    },
+    search: {
+      eyebrow: 'Research Tool',
+      title: 'Fund Search',
+      subtitle: 'Search any ticker or fund for chart, risk, fundamentals, sentiment, and deeper analysis.'
+    }
+  };
+
   // ── Helpers ───────────────────────────────────────────────────────────────
 
   function _activePage() {
@@ -61,6 +89,24 @@
                      (item.href !== '/' && active.startsWith(item.href));
       return '<a class="' + cls + (isActive ? ' active' : '') + '" href="' + item.href + '">' + item.label + '</a>';
     }).join('');
+  }
+
+  function _buildPageContext() {
+    var page = _activePage();
+    var meta = PAGE_META[page];
+    if (!meta) return '';
+
+    return '' +
+      '<div class="page-context-strip">' +
+        '<div class="page-context-main">' +
+          '<div class="page-context-eyebrow">' + meta.eyebrow + '</div>' +
+          '<div class="page-context-title-row">' +
+            '<h2 class="page-context-title">' + meta.title + '</h2>' +
+            '<span class="page-context-active">Current Page</span>' +
+          '</div>' +
+          '<p class="page-context-subtitle">' + meta.subtitle + '</p>' +
+        '</div>' +
+      '</div>';
   }
 
   // ── Main render ───────────────────────────────────────────────────────────
@@ -136,7 +182,8 @@
           '<button id="openSettingsBtn" class="btn btn-icon settings-gear-btn" ' +
             'type="button" aria-label="Open settings" title="Settings"></button>' +
         '</div>' +
-      '</header>';
+      '</header>' +
+      _buildPageContext();
 
     // Apply current density to body (in case bootstrap ran before body existed)
     _syncDensityToBody();
