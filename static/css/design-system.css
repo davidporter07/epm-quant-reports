@@ -85,7 +85,8 @@ body[data-density="dense"] {
 
 /* --------------------------------------------------------------------------
    2. MASTHEAD / NAV RESKIN — scoped to body[data-ds="v3"]
-      Overrides legacy .topbar / .main-nav styles with Direction C treatment.
+      Layout: nav LEFT (margin-right:auto) | [search → logo → name] RIGHT | actions far-right
+      Mobile:  hamburger LEFT (margin-right:auto) | logo name RIGHT | actions | bottom-nav bar
    -------------------------------------------------------------------------- */
 
 body[data-ds="v3"] .topbar {
@@ -101,36 +102,21 @@ body[data-ds="v3"] .topbar {
   height: 56px !important;
   display: flex !important;
   align-items: center !important;
-  gap: var(--s-3) !important;
+  gap: var(--s-2) !important;
+  overflow: visible !important;
 }
 
 body[data-ds="v3"] .topbar.is-scrolled {
   box-shadow: 0 1px 0 rgba(255,255,255,.06), 0 12px 24px rgba(11,31,58,.14) !important;
 }
 
-body[data-ds="v3"] .topbar .brand-block {
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
-  flex-shrink: 0;
-}
-
-body[data-ds="v3"] .topbar .brand-logo {
-  height: 28px;
-  width: auto;
-}
-
-body[data-ds="v3"] .topbar .brand-copy,
-body[data-ds="v3"] .topbar .brand-block .brand-copy {
-  display: none !important; /* beats design-v2.css @media(≥1100px) .brand-copy{display:flex!important} */
-}
-
+/* ── Nav links — left side ── */
 body[data-ds="v3"] .topbar .main-nav {
   display: flex;
   align-items: center;
   gap: 2px;
-  flex: 1;
-  margin-left: var(--s-3);
+  flex-shrink: 0;
+  margin-right: auto; /* pushes brand-block + top-actions to the right */
 }
 
 body[data-ds="v3"] .topbar .main-nav .nav-link {
@@ -150,7 +136,7 @@ body[data-ds="v3"] .topbar .main-nav .nav-link:hover {
   color: #fff !important;
 }
 
-/* Direction C: amber underline for active nav link (inline desktop nav) */
+/* Direction C: amber underline for active nav link */
 body[data-ds="v3"] .topbar .main-nav .nav-link.active {
   color: #fff !important;
   border-bottom: 2px solid var(--ds-amber);
@@ -170,68 +156,238 @@ body[data-ds="v3"] .topbar .main-nav .nav-link.active::after {
   background: var(--ds-amber);
 }
 
-/* --------------------------------------------------------------------------
-   RESPONSIVE NAV — Direction C inline horizontal nav
-   Desktop (≥900px): show .main-nav inline, hide hamburger toggle + brand h1
-   Mobile  (<900px): hide .main-nav, show hamburger toggle
-   -------------------------------------------------------------------------- */
-
-/* Desktop: inline nav visible, hamburger hidden */
-@media (min-width: 900px) {
-  body[data-ds="v3"] .topbar .main-nav {
-    display: flex !important;
-  }
-  body[data-ds="v3"] .topbar #menuToggleBtn,
-  body[data-ds="v3"] .topbar .menu-toggle {
-    display: none !important;
-  }
-  /* Hide h1 text on desktop — logo image carries the brand */
-  body[data-ds="v3"] .topbar .brand-copy {
-    display: none !important;
-  }
-  /* Remove legacy active-nav background box — Direction C uses amber underline only */
-  body[data-ds="v3"] .topbar .main-nav .nav-link.active {
-    background: transparent !important;
-  }
-  /* Compact brand-block so nav takes the center */
-  body[data-ds="v3"] .topbar .brand-block {
-    flex-shrink: 0;
-    gap: var(--s-2);
-  }
-  /* Search slot stays compact inside brand-block */
-  body[data-ds="v3"] .topbar .header-search-slot {
-    max-width: 260px;
-  }
-  /* Remove auto margin from top-actions — main-nav fills the middle */
-  body[data-ds="v3"] .topbar .top-actions {
-    margin-left: 0;
-  }
+/* ── Brand block — right cluster: [search] [logo] [EPM name] ── */
+body[data-ds="v3"] .topbar .brand-block {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-shrink: 0;
+  overflow: visible;
 }
 
-/* Mobile: hide inline nav, show hamburger */
-@media (max-width: 899px) {
-  body[data-ds="v3"] .topbar .main-nav {
-    display: none !important;
-  }
-  body[data-ds="v3"] .topbar #menuToggleBtn,
-  body[data-ds="v3"] .topbar .menu-toggle {
-    display: flex !important;
-  }
-  body[data-ds="v3"] .topbar .top-actions {
-    margin-left: auto;
-  }
+/* CSS order inside brand-block: search first (leftmost), logo second, name third */
+body[data-ds="v3"] .topbar .header-search-slot { order: 1; }
+body[data-ds="v3"] .topbar .brand-logo         { order: 2; height: 28px; width: auto; flex-shrink: 0; }
+body[data-ds="v3"] .topbar .brand-copy         { order: 3; }
+
+/* Show the brand name — override the legacy hide rule */
+body[data-ds="v3"] .topbar .brand-copy,
+body[data-ds="v3"] .topbar .brand-block .brand-copy {
+  display: flex !important;
+  align-items: center;
 }
 
-/* Hide the legacy topbar-nav (mobile dup) — chrome.js replaces it */
-body[data-ds="v3"] .topbar .topbar-nav {
-  display: none !important;
+body[data-ds="v3"] .topbar .brand-copy h1 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.88);
+  white-space: nowrap;
+  letter-spacing: -0.01em;
+  line-height: 1;
 }
 
+/* ── Search slot — expands leftward on focus ── */
+body[data-ds="v3"] .topbar .header-search-slot {
+  max-width: 240px;
+  transition: max-width 0.3s ease;
+  overflow: visible;
+}
+
+body[data-ds="v3"] .topbar .header-search-slot:focus-within {
+  max-width: 400px;
+}
+
+/* Override legacy input-stack grow: fill the slot, not 660px */
+body[data-ds="v3"] .topbar .global-search-input-stack {
+  flex-basis: 100% !important;
+  max-width: 100% !important;
+}
+
+body[data-ds="v3"] .topbar .global-search-form.is-focused .global-search-input-stack,
+body[data-ds="v3"] .topbar .global-search-form:focus-within .global-search-input-stack {
+  flex-basis: 100% !important;
+  max-width: 100% !important;
+}
+
+/* Suggestion dropdown: anchor to RIGHT edge so it opens leftward */
+body[data-ds="v3"] .topbar .header-search-slot .ticker-suggestions,
+body[data-ds="v3"] .topbar .global-search-input-stack .ticker-suggestions {
+  left: auto !important;
+  right: 0 !important;
+  min-width: 300px;
+}
+
+/* ── Top actions — far right ── */
 body[data-ds="v3"] .topbar .top-actions {
   display: flex;
   align-items: center;
   gap: var(--s-2);
-  margin-left: auto;
+  flex-shrink: 0;
+  margin-left: var(--s-2);
+}
+
+/* Hide the legacy topbar-nav dup */
+body[data-ds="v3"] .topbar .topbar-nav {
+  display: none !important;
+}
+
+/* ── Hamburger hidden by default (shown mobile-only) ── */
+body[data-ds="v3"] .topbar #menuToggleBtn,
+body[data-ds="v3"] .topbar .menu-toggle {
+  display: none !important;
+}
+
+/* --------------------------------------------------------------------------
+   RESPONSIVE — Desktop ≥900px: full inline nav + right brand cluster
+   -------------------------------------------------------------------------- */
+@media (min-width: 900px) {
+  body[data-ds="v3"] .topbar .main-nav {
+    display: flex !important;
+  }
+  body[data-ds="v3"] .topbar .main-nav .nav-link.active {
+    background: transparent !important;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   RESPONSIVE — Mobile <900px: hamburger + logo/name header + bottom nav bar
+   -------------------------------------------------------------------------- */
+@media (max-width: 899px) {
+  /* Hide desktop nav */
+  body[data-ds="v3"] .topbar .main-nav {
+    display: none !important;
+    margin-right: 0;
+  }
+
+  /* Brand-block fills remaining topbar width */
+  body[data-ds="v3"] .topbar .brand-block {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* Hamburger: leftmost in brand-block, auto-margin pushes logo+name right */
+  body[data-ds="v3"] .topbar #menuToggleBtn,
+  body[data-ds="v3"] .topbar .menu-toggle {
+    display: flex !important;
+    order: 0;
+    flex-shrink: 0;
+    margin-right: auto;
+  }
+
+  /* Search hidden in topbar on mobile — bottom nav navigates; Fund Search page has its own bar */
+  body[data-ds="v3"] .topbar .header-search-slot {
+    display: none !important;
+  }
+
+  /* Logo smaller on mobile */
+  body[data-ds="v3"] .topbar .brand-logo {
+    height: 24px;
+  }
+
+  /* Brand name slightly smaller */
+  body[data-ds="v3"] .topbar .brand-copy h1 {
+    font-size: 12px;
+  }
+
+  /* Top-actions flush right */
+  body[data-ds="v3"] .topbar .top-actions {
+    margin-left: var(--s-1);
+    flex-shrink: 0;
+  }
+
+  /* Page shell: extra bottom padding for bottom nav clearance */
+  body[data-ds="v3"] .page-shell {
+    padding-bottom: 72px !important;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   MOBILE BOTTOM NAV BAR — app-style fixed bottom nav (mobile only)
+   -------------------------------------------------------------------------- */
+body[data-ds="v3"] .ds-bottom-nav {
+  display: none;
+}
+
+@media (max-width: 899px) {
+  body[data-ds="v3"] .ds-bottom-nav {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 60px;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    background: var(--ds-navy);
+    border-top: 1px solid rgba(255,255,255,0.08);
+    z-index: 190;
+    align-items: stretch;
+    justify-content: space-around;
+  }
+
+  body[data-ds="v3"] .ds-bottom-nav-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    flex: 1;
+    text-decoration: none;
+    color: rgba(255,255,255,0.45);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    transition: color 0.15s;
+    padding: 8px 4px 6px;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body[data-ds="v3"] .ds-bottom-nav-item.active {
+    color: var(--ds-amber);
+  }
+
+  body[data-ds="v3"] .ds-bottom-nav-item:hover {
+    color: rgba(255,255,255,0.80);
+  }
+
+  body[data-ds="v3"] .ds-bottom-nav-icon {
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  body[data-ds="v3"] .ds-bottom-nav-icon svg {
+    width: 20px;
+    height: 20px;
+    display: block;
+  }
+
+  body[data-ds="v3"] .ds-bottom-nav-label {
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  /* Light mode bottom nav */
+  body[data-ds="v3"][data-theme="light"] .ds-bottom-nav {
+    background: #fff;
+    border-top-color: rgba(11,31,58,0.10);
+    box-shadow: 0 -1px 0 rgba(11,31,58,0.06), 0 -4px 12px rgba(11,31,58,0.04);
+  }
+
+  body[data-ds="v3"][data-theme="light"] .ds-bottom-nav-item {
+    color: rgba(11,31,58,0.35);
+  }
+
+  body[data-ds="v3"][data-theme="light"] .ds-bottom-nav-item.active {
+    color: var(--ds-amber);
+  }
+
+  body[data-ds="v3"][data-theme="light"] .ds-bottom-nav-item:hover {
+    color: var(--ds-ink);
+  }
 }
 
 body[data-ds="v3"] .page-context-strip {

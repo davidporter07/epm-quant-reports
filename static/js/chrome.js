@@ -15,6 +15,7 @@
  *   .topbar .main-nav  .nav-link         (queried by setActiveNav, mountGlobalHeaderSearch)
  *   .topbar .topbar-nav                  (queried by mountGlobalHeaderSearch — kept hidden via CSS)
  *   .topbar .top-actions  #openSettingsBtn  (queried by mountAuthActions)
+ *   #menuToggleBtn  .menu-toggle         (pre-created here so site.js finds it, not duplicated)
  */
 (function () {
   'use strict';
@@ -65,6 +66,15 @@
     }
   };
 
+  // ── Bottom-nav icon SVGs (20×20 viewBox) ─────────────────────────────────
+  var BOTTOM_NAV_ICONS = {
+    home: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l7-6 7 6v8a1 1 0 01-1 1H4a1 1 0 01-1-1z"/><path d="M7 18v-5h6v5"/></svg>',
+    markets: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,14 7,9 11,13 18,4"/><polyline points="14,4 18,4 18,8"/></svg>',
+    forecasting: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="10" width="4" height="8"/><rect x="8" y="6" width="4" height="12"/><rect x="14" y="2" width="4" height="16"/></svg>',
+    portfolios: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="16" height="11" rx="2"/><path d="M7 7V5a2 2 0 016 0v2"/></svg>',
+    search: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="6"/><line x1="14" y1="14" x2="17.5" y2="17.5"/></svg>',
+  };
+
   // ── Helpers ───────────────────────────────────────────────────────────────
 
   function _activePage() {
@@ -88,6 +98,25 @@
       var isActive = (item.href === '/' && active === '/') ||
                      (item.href !== '/' && active.startsWith(item.href));
       return '<a class="' + cls + (isActive ? ' active' : '') + '" href="' + item.href + '">' + item.label + '</a>';
+    }).join('');
+  }
+
+  function _buildBottomNav() {
+    var active = _activeHref();
+    var items = [
+      { href: '/',            label: 'Home',       icon: BOTTOM_NAV_ICONS.home },
+      { href: '/markets',     label: 'Markets',    icon: BOTTOM_NAV_ICONS.markets },
+      { href: '/forecasting', label: 'Forecast',   icon: BOTTOM_NAV_ICONS.forecasting },
+      { href: '/portfolios',  label: 'Portfolios', icon: BOTTOM_NAV_ICONS.portfolios },
+      { href: '/search',      label: 'Search',     icon: BOTTOM_NAV_ICONS.search },
+    ];
+    return items.map(function (item) {
+      var isActive = (item.href === '/' && active === '/') ||
+                     (item.href !== '/' && active.startsWith(item.href));
+      return '<a class="ds-bottom-nav-item' + (isActive ? ' active' : '') + '" href="' + item.href + '" aria-label="' + item.label + '">' +
+               '<span class="ds-bottom-nav-icon">' + item.icon + '</span>' +
+               '<span class="ds-bottom-nav-label">' + item.label + '</span>' +
+             '</a>';
     }).join('');
   }
 
@@ -158,31 +187,43 @@
         '</div>' +
       '</aside>' +
 
-      // Topbar — mirrors legacy structure for site.js query compatibility
+      // Topbar — new layout: nav LEFT, brand-block RIGHT, top-actions far-right
+      // main-nav comes before brand-block in DOM so CSS margin-right:auto works naturally
       '<header class="topbar fade-in">' +
+        // Nav links (desktop inline, left side)
+        '<nav class="main-nav">' +
+          _buildNavLinks('nav-link') +
+        '</nav>' +
+        // Legacy dup nav — kept hidden, required by mountGlobalHeaderSearch
+        '<nav class="topbar-nav">' +
+          _buildNavLinks('topbar-nav-link nav-link') +
+        '</nav>' +
+        // Brand block (right side): hamburger (mobile) | search (desktop) | logo | name
+        // #menuToggleBtn pre-created here so site.js finds it and skips creating a duplicate
         '<div class="brand-block">' +
+          '<button id="menuToggleBtn" type="button" class="menu-toggle" ' +
+            'aria-label="Open site navigation" aria-expanded="false">' +
+            '<span></span><span></span><span></span>' +
+          '</button>' +
           '<img class="brand-logo" src="/static/epm_logo.png?v=20260322f" alt="EPM Financial" />' +
           '<div class="brand-copy">' +
             '<h1>EPM Market Intelligence</h1>' +
           '</div>' +
         '</div>' +
-        // main-nav: used by setActiveNav + mountGlobalHeaderSearch
-        '<nav class="main-nav">' +
-          _buildNavLinks('nav-link') +
-        '</nav>' +
-        // topbar-nav: kept for mountGlobalHeaderSearch compatibility, hidden via CSS
-        '<nav class="topbar-nav">' +
-          _buildNavLinks('topbar-nav-link nav-link') +
-        '</nav>' +
+        // Top actions far-right (density, settings, user badge)
         '<div class="top-actions">' +
-          // Density toggle
           '<button class="ds-density-btn" id="dsDensityBtn" type="button" ' +
             'aria-label="Toggle density" title="Toggle compact mode">&#9783;</button>' +
-          // Settings gear — ID and class expected by site.js
           '<button id="openSettingsBtn" class="btn btn-icon settings-gear-btn" ' +
             'type="button" aria-label="Open settings" title="Settings"></button>' +
         '</div>' +
       '</header>' +
+
+      // Mobile bottom nav (hidden on desktop via CSS)
+      '<nav class="ds-bottom-nav" aria-label="Site navigation">' +
+        _buildBottomNav() +
+      '</nav>' +
+
       _buildPageContext();
 
     // Apply current density to body (in case bootstrap ran before body existed)
@@ -221,6 +262,13 @@
     document.body.dataset.page = pageKey;
     var active = _activeHref();
     document.querySelectorAll('.nav-link, .topbar-nav-link').forEach(function (link) {
+      var href = link.getAttribute('href');
+      var isActive = (href === '/' && active === '/') ||
+                     (href !== '/' && active.startsWith(href));
+      link.classList.toggle('active', isActive);
+    });
+    // Also update bottom nav active state
+    document.querySelectorAll('.ds-bottom-nav-item').forEach(function (link) {
       var href = link.getAttribute('href');
       var isActive = (href === '/' && active === '/') ||
                      (href !== '/' && active.startsWith(href));
