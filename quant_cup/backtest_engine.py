@@ -183,12 +183,15 @@ def run_backtest(
     end: str = "2025-12-31",
     rebalance: Literal["daily", "weekly", "monthly"] = "monthly",
     prices_extra: dict | None = None,
+    use_overnight_returns: bool = False,
 ) -> BacktestResult:
     """
     model_fn: receives close prices (and optionally extra OHLCV via prices_extra keyword
               argument if the function signature accepts **kwargs).
     prices:   daily close prices, index=DatetimeIndex, columns=tickers (must include SPY).
     prices_extra: optional dict of {"open": df, "high": df, "low": df, "volume": df}.
+    use_overnight_returns: if True, use open[t] / close[t-1] - 1 as daily returns instead
+                           of close-to-close. Models that trade close→open should set this.
     """
     prices = prices.loc[start:end]
 
@@ -202,8 +205,13 @@ def run_backtest(
 
     spy_cagr = _compute_spy_cagr(prices, start, end)
 
-    daily_returns = prices.pct_change(fill_method=None)
-    # Clip extreme single-day returns — prevents overflow and runaway short losses from bad delisted-ticker data
+    if use_overnight_returns and prices_extra and "open" in prices_extra:
+        # Overnight return: hold from close[t-1] to open[t], recorded on day t.
+        # Signal at t-1 (shifted by engine) → trade from close[t-1] → open[t].
+        open_prices = prices_extra["open"].reindex_like(prices)
+        daily_returns = open_prices / prices.shift(1) - 1
+    else:
+        daily_returns = prices.pct_change(fill_method=None)
     daily_returns = daily_returns.clip(-0.5, 0.5)
 
     with warnings.catch_warnings():
@@ -215,6 +223,16 @@ def run_backtest(
             raw_signals = model_fn(prices, prices_extra=prices_extra)
         else:
             raw_signals = model_fn(prices)
+
+    # Diagnostic: log signal statistics to surface zero-signal bugs
+    n_long = int((raw_signals == 1).sum().sum())
+    n_short = int((raw_signals == -1).sum().sum())
+    n_total = int(raw_signals.size)
+    import logging as _log
+    _log.getLogger(__name__).info(
+        f"  {model_name} signals: +1={n_long:,} ({100*n_long/n_total:.1f}%)  "
+        f"-1={n_short:,} ({100*n_short/n_total:.1f}%)  zero={n_total-n_long-n_short:,}"
+    )
 
     raw_signals = raw_signals.reindex_like(prices).fillna(0)
     signals = _resample_signals(raw_signals, rebalance)

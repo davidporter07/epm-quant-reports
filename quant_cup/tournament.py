@@ -92,22 +92,23 @@ def _run_all(
             p, prices_extra=prices_extra, sector_map=sector_map, composition=composition
         )
 
+    # (fn, rebalance, extra_kwargs)
     all_models = {
-        "MOMENTUM":       (momentum_signal,       "monthly"),
-        "PEAD":           (_pead,                 "daily"),
-        "VOL_COMPRESSION":(vol_compression_signal, "monthly"),
-        "OVERNIGHT":      (overnight_signal,       "monthly"),
-        "PAIRS_Z":        (_pairs_z,               "daily"),
-        "GAP_CONTINUATION":(gap_continuation_signal, "daily"),
-        "MEAN_REVERT":    (mean_reversion_signal,  "monthly"),
-        "PAIRS_DIVERGE":  (_pairs_diverge,         "daily"),
+        "MOMENTUM":        (momentum_signal,        "monthly", {}),
+        "PEAD":            (_pead,                  "daily",   {}),
+        "VOL_COMPRESSION": (vol_compression_signal, "monthly", {}),
+        "OVERNIGHT":       (overnight_signal,        "monthly", {"use_overnight_returns": True}),
+        "PAIRS_Z":         (_pairs_z,                "daily",   {}),
+        "GAP_CONTINUATION":(gap_continuation_signal, "daily",  {}),
+        "MEAN_REVERT":     (mean_reversion_signal,   "monthly", {}),
+        "PAIRS_DIVERGE":   (_pairs_diverge,          "daily",   {}),
     }
 
     if models_filter:
         all_models = {k: v for k, v in all_models.items() if k in models_filter}
 
     results = []
-    for name, (fn, rebalance) in all_models.items():
+    for name, (fn, rebalance, extra_kwargs) in all_models.items():
         log.info(f"Running {name}...")
         t0 = time.time()
         try:
@@ -119,6 +120,7 @@ def _run_all(
                 end=end,
                 rebalance=rebalance,
                 prices_extra=extra if extra else None,
+                **extra_kwargs,
             )
             elapsed = time.time() - t0
             log.info(

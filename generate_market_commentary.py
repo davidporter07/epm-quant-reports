@@ -876,6 +876,11 @@ Do NOT describe a yield or price as "unchanged" if a non-zero pct_change is prov
 Do not invent figures or events not in the payload.
 Do NOT attribute geopolitical actions, policy proposals, or peace initiatives to specific companies or financial institutions — if a headline mentions a bank alongside a geopolitical event, the bank is a commentator or stakeholder, not the actor proposing the policy.
 Do NOT escalate the severity of geopolitical events beyond the exact language in the payload — if headlines say "tensions" or "conflict", do not write "war"; if they say "negotiations", do not write "deal reached".
+ONE-SHOT CALIBRATION — geopolitical tone (follow this pattern exactly):
+  Headline in payload: "U.S. and Israel expand strikes near Iranian facilities; diplomatic talks stall"
+  BAD: "Mounting costs of the Iran war strain U.S. finances as the conflict widens."
+  GOOD: "Markets are pricing a higher risk premium after reports of expanded strikes near Iranian facilities; diplomatic talks remain unresolved."
+  Rule: mirror the payload's exact language — do not upgrade 'strikes' to 'war', do not assert fiscal or political consequences as fact, do not name a conflict as an ongoing war unless the payload explicitly uses that word.
 Return ONLY valid JSON  no markdown fences, no explanation."""
 
 # Call 1: Market narrative sections
@@ -900,7 +905,10 @@ currencies_commentary: 4-5 sentences. DXY direction and level. Rate differential
 
 economics_commentary: 4-5 sentences. Most important recent data release from payload (actual vs consensus). Macro cycle context (soft landing, slowdown, re-acceleration). Fed implications.
 
-JSON template:
+FILLED EXAMPLE — model your pre_market_bullets on this (replace every value with data from the payload):
+{"pre_market_bullets":["Markets closed lower — S&P 500 -0.8%, Nasdaq 100 -1.2%; tech sector led the selloff after weak forward guidance from a mega-cap platform name.","Euro Stoxx 50 fell 0.9% as ECB officials reiterated rates stay elevated through mid-year, adding pressure to rate-sensitive European sectors.","Key data today: Non-Farm Payrolls (high importance) — consensus 185K vs prior 228K; a miss would reinforce soft-landing caution.","10-yr yield rose 5 bps to 4.32%, extending a week-long move on sticky CPI expectations; real yields near cycle highs.","WTI crude fell 1.4% to $81.20 on a reported inventory build; gold held near $2,340 as dollar strength applied modest pressure."],...}
+
+Output schema (replace "..." with your generated content for all 6 keys):
 {"pre_market_bullets":["...","...","...","...","..."],"equities_commentary":"...","fixed_income_commentary":"...","commodities_commentary":"...","currencies_commentary":"...","economics_commentary":"..."}"""
 
 # Call 2: Outlook, allocation, portfolio spotlight
@@ -918,9 +926,13 @@ tactical_underperforming: Short phrase (3-5 words)  sectors/themes lagging. E.g.
 
 asset_class_outlooks: Object with keys "Equities", "Fixed Income", "Commodities", "US Dollar". Each: {"label": one of Bullish/Cautious/Neutral/Negative, "rationale": "1-2 sentences"}.
 
-portfolio_spotlight_winners: Array of up to 3 objects for tickers with positive return_1m: {"ticker":"...","metric_label":"...","commentary":"2 sentences on what drives outperformance and whether it persists."}. IMPORTANT: each entry in portfolio_top_performers includes a "description" field — use it to understand what the fund actually is and write commentary consistent with its actual asset class and strategy. Do NOT invent sector attributions.
+portfolio_spotlight_winners: Array of up to 3 objects for tickers with positive return_1m: {"ticker":"...","metric_label":"...","commentary":"2 sentences on what drives outperformance and whether it persists."}. IMPORTANT: each entry in portfolio_top_performers includes a "description" field — use it to understand what the fund actually is. Write commentary grounded in that actual strategy. Do NOT invent sector attributions.
+ONE-SHOT EXAMPLE for portfolio_spotlight_winners:
+  Input: {"ticker":"JAAA","description":"Janus Henderson AAA CLO ETF — AAA-rated CLOs, short-duration investment-grade fixed income","return_1m":0.4,"metric_label":"+0.4% (1M)"}
+  BAD commentary: "JAAA benefited from the technology rally and strong consumer spending data."
+  GOOD commentary: "JAAA's AAA-rated CLO exposure insulates the fund from credit spread widening, making it a relative shelter as equity volatility rises. The short duration profile limits rate sensitivity, so outperformance should persist as long as credit markets remain orderly."
 
-portfolio_spotlight_watch: Array of up to 2 objects: {"ticker":"...","metric_label":"...","commentary":"2 sentences on the specific risk and what to monitor."}. IMPORTANT: same as above — use the "description" field to write accurate commentary for each fund's actual strategy.
+portfolio_spotlight_watch: Array of up to 2 objects: {"ticker":"...","metric_label":"...","commentary":"2 sentences on the specific risk and what to monitor."}. IMPORTANT: same as above — use the "description" field to write accurate commentary for each fund's actual strategy. Do NOT describe a bond or income fund as an equity fund.
 
 JSON template:
 {"market_outlook_label":"...","market_outlook_rationale":"...","tactical_outperforming":"...","tactical_underperforming":"...","asset_class_outlooks":{"Equities":{"label":"...","rationale":"..."},"Fixed Income":{"label":"...","rationale":"..."},"Commodities":{"label":"...","rationale":"..."},"US Dollar":{"label":"...","rationale":"..."}},"portfolio_spotlight_winners":[{"ticker":"...","metric_label":"...","commentary":"..."}],"portfolio_spotlight_watch":[{"ticker":"...","metric_label":"...","commentary":"..."}]}"""
