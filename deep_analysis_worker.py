@@ -33,10 +33,13 @@ STAGES = {
     "council_synthesis":  ("Synthesizing report",       85),
     "completed":          ("Complete",                 100),
     "failed":             ("Failed",                    -1),
+    "cancelled":          ("Cancelled",                 -1),
 }
 
 _worker_thread: Optional[threading.Thread] = None
 _stop_event = threading.Event()
+_cancel_requested: set = set()
+_cancel_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -90,11 +93,11 @@ def _get_queue_info(job_id: str) -> dict:
     active.sort(key=lambda j: j.get("created_at", ""))
     position = next((i + 1 for i, j in enumerate(active) if j["job_id"] == job_id), 1)
     ahead = position - 1
-    # Local Council averages ~7 minutes per ticker (7 personas + synthesis).
+    # Local Council averages ~30 minutes per ticker (7x R1 + 7x R2 + 7x R3 + 2x synthesis passes).
     return {
         "queue_position": position,
         "queue_ahead":    ahead,
-        "queue_wait_min": ahead * 7,
+        "queue_wait_min": ahead * 30,
     }
 
 
@@ -148,13 +151,16 @@ def _run_pipeline(job_id: str, ticker: str) -> None:
     logger.info("Seed doc for %s: %d chars, %d facts, %.1fs",
                 ticker, len(seed_text), len(key_facts), time.time() - t0)
 
-    # Step 1 — Run the local analyst council.
-    # Council portion maps to progress 15 -> 85 (persona phase),
+    # Step 1 — Run the local analyst council (22 Ollama calls: 7 R1 + 7 R2 + 7 R3 + 1 synthesis).
+    # Council portion maps to progress 15 -> 85 (R1/R2/R3 persona phase at pct < 87.5),
     # then 85 -> 95 (synthesis phase) which run_council advances at ~88% of its range.
     _update_job(job_id, stage="council_personas", progress=15)
     n_personas = len(PERSONAS)
 
     def _progress_cb(pct: int, label: str) -> None:
+        with _cancel_lock:
+            if job_id in _cancel_requested:
+                raise RuntimeError(f"Job {job_id} cancelled by user")
         if _stop_event.is_set():
             raise RuntimeError("Worker stopped")
         # pct is 0-100 scaled within the council portion.
@@ -175,6 +181,7 @@ def _run_pipeline(job_id: str, ticker: str) -> None:
     enhanced_markdown = result.get("enhanced_markdown", "")
     raw_markdown      = result.get("raw_markdown", "")
     takes             = result.get("takes", [])
+    takes_by_round    = result.get("takes_by_round", {})
 
     if not enhanced_markdown:
         # Synthesis failed — fall back to raw transcript so the user sees something.
@@ -189,7 +196,8 @@ def _run_pipeline(job_id: str, ticker: str) -> None:
         "title":   f"{ticker} Deep Analysis",
         "summary": "",
         "sections": [],
-        "takes":    takes,                         # structured persona submissions
+        "takes":          takes,                  # R1 takes (backwards-compat)
+        "takes_by_round": takes_by_round,         # all 3 rounds keyed by round number
     }
     _update_job(
         job_id,
@@ -230,7 +238,18 @@ def _worker_loop() -> None:
                 "Deep analysis failed for %s (attempt %d): %s",
                 ticker, retry_count + 1, exc,
             )
-            if retry_count < 1 and not _stop_event.is_set():
+            with _cancel_lock:
+                was_cancelled = job_id in _cancel_requested
+                _cancel_requested.discard(job_id)
+            if was_cancelled:
+                _update_job(
+                    job_id,
+                    status="cancelled",
+                    stage="cancelled",
+                    completed_at=datetime.utcnow().isoformat(),
+                    error=None,
+                )
+            elif retry_count < 1 and not _stop_event.is_set():
                 _update_job(
                     job_id,
                     status="queued",
@@ -298,6 +317,27 @@ def enqueue(ticker: str) -> str:
     }
     _write_job(job)
     return job_id
+
+
+def cancel_job(job_id: str) -> bool:
+    """Cancel a queued or running job. Returns True if the job was found and acted on."""
+    job = _read_job(job_id)
+    if job is None:
+        return False
+    status = job.get("status")
+    if status == "queued":
+        _update_job(
+            job_id,
+            status="cancelled",
+            stage="cancelled",
+            completed_at=datetime.utcnow().isoformat(),
+        )
+        return True
+    if status == "running":
+        with _cancel_lock:
+            _cancel_requested.add(job_id)
+        return True
+    return False
 
 
 def get_job_status(job_id: str) -> Optional[dict]:

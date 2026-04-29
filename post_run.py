@@ -47,6 +47,7 @@ SYNC_PY_FILES = [
     "dl_feature_gate.py",
     "deep_analysis.py",
     "deep_analysis_worker.py",
+    "local_council.py",
 ]
 
 

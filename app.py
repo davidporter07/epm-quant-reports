@@ -37,7 +37,7 @@ from services.auth_service import (
     verify_login,
 )
 from services.email_service import EmailError, send_password_reset_email
-from deep_analysis_worker import enqueue, get_job_status, start_worker, stop_worker
+from deep_analysis_worker import cancel_job, enqueue, get_job_status, start_worker, stop_worker
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -2046,14 +2046,22 @@ def deep_analysis_status(job_id: str, request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, **status})
 
 
+@app.delete("/api/deep/{job_id}")
+def deep_analysis_cancel(job_id: str, request: Request) -> JSONResponse:
+    _require_user(request)
+    ok = cancel_job(job_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Job not found or already finished.")
+    return JSONResponse({"ok": True})
+
+
 @app.get("/api/deep/{job_id}/agents")
 def deep_analysis_agents(job_id: str, request: Request) -> JSONResponse:
     """Return council analyst submissions for a completed job.
 
-    Shape is back-compatible with the old MiroFish-era endpoint: each persona's
-    submission becomes one `agents[].posts[0]` entry and one `timeline[]` row
-    in council order (technical_analyst, growth_investor, value_investor,
-    macro_strategist, supply_chain_risk, bearish_analyst, earnings_catalyst).
+    Each persona now has up to 3 posts (R1, R2, R3). The timeline includes
+    real round numbers (1, 2, 3). Backwards-compat: old jobs without
+    takes_by_round fall back to the flat takes list with round = idx+1.
     """
     _require_user(request)
     status = get_job_status(job_id)
@@ -2062,30 +2070,67 @@ def deep_analysis_agents(job_id: str, request: Request) -> JSONResponse:
     if status.get("status") != "completed":
         raise HTTPException(status_code=400, detail="Job not completed yet.")
 
-    takes = ((status.get("result") or {}).get("takes") or [])
-    # Map persona name -> bio/persona description for the viewer
+    result = (status.get("result") or {})
     from local_council import PERSONAS
     persona_meta = {p.name: p for p in PERSONAS}
 
-    agents = []
-    timeline = []
-    for idx, t in enumerate(takes):
-        pname = t.get("name", "")
-        title = t.get("title", pname.replace("_", " ").title() if pname else f"Analyst {idx+1}")
-        body  = (t.get("take") or "").strip()
-        meta  = persona_meta.get(pname)
-        bio   = meta.system_prompt.split(". ")[0] + "." if meta else ""
-        persona_desc = meta.system_prompt if meta else ""
-        agents.append({
-            "name": title,
-            "username": pname,
-            "bio": bio,
-            "persona": persona_desc,
-            "post_count": 1 if body else 0,
-            "posts": [body] if body else [],
-        })
-        if body:
-            timeline.append({"agent": title, "content": body, "round": idx + 1})
+    takes_by_round = result.get("takes_by_round")
+
+    if takes_by_round:
+        # New 3-round format
+        # Normalise keys: JSON serialises int keys as strings
+        tbr = {int(k): v for k, v in takes_by_round.items()}
+        # Build per-persona post lists in round order
+        posts_by_name: dict = {}
+        for rnd in sorted(tbr.keys()):
+            for t in tbr[rnd]:
+                pname = t.get("name", "")
+                body  = (t.get("take") or "").strip()
+                if body:
+                    posts_by_name.setdefault(pname, []).append(body)
+
+        agents = []
+        timeline = []
+        for p in PERSONAS:
+            meta  = persona_meta.get(p.name)
+            bio   = meta.system_prompt.split(". ")[0] + "." if meta else ""
+            posts = posts_by_name.get(p.name, [])
+            agents.append({
+                "name":       p.title,
+                "username":   p.name,
+                "bio":        bio,
+                "persona":    meta.system_prompt if meta else "",
+                "post_count": len(posts),
+                "posts":      posts,
+            })
+            for rnd in sorted(tbr.keys()):
+                round_takes = {t["name"]: t for t in tbr[rnd]}
+                t = round_takes.get(p.name)
+                if t:
+                    body = (t.get("take") or "").strip()
+                    if body:
+                        timeline.append({"agent": p.title, "content": body, "round": rnd})
+    else:
+        # Legacy fallback: flat takes list, round = idx+1
+        takes = result.get("takes") or []
+        agents = []
+        timeline = []
+        for idx, t in enumerate(takes):
+            pname = t.get("name", "")
+            title = t.get("title", pname.replace("_", " ").title() if pname else f"Analyst {idx+1}")
+            body  = (t.get("take") or "").strip()
+            meta  = persona_meta.get(pname)
+            bio   = meta.system_prompt.split(". ")[0] + "." if meta else ""
+            agents.append({
+                "name":       title,
+                "username":   pname,
+                "bio":        bio,
+                "persona":    meta.system_prompt if meta else "",
+                "post_count": 1 if body else 0,
+                "posts":      [body] if body else [],
+            })
+            if body:
+                timeline.append({"agent": title, "content": body, "round": idx + 1})
 
     return JSONResponse({"ok": True, "agents": agents, "timeline": timeline})
 

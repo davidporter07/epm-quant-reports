@@ -1093,6 +1093,33 @@ body[data-ds="v3"][data-animations="on"] .ds-skeleton {
 }
 
 /* --------------------------------------------------------------------------
+   14.6. METRIC-PILL LIGHT MODE FIX — v3 pages
+        design-v2.css sets a hardcoded dark gradient on .metric-pill at base
+        specificity and uses body[data-theme="light"] to flip it, but Direction C
+        (light-first) needs an explicit higher-specificity override to guarantee
+        the light background wins on v3 pages.
+   -------------------------------------------------------------------------- */
+
+body[data-ds="v3"][data-theme="light"] .metric-pill {
+  background: linear-gradient(160deg, #ffffff, var(--ds-canvas)) !important;
+  border-color: rgba(20, 44, 90, 0.12) !important;
+  color: var(--ds-ink);
+}
+
+body[data-ds="v3"][data-theme="light"] .metric-pill .label {
+  color: var(--ds-muted);
+}
+
+body[data-ds="v3"][data-theme="light"] .metric-pill .value {
+  color: var(--ds-ink);
+}
+
+body[data-ds="v3"][data-theme="light"] .metric-pill::before {
+  border-color: rgba(20, 44, 90, 0.06);
+  box-shadow: none;
+}
+
+/* --------------------------------------------------------------------------
    14a. DENSE MODE — Markets-specific
         Subtitles hidden, chart heights reduced, KPI grid tightened.
         Scoped to data-page="markets" so these do not bleed to Search etc.

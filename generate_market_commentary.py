@@ -113,7 +113,7 @@ BOND_TICKERS: dict[str, str] = {
 # ---------------------------------------------------------------------------
 # Market data helpers
 # ---------------------------------------------------------------------------
-def _fetch_quote(ticker: str, days_back: int = 7) -> dict | None:
+def _fetch_quote(ticker: str, days_back: int = 7, prev_close: float | None = None) -> dict | None:
     """Return {level, change, pct_change} for a single ticker, or None."""
     if yf is None:
         return None
@@ -127,11 +127,19 @@ def _fetch_quote(ticker: str, days_back: int = 7) -> dict | None:
         closes = data["Close"].dropna()
         if hasattr(closes, "squeeze"):
             closes = closes.squeeze()
-        if len(closes) < 2:
+        if len(closes) < 1:
             return None
         arr    = closes.to_numpy()
         latest = float(arr[-1])
-        prev   = float(arr[-2])
+        # Use the stored previous close when provided — avoids phantom swings caused
+        # by futures contract rolls (BZ=F, CL=F, GC=F, etc.) where consecutive daily
+        # closes in Yahoo Finance can be from different contract months.
+        if prev_close is not None and prev_close > 0:
+            prev = prev_close
+        elif len(arr) >= 2:
+            prev = float(arr[-2])
+        else:
+            return None
         change = latest - prev
         pct    = (change / prev) * 100
         return {
@@ -143,37 +151,48 @@ def _fetch_quote(ticker: str, days_back: int = 7) -> dict | None:
         return None
 
 
-def fetch_market_snapshot() -> dict[str, dict]:
+def _prev_level(prev_data: dict | None, name: str) -> float | None:
+    """Extract the stored previous level for a named instrument, or None."""
+    if not prev_data:
+        return None
+    try:
+        val = float(prev_data.get(name, {}).get("level") or 0)
+        return val if val > 0 else None
+    except Exception:
+        return None
+
+
+def fetch_market_snapshot(prev_data: dict | None = None) -> dict[str, dict]:
     result: dict[str, dict] = {}
     for name, ticker in MARKET_TICKERS.items():
-        q = _fetch_quote(ticker)
+        q = _fetch_quote(ticker, prev_close=_prev_level(prev_data, name))
         if q:
             result[name] = q
     return result
 
 
-def fetch_global_markets() -> dict[str, dict]:
+def fetch_global_markets(prev_data: dict | None = None) -> dict[str, dict]:
     result: dict[str, dict] = {}
     for name, ticker in GLOBAL_TICKERS.items():
-        q = _fetch_quote(ticker)
+        q = _fetch_quote(ticker, prev_close=_prev_level(prev_data, name))
         if q:
             result[name] = q
     return result
 
 
-def fetch_commodities_table() -> dict[str, dict]:
+def fetch_commodities_table(prev_data: dict | None = None) -> dict[str, dict]:
     result: dict[str, dict] = {}
     for name, ticker in COMMODITY_TICKERS.items():
-        q = _fetch_quote(ticker)
+        q = _fetch_quote(ticker, prev_close=_prev_level(prev_data, name))
         if q:
             result[name] = q
     return result
 
 
-def fetch_currencies_table() -> dict[str, dict]:
+def fetch_currencies_table(prev_data: dict | None = None) -> dict[str, dict]:
     result: dict[str, dict] = {}
     for name, ticker in CURRENCY_TICKERS.items():
-        q = _fetch_quote(ticker)
+        q = _fetch_quote(ticker, prev_close=_prev_level(prev_data, name))
         if q:
             result[name] = q
     return result
@@ -1332,17 +1351,27 @@ def validate_commentary(data: dict, known_tickers: set = None) -> bool:
 def main() -> int:
     today = datetime.today().strftime("%Y-%m-%d")
 
+    # Load yesterday's stored levels before fetching so each instrument's
+    # prev_close reference is the value we actually reported last run.
+    _prev: dict = {}
+    if COMMENTARY_PATH.exists():
+        try:
+            with open(COMMENTARY_PATH, "r", encoding="utf-8") as _pf:
+                _prev = json.load(_pf)
+        except Exception:
+            pass
+
     print("[DATA] Fetching live market data...")
-    snapshot         = fetch_market_snapshot()
+    snapshot         = fetch_market_snapshot(prev_data=_prev.get("market_snapshot"))
     print(f"  [OK] Core snapshot: {len(snapshot)} assets")
 
-    global_markets   = fetch_global_markets()
+    global_markets   = fetch_global_markets(prev_data=_prev.get("global_markets"))
     print(f"  [OK] Global markets: {len(global_markets)} indices")
 
-    commodities_tbl  = fetch_commodities_table()
+    commodities_tbl  = fetch_commodities_table(prev_data=_prev.get("commodities_table"))
     print(f"  [OK] Commodities: {len(commodities_tbl)} items")
 
-    currencies_tbl   = fetch_currencies_table()
+    currencies_tbl   = fetch_currencies_table(prev_data=_prev.get("currencies_table"))
     print(f"  [OK] Currencies: {len(currencies_tbl)} pairs")
 
     bonds_tbl        = fetch_bonds_table()

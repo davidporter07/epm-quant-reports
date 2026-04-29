@@ -8,7 +8,13 @@
   const STORAGE_KEY = 'epm_deep_jobs'; // {ticker: job_id}
 
   let _currentTicker = null;
+  let _currentJobId = null;
   let _pollTimer = null;
+  let _etaTimer = null;
+  let _jobStartedAt = null;
+  let _queueWaitMin = 0;
+  let _queueWaitSetAt = null;
+  const TOTAL_EST_MIN = 30;
 
   const STAGE_LABELS = [
     { key: 'seed_doc',          label: 'Data',      full: 'Building Analysis Document' },
@@ -20,7 +26,7 @@
   const STAGE_DESCS = {
     seed_doc:          'Synthesizing Kronos forecasts, EPM models, technicals & news',
     council_personas:  'Seven specialist analysts writing grounded perspectives',
-    council_synthesis: 'Senior editor assembling the final institutional report',
+    council_synthesis: 'Chief Analyst writing the final institutional research note',
     completed:         'Analysis complete',
   };
 
@@ -51,6 +57,24 @@
     } catch (_) {}
   }
 
+  function _updateEta() {
+    const etaEl   = document.getElementById('dalEta');
+    const queueEl = document.getElementById('dalQueueInfo');
+    if (etaEl && etaEl.style.display !== 'none' && _jobStartedAt) {
+      const elapsedMin  = (Date.now() - _jobStartedAt) / 60000;
+      const remaining   = Math.max(1, Math.round(TOTAL_EST_MIN - elapsedMin));
+      etaEl.textContent = `~${remaining} min remaining · You can leave this page`;
+    }
+    if (queueEl && queueEl.style.display !== 'none' && _queueWaitSetAt) {
+      const elapsedMin = (Date.now() - _queueWaitSetAt) / 60000;
+      const remaining  = Math.max(0, Math.round(_queueWaitMin - elapsedMin));
+      const pos        = queueEl.dataset.queuePos || '1';
+      queueEl.textContent = remaining > 0
+        ? `Position ${pos} in queue — est. ~${remaining} min`
+        : `Position ${pos} in queue — starting soon`;
+    }
+  }
+
   function _showLaunchCards() {
     const launch = document.getElementById('dalLaunchCards');
     const progress = document.getElementById('dalProgress');
@@ -76,8 +100,9 @@
     // Current stage name + description — special case for queued state
     const nameEl = document.getElementById('dalCurrentStage');
     const descEl = document.getElementById('dalCurrentDesc');
-    if (nameEl) nameEl.textContent = isQueued ? 'Waiting in Queue' : stageMeta.full;
-    if (descEl) descEl.textContent = isQueued ? 'Another analysis is running — yours will start automatically' : (STAGE_DESCS[status.stage] || '');
+    const queueAhead = status.queue_ahead || 0;
+    if (nameEl) nameEl.textContent = isQueued ? (queueAhead > 0 ? 'Waiting in Queue' : 'Starting…') : stageMeta.full;
+    if (descEl) descEl.textContent = isQueued ? (queueAhead > 0 ? 'Another analysis is running — yours will start automatically' : 'Picked up by worker shortly') : (STAGE_DESCS[status.stage] || '');
 
     // Progress bar + pct
     const bar = document.getElementById('dalProgressBar');
@@ -85,16 +110,40 @@
     const pctEl = document.getElementById('dalProgressPct');
     if (pctEl) pctEl.textContent = pct + '%';
 
+    // Capture timing state for countdown
+    if (!isQueued && status.started_at) {
+      _jobStartedAt = new Date(status.started_at).getTime();
+    }
+    if (isQueued && status.queue_wait_min !== undefined) {
+      _queueWaitMin   = status.queue_wait_min;
+      _queueWaitSetAt = _queueWaitSetAt || Date.now();
+    }
+
     // ETA label — hide for queued jobs (queue info replaces it)
     const etaEl = document.getElementById('dalEta');
-    if (etaEl) etaEl.style.display = isQueued ? 'none' : '';
+    if (etaEl) {
+      if (isQueued) {
+        etaEl.style.display = 'none';
+      } else {
+        etaEl.style.display = '';
+        if (_jobStartedAt) {
+          const elapsedMin  = (Date.now() - _jobStartedAt) / 60000;
+          const remaining   = Math.max(1, Math.round(TOTAL_EST_MIN - elapsedMin));
+          etaEl.textContent = `~${remaining} min remaining · You can leave this page`;
+        }
+      }
+    }
 
     // Queue position info
     const queueEl = document.getElementById('dalQueueInfo');
     if (queueEl) {
       if (isQueued && status.queue_position) {
-        const waitStr = status.queue_wait_min > 0 ? ` — est. ~${status.queue_wait_min} min` : '';
-        queueEl.textContent = `Position ${status.queue_position} in queue${waitStr}`;
+        queueEl.dataset.queuePos = status.queue_position;
+        const elapsedMin = _queueWaitSetAt ? (Date.now() - _queueWaitSetAt) / 60000 : 0;
+        const remaining  = Math.max(0, Math.round(_queueWaitMin - elapsedMin));
+        queueEl.textContent = remaining > 0
+          ? `Position ${status.queue_position} in queue — est. ~${remaining} min`
+          : `Position ${status.queue_position} in queue — starting soon`;
         queueEl.style.display = '';
       } else {
         queueEl.style.display = 'none';
@@ -147,6 +196,30 @@
 
   function _stopPolling() {
     if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+    if (_etaTimer)  { clearInterval(_etaTimer);  _etaTimer  = null; }
+  }
+
+  async function _cancelJob() {
+    const jobId = _currentJobId;
+    if (!jobId) return;
+    const btn = document.getElementById('dalCancelBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Cancelling…'; }
+    try {
+      await fetch(`/api/deep/${encodeURIComponent(jobId)}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+    } catch (_) {}
+    _stopPolling();
+    _clearJob(_currentTicker);
+    _currentJobId = null;
+    _showLaunchCards();
+    const runBtn = document.getElementById('dalRunBtn');
+    if (runBtn) {
+      runBtn.disabled = false;
+      runBtn.textContent = 'Run Analyst Council';
+      runBtn.onclick = () => _runDeepAnalysis(_currentTicker);
+    }
   }
 
   async function _fetchStatus(jobId) {
@@ -165,21 +238,34 @@
     } else if (s.status === 'failed') {
       _stopPolling();
       _clearJob(_currentTicker);
+      _currentJobId = null;
       _showLaunchCards();
       const errEl = document.getElementById('dalError');
       if (errEl) { errEl.textContent = 'Analysis failed: ' + (s.error || 'unknown error'); errEl.style.display = ''; }
+    } else if (s.status === 'cancelled') {
+      _stopPolling();
+      _clearJob(_currentTicker);
+      _currentJobId = null;
+      _showLaunchCards();
     } else {
       _showProgress(s);
     }
   }
 
   function _startPolling(jobId) {
+    _currentJobId = jobId;
     _stopPolling();
     _pollOnce(jobId);
     _pollTimer = setInterval(() => _pollOnce(jobId), POLL_INTERVAL);
+    _etaTimer  = setInterval(_updateEta, 180000); // tick every 3 min
+    const cancelBtn = document.getElementById('dalCancelBtn');
+    if (cancelBtn) { cancelBtn.disabled = false; cancelBtn.textContent = 'Cancel Analysis'; cancelBtn.onclick = _cancelJob; }
   }
 
   async function _runDeepAnalysis(ticker) {
+    _jobStartedAt   = null;
+    _queueWaitMin   = 0;
+    _queueWaitSetAt = null;
     const btn = document.getElementById('dalRunBtn');
     if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
 

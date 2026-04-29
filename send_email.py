@@ -202,14 +202,26 @@ def build_commentary_email_blocks(commentary):
         color = _pct_color(pct)
         sign  = '+' if isinstance(pct, (int, float)) and pct >= 0 else ''
         pct_str = f'{sign}{pct}%' if pct != '' else ''
+        _is_yield = 'Yield' in label or 'Spread' in label
+        _is_dxy   = 'DXY' in label
+        try:
+            _lv = float(level)
+            if _is_yield:
+                level_fmt = f"{_lv:.3f}"
+            elif _is_dxy:
+                level_fmt = f"{_lv:,.2f}"
+            else:
+                level_fmt = f"${_lv:,.2f}"
+        except Exception:
+            level_fmt = str(level)
         snap_rows_html += (
             f'<tr>'
             f'<td style="padding:5px 12px 5px 0;color:#374151;font-size:13px;">{html_lib.escape(label)}</td>'
-            f'<td style="padding:5px 12px 5px 0;color:#111827;font-size:13px;font-weight:600;">{level}</td>'
+            f'<td style="padding:5px 12px 5px 0;color:#111827;font-size:13px;font-weight:600;">{html_lib.escape(level_fmt)}</td>'
             f'<td style="padding:5px 0;color:{color};font-size:13px;font-weight:600;">{arrow} {html_lib.escape(pct_str)}</td>'
             f'</tr>'
         )
-        snap_lines.append(f'{label}: {level}  {arrow} {pct_str}')
+        snap_lines.append(f'{label}: {level_fmt}  {arrow} {pct_str}')
 
     snapshot_html = ''
     if snap_rows_html:

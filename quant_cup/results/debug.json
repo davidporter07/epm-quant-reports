@@ -1,0 +1,87 @@
+{
+  "tournament": "Quant Model Cup",
+  "start": "2020-01-01",
+  "end": "2025-12-31",
+  "data_quality": {
+    "survivorship_bias": "eliminated via point-in-time S&P 500 composition",
+    "composition_changes_tracked": 118,
+    "historical_universe_size": 609,
+    "earnings_source": "AlphaVantage",
+    "pairs_universe": "point-in-time (no look-ahead)"
+  },
+  "spy_baseline": 0.1497,
+  "models": [
+    {
+      "model_name": "MOMENTUM",
+      "total_return": 0.3186,
+      "cagr": 0.0472,
+      "sharpe": 0.3141,
+      "max_drawdown": -0.2919,
+      "win_rate": 0.4662,
+      "trade_count": 2025,
+      "avg_holding_days": 78.0,
+      "worst_year_return": -0.1549,
+      "beats_buyhold": false,
+      "spy_cagr": 0.1497,
+      "annual_returns": {
+        "2020": 0.0,
+        "2021": -0.108,
+        "2022": 0.2637,
+        "2023": -0.1549,
+        "2024": 0.3887,
+        "2025": -0.0033
+      },
+      "elapsed_s": 1.2,
+      "rank": 1,
+      "advances": false
+    },
+    {
+      "model_name": "GAP_CONTINUATION",
+      "total_return": -0.0397,
+      "cagr": -0.0067,
+      "sharpe": 0.3296,
+      "max_drawdown": -0.6872,
+      "win_rate": 0.4907,
+      "trade_count": 27907,
+      "avg_holding_days": 2.3,
+      "worst_year_return": -0.5603,
+      "beats_buyhold": false,
+      "spy_cagr": 0.1497,
+      "annual_returns": {
+        "2020": -0.5603,
+        "2021": 0.2215,
+        "2022": 0.2445,
+        "2023": -0.3933,
+        "2024": 1.3933,
+        "2025": -0.0104
+      },
+      "elapsed_s": 8.5,
+      "rank": 2,
+      "advances": false
+    },
+    {
+      "model_name": "VOL_COMPRESSION",
+      "total_return": -0.2121,
+      "cagr": -0.039,
+      "sharpe": -0.2537,
+      "max_drawdown": -0.249,
+      "win_rate": 0.5282,
+      "trade_count": 10019,
+      "avg_holding_days": 81.1,
+      "worst_year_return": -0.1366,
+      "beats_buyhold": false,
+      "spy_cagr": 0.1497,
+      "annual_returns": {
+        "2020": -0.1366,
+        "2021": 0.0181,
+        "2022": -0.1139,
+        "2023": 0.0028,
+        "2024": 0.0367,
+        "2025": -0.027
+      },
+      "elapsed_s": 4.1,
+      "rank": 3,
+      "advances": false
+    }
+  ]
+}

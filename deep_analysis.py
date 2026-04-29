@@ -92,13 +92,19 @@ def _get_kronos_scenarios(ticker: str, ohlcv: List[dict], pred_len: int = 5) -> 
     """
     Fetch Kronos OHLCV scenarios. Returns a list of forecast scenarios (each is a list of daily dicts).
     Handles both single-forecast and multi-sample response formats.
+    Returns [] gracefully if Kronos is unavailable so the pipeline can continue without it.
     """
-    r = requests.post(
-        f"{KRONOS_URL}/forecast",
-        json={"ticker": ticker, "ohlcv": ohlcv, "pred_len": pred_len, "sample_count": 3},
-        timeout=30,
-    )
-    r.raise_for_status()
+    import logging
+    try:
+        r = requests.post(
+            f"{KRONOS_URL}/forecast",
+            json={"ticker": ticker, "ohlcv": ohlcv, "pred_len": pred_len, "sample_count": 3},
+            timeout=30,
+        )
+        r.raise_for_status()
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Kronos unavailable for %s: %s", ticker, exc)
+        return []
     data = r.json()
 
     # Multi-sample: {"forecasts": [[{day}, ...], [{day}, ...], ...]}
@@ -898,10 +904,12 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> Tuple[str, Dict[str, Any]]
             )
     lines.append("")
 
-    # NOTE: News headlines intentionally excluded from seed doc.
-    # MiroFish's entity extractor pulls named entities from headlines (Amazon, Peacock,
-    # Elle Fanning) and creates irrelevant agents from them. Headlines are used only
-    # in the LLM post-processing layer where they add context without contaminating agents.
+    # ── RECENT HEADLINES ─────────────────────────────────────────────────────
+    if headlines:
+        lines.append("── RECENT HEADLINES ─────────────────────────────────────────────────────────")
+        for i, h in enumerate(headlines[:8], 1):
+            lines.append(f"{i}. {h}")
+        lines.append("")
 
     # ── ANALYSIS OBJECTIVE ───────────────────────────────────────────────────
     lines.append("── ANALYSIS OBJECTIVE ───────────────────────────────────────────────────────────")
@@ -1081,6 +1089,9 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> Tuple[str, Dict[str, Any]]
             "epm_most_pessimistic_pct":  round(min(vals), 2),
             "epm_model_count":           len(epm),
         })
+
+    if headlines:
+        key_facts["recent_headlines"] = headlines[:8]
 
     return "\n".join(lines), key_facts
 

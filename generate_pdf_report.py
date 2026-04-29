@@ -205,23 +205,14 @@ def load_commentary() -> dict:
                             "pct_change": entry.get("pct_change"),
                         }
                 if bonds_overlay:
-                    # Merge: YCharts wins for any key it has data for
+                    # Merge: arbitrated YCharts fills gaps only — live Treasury.gov
+                    # data fetched by generate_market_commentary.py is more current
+                    # (end-of-day) than the intraday YCharts scrape, so existing keys win.
                     existing = commentary.get("bonds_table", {})
-                    existing.update(bonds_overlay)
+                    for k, v in bonds_overlay.items():
+                        if k not in existing:
+                            existing[k] = v
                     commentary["bonds_table"] = existing
-
-                    # Sync market_snapshot "10-Yr Yield" to match the authoritative
-                    # arbitrated value so page 1 and page 2 show consistent data.
-                    ten_yr = yc_yields.get("10-Year Yield")
-                    if ten_yr and ten_yr.get("level") is not None:
-                        snap = commentary.get("market_snapshot", {})
-                        if "10-Yr Yield" in snap:
-                            snap["10-Yr Yield"] = {
-                                "level":      ten_yr["level"],
-                                "change":     ten_yr.get("change"),
-                                "pct_change": ten_yr.get("pct_change"),
-                            }
-                            commentary["market_snapshot"] = snap
 
             # Attach full economics payload for use in report sections
             econ = arb.get("economics", {})
@@ -844,7 +835,7 @@ def build_premarket_bullets_html(commentary: dict) -> str:
 </div>"""
 
 
-def build_snapshot_table(snapshot: dict, title: str = "U.S. Markets") -> str:
+def build_snapshot_table(snapshot: dict, title: str = "U.S. Markets", show_dollar: bool = False) -> str:
     if not snapshot:
         return '<p class="commentary-unavailable">Market data unavailable.</p>'
 
@@ -858,10 +849,17 @@ def build_snapshot_table(snapshot: dict, title: str = "U.S. Markets") -> str:
 
         is_yield = "Yield" in name or "Spread" in name or name.endswith("bp")
         is_pct_native = "Spread" in name
+        # Add $ only for USD price-denominated assets — not yields, not index values like DXY
+        use_dollar = show_dollar and not is_yield and "DXY" not in name
 
         try:
             lv  = float(level)
-            lvs = f"{lv:.3f}" if is_yield else f"{lv:,.2f}"
+            if is_yield:
+                lvs = f"{lv:.3f}"
+            elif use_dollar:
+                lvs = f"${lv:,.2f}"
+            else:
+                lvs = f"{lv:,.2f}"
         except Exception:
             lvs = "N/A"
 
@@ -906,7 +904,7 @@ def build_page1_html(logo_b64: str, commentary: dict) -> str:
     snapshot = commentary.get("market_snapshot") or {}
     global_m = commentary.get("global_markets")  or {}
 
-    us_table     = build_snapshot_table(snapshot,  "U.S. Markets  Key Assets")
+    us_table     = build_snapshot_table(snapshot,  "U.S. Markets  Key Assets", show_dollar=True)
     global_table = build_snapshot_table(global_m,  "Global Equity Markets")
 
     return f"""
@@ -947,8 +945,10 @@ def build_bonds_table_html(bonds: dict) -> str:
                 lvs = "N/A"
                 level = None  # suppress change/pct display too
             elif is_spread:
-                # level is stored as pct (e.g. 0.56 = 56 bps); convert to bps for display
-                lvs = f"{lv * 100:.1f} bp"
+                # level may be already in bps (e.g. 53.0) or decimal pct (e.g. 0.53);
+                # values > 1.0 are already bps, smaller values need *100 conversion
+                lv_bps = lv if abs(lv) > 1.0 else lv * 100
+                lvs = f"{lv_bps:.1f} bp"
             else:
                 lvs = f"{lv:.3f}%"
         except Exception:

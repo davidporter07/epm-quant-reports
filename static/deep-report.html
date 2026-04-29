@@ -34,11 +34,144 @@
   <title>Deep Analysis Report | EPM Market Intelligence</title>
   <link rel="stylesheet" href="/static/css/styles.css?v=20260410a" />
   <link rel="stylesheet" href="/static/css/design-v2.css?v=20260410a" />
-  <link rel="stylesheet" href="/static/css/design-system.css?v=20260423a" />
+  <link rel="stylesheet" href="/static/css/design-system.css?v=20260424a" />
   <script src="/static/js/chrome.js?v=20260423a"></script>
   <script defer src="/static/js/site.js?v=20260420c"></script>
   <link rel="icon" type="image/png" href="/static/epm_logo_sq.png">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    /* ── Discord-style deliberation chat ── */
+    .dc-chat {
+      background: var(--ds-paper, #0e1e33);
+      border: 1px solid var(--ds-line, #1e3050);
+      border-radius: 10px;
+      overflow: hidden;
+      padding-bottom: 12px;
+    }
+    .dc-divider {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 22px 20px 10px;
+    }
+    .dc-divider-line {
+      flex: 1;
+      height: 1px;
+      background: var(--ds-line, #1e3050);
+    }
+    .dc-divider-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .09em;
+      color: var(--ds-muted, #7a93b8);
+      white-space: nowrap;
+    }
+    .dc-msg {
+      display: flex;
+      gap: 14px;
+      padding: 6px 20px;
+      transition: background .1s;
+    }
+    .dc-msg:hover { background: rgba(0,0,0,.04); }
+    [data-theme="dark"] .dc-msg:hover { background: rgba(255,255,255,.03); }
+    .dc-msg-cont { padding-top: 2px; padding-bottom: 2px; }
+    .dc-avatar {
+      width: 38px; height: 38px; min-width: 38px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; font-weight: 700; color: #fff;
+      letter-spacing: .02em;
+      margin-top: 2px;
+    }
+    .dc-spacer { width: 38px; min-width: 38px; }
+    .dc-body { flex: 1; min-width: 0; }
+    .dc-header {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 3px;
+    }
+    .dc-name { font-size: 13px; font-weight: 700; }
+    .dc-stance {
+      font-size: 10px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: .08em;
+      padding: 2px 8px; border-radius: 999px;
+    }
+    .dc-stance-bearish  { background: rgba(179,39,28,.15);  color: #e05048; }
+    .dc-stance-base     { background: rgba(107,122,146,.15); color: var(--ds-muted, #7a93b8); }
+    .dc-stance-bullish  { background: rgba(15,138,86,.15);   color: #22c55e; }
+    [data-theme="light"] .dc-stance-bearish { color: #b3271c; }
+    [data-theme="light"] .dc-stance-bullish { color: #0f8a56; }
+    .dc-content {
+      font-size: 13.5px;
+      line-height: 1.65;
+      color: var(--ds-ink, #e8edf4);
+      word-break: break-word;
+    }
+    .dc-field {
+      font-size: 10.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .07em;
+      color: var(--ds-muted, #7a93b8);
+    }
+    /* ── Debate Map ── */
+    .dm-outer { background: var(--ds-paper); border: 1px solid var(--ds-line); border-radius: 10px; padding: 20px 20px 16px; overflow-x: auto; }
+    .dm-header { display: flex; margin-bottom: 2px; padding-left: 42px; }
+    .dm-hdr-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--ds-muted); white-space: nowrap; }
+    .dm-hdr-l { width: 200px; flex-shrink: 0; }
+    .dm-hdr-m { flex: 1; text-align: center; }
+    .dm-hdr-r { width: 200px; flex-shrink: 0; text-align: right; }
+    .dm-wrap { display: flex; align-items: flex-start; min-width: 520px; }
+    .dm-col-l, .dm-col-r { display: flex; flex-direction: column; flex-shrink: 0; }
+    .dm-col-l { width: 200px; }
+    .dm-col-r { width: 200px; }
+    .dm-row { height: 58px; display: flex; align-items: center; gap: 9px; }
+    .dm-col-r .dm-row { justify-content: flex-end; }
+    .dm-av { width: 32px; height: 32px; min-width: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #fff; flex-shrink: 0; }
+    .dm-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+    .dm-name { font-size: 12px; font-weight: 600; color: var(--ds-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; }
+    .dm-pill { display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; padding: 2px 7px; border-radius: 999px; }
+    .dm-shifted { font-size: 10px; font-weight: 700; color: #d4a84b; white-space: nowrap; }
+    .dm-unchallenged { font-size: 10px; font-weight: 600; color: var(--ds-muted); white-space: nowrap; letter-spacing: .03em; }
+    .dm-svg { flex: 1; min-width: 80px; }
+    .dm-legend { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--ds-line); display: flex; flex-wrap: wrap; gap: 6px 16px; }
+    .dm-legend-item { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ds-ink); }
+    .dm-legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+    .dm-legend-arrow { font-size: 11px; color: var(--ds-muted); }
+
+    /* ── Reply/quote preview (Discord-style) ── */
+    .dc-reply {
+      display: flex; align-items: stretch; gap: 0;
+      background: rgba(0,0,0,.07);
+      border-radius: 6px;
+      padding: 5px 10px 5px 0;
+      margin-bottom: 6px;
+      cursor: pointer;
+      max-width: 520px;
+      transition: background .12s;
+      overflow: hidden;
+    }
+    .dc-reply:hover { background: rgba(0,0,0,.13); }
+    [data-theme="dark"] .dc-reply { background: rgba(255,255,255,.07); }
+    [data-theme="dark"] .dc-reply:hover { background: rgba(255,255,255,.13); }
+    .dc-reply-bar {
+      width: 4px; min-width: 4px;
+      border-radius: 2px 0 0 2px;
+      margin-right: 9px;
+      flex-shrink: 0;
+    }
+    .dc-reply-inner { min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+    .dc-reply-name {
+      font-size: 11.5px; font-weight: 700;
+      display: block; margin-bottom: 1px;
+    }
+    .dc-reply-text {
+      font-size: 11.5px;
+      color: var(--ds-muted, #7a93b8);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      display: block; max-width: 460px;
+    }
+  </style>
 </head>
 <body data-page="deep-report" data-ds="v3">
   <div id="epmChrome"></div>
@@ -97,25 +230,30 @@
         e.style.display = '';
       }
 
-      // Exposed globally so onclick= attribute can reach it
+      const _COPY_BTN_HTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy Link';
+
+      function _legacyCopy(text) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
+        document.body.appendChild(ta);
+        ta.focus(); ta.select();
+        try { document.execCommand('copy'); } catch (_) {}
+        document.body.removeChild(ta);
+      }
+
       window.copyReportLink = function () {
         const btn = document.getElementById('btnCopyLink');
-        navigator.clipboard.writeText(window.location.href).then(() => {
+        const url = window.location.href;
+        function _done() {
           btn.textContent = '✓ Copied!';
-          setTimeout(() => {
-            btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy Link';
-          }, 2000);
-        }).catch(() => {
-          // Fallback for browsers that block clipboard without user gesture
-          const ta = document.createElement('textarea');
-          ta.value = window.location.href;
-          ta.style.position = 'fixed'; ta.style.opacity = '0';
-          document.body.appendChild(ta); ta.select();
-          document.execCommand('copy');
-          document.body.removeChild(ta);
-          btn.textContent = '✓ Copied!';
-          setTimeout(() => { btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy Link'; }, 2000);
-        });
+          setTimeout(() => { btn.innerHTML = _COPY_BTN_HTML; }, 2000);
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(url).then(_done).catch(() => { _legacyCopy(url); _done(); });
+        } else {
+          _legacyCopy(url); _done();
+        }
       };
 
       function renderReport(status) {
@@ -207,19 +345,22 @@
 
       // Tab toggle — exposed globally for onclick= attributes
       window.switchAgentTab = function (tab) {
-        const agentWrap    = document.getElementById('agentListWrap');
+        const agentWrap   = document.getElementById('agentListWrap');
         const timelineWrap = document.getElementById('agentTimelineWrap');
+        const mapWrap     = document.getElementById('debateMapWrap');
         const tabA = document.getElementById('tabByAgent');
         const tabT = document.getElementById('tabTimeline');
+        const tabM = document.getElementById('tabDebateMap');
+        [agentWrap, timelineWrap, mapWrap].forEach(el => { if (el) el.style.display = 'none'; });
+        [tabA, tabT, tabM].forEach(el => { if (el) el.classList.remove('active'); });
         if (tab === 'agents') {
-          if (agentWrap)    agentWrap.style.display = '';
-          if (timelineWrap) timelineWrap.style.display = 'none';
+          if (agentWrap) agentWrap.style.display = '';
           if (tabA) tabA.classList.add('active');
-          if (tabT) tabT.classList.remove('active');
+        } else if (tab === 'map') {
+          if (mapWrap) mapWrap.style.display = '';
+          if (tabM) tabM.classList.add('active');
         } else {
-          if (agentWrap)    agentWrap.style.display = 'none';
           if (timelineWrap) timelineWrap.style.display = '';
-          if (tabA) tabA.classList.remove('active');
           if (tabT) tabT.classList.add('active');
         }
       };
@@ -277,38 +418,215 @@
           // Both panels are built — show Transcript by default (switchAgentTab controls visibility)
           // ── Deliberation Script (Timeline) ──────────────────────────────
           const tlEl = document.getElementById('agentTimeline');
-          const timeline = data.timeline || [];
+          // Sort by round so all Round 1 appears together, then Round 2, then Round 3
+          const timeline = [...(data.timeline || [])].sort((a, b) => (a.round || 0) - (b.round || 0));
           if (tlEl) {
             if (!timeline.length) {
               tlEl.innerHTML = '<div class="agent-empty">No deliberation posts recorded for this analysis.</div>';
             } else {
-              const totalRounds = 72;
-              const totalPosts = timeline.length;
-              const header = `
-                <div class="script-header">
-                  <div class="script-title">DELIBERATION TRANSCRIPT</div>
-                  <div class="script-meta">Analyst Council Deliberation &nbsp;·&nbsp; ${totalPosts} recorded statement${totalPosts !== 1 ? 's' : ''} &nbsp;·&nbsp; ${data.agents ? data.agents.length : '?'} analysts</div>
-                  <div class="script-divider">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</div>
-                </div>`;
+              const ROUND_NAMES = { 1: 'Independent Stances', 2: 'Debate', 3: 'Final Positions' };
 
-              const lines = timeline.map((entry, idx) => {
+              function _parseStance(text) {
+                const m = text.match(/(?:FINAL\s+)?STANCE:\s*(bear(?:ish)?|base|bull(?:ish)?)/i);
+                if (!m) return null;
+                const s = m[1].toLowerCase();
+                return s.startsWith('bear') ? 'bearish' : s === 'base' ? 'base' : 'bullish';
+              }
+
+              function _formatContent(text) {
+                return text
+                  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                  .replace(/\n/g, '<br>')
+                  .replace(/(STANCE|FINAL STANCE|CLAIM|EVIDENCE|MECHANISM|DISAGREEMENT|WHAT WOULD CHANGE MY MIND|RATIONALE|POSITION SHIFTED|WHY):/g,
+                    '<span class="dc-field">$1:</span>');
+              }
+
+              // Stable DOM id for a given agent+round message
+              function _msgId(agent, round) {
+                return 'dcm-' + agent.replace(/\s+/g, '-').replace(/[^a-zA-Z0-9-]/g, '').toLowerCase() + '-r' + round;
+              }
+
+              // Extract CLAIM: line from a take
+              function _extractClaim(text) {
+                const m = text.match(/CLAIM:\s*(.+?)(?:\n|$)/i);
+                return m ? m[1].trim() : null;
+              }
+
+              // Build index: "AgentName:round" -> { claim, id }
+              const KNOWN_AGENTS = [...new Set(timeline.map(e => e.agent))];
+              const msgIndex = {};
+              timeline.forEach(e => {
+                msgIndex[e.agent + ':' + e.round] = {
+                  claim: _extractClaim(e.content),
+                  id: _msgId(e.agent, e.round)
+                };
+              });
+
+              // Find referenced analyst name for R2/R3 entries
+              function _findRefAgent(text, prevRound) {
+                // R2: search DISAGREEMENT field first
+                const dm = text.match(/DISAGREEMENT:\s*(.+?)(?:\n|$)/i);
+                const searchIn = dm ? dm[1] + '\n' + text : text;
+                for (const agent of KNOWN_AGENTS) {
+                  if (searchIn.toLowerCase().includes(agent.toLowerCase())) {
+                    // Verify they have a message in the prior round
+                    if (msgIndex[agent + ':' + prevRound]) return agent;
+                  }
+                }
+                return null;
+              }
+
+              // Build reply preview HTML
+              function _replyHtml(refAgent, refData) {
+                const refColor = colorMap[refAgent] || AVATAR_COLORS[0];
+                const escaped = (refData.claim || '(no claim recorded)')
+                  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                return `<div class="dc-reply" onclick="(function(){var el=document.getElementById('${refData.id}');if(el)el.scrollIntoView({behavior:'smooth',block:'center'});})()">` +
+                  `<div class="dc-reply-bar" style="background:${refColor}"></div>` +
+                  `<div class="dc-reply-inner">` +
+                  `<span class="dc-reply-name" style="color:${refColor}">${refAgent}</span>` +
+                  `<span class="dc-reply-text">${escaped}</span>` +
+                  `</div></div>`;
+              }
+
+              let html = '<div class="dc-chat">';
+              let lastRound = null;
+              let lastAgent = null;
+
+              timeline.forEach((entry) => {
+                const round = entry.round;
                 const color = colorMap[entry.agent] || AVATAR_COLORS[0];
-                const roundLabel = entry.round != null ? `Round ${entry.round}` : (entry.ts ? `~Round ${Math.round((idx + 1) / totalPosts * totalRounds)}` : '');
-                const prevAgent = idx > 0 ? timeline[idx - 1].agent : null;
-                const isReply = prevAgent && prevAgent !== entry.agent;
-                return `
-                  <div class="script-line${isReply ? ' script-reply' : ''}">
-                    <div class="script-speaker">
-                      <span class="script-dot" style="background:${color};"></span>
-                      <span class="script-name">${entry.agent.toUpperCase()}</span>
-                      ${roundLabel ? `<span class="script-round">${roundLabel}</span>` : ''}
-                    </div>
-                    <div class="script-dialogue">${entry.content}</div>
-                  </div>`;
-              }).join('');
 
-              tlEl.innerHTML = header + lines;
+                if (round !== lastRound) {
+                  const rname = ROUND_NAMES[round] || `Round ${round}`;
+                  html += `<div class="dc-divider"><div class="dc-divider-line"></div><span class="dc-divider-label">Round ${round} &mdash; ${rname}</span><div class="dc-divider-line"></div></div>`;
+                  lastAgent = null;
+                }
+
+                const stance = _parseStance(entry.content);
+                const stanceBadge = stance ? `<span class="dc-stance dc-stance-${stance}">${stance}</span>` : '';
+                const formatted = _formatContent(entry.content);
+                const isGrouped = entry.agent === lastAgent && round === lastRound;
+                const msgId = _msgId(entry.agent, round);
+
+                // Build reply quote for R2 (references R1) and R3 (references R2)
+                let replyBlock = '';
+                if (round >= 2) {
+                  const refAgent = _findRefAgent(entry.content, round - 1);
+                  if (refAgent) {
+                    const refData = msgIndex[refAgent + ':' + (round - 1)];
+                    if (refData) replyBlock = _replyHtml(refAgent, refData);
+                  }
+                }
+
+                if (isGrouped) {
+                  html += `<div class="dc-msg dc-msg-cont" id="${msgId}"><div class="dc-spacer"></div><div class="dc-content">${replyBlock}${formatted}</div></div>`;
+                } else {
+                  html += `<div class="dc-msg" id="${msgId}">
+                    <div class="dc-avatar" style="background:${color}">${_initials(entry.agent)}</div>
+                    <div class="dc-body">
+                      <div class="dc-header">
+                        <span class="dc-name" style="color:${color}">${entry.agent}</span>
+                        ${stanceBadge}
+                      </div>
+                      ${replyBlock}<div class="dc-content">${formatted}</div>
+                    </div>
+                  </div>`;
+                }
+
+                lastRound = round;
+                lastAgent = entry.agent;
+              });
+
+              html += '</div>';
+              tlEl.innerHTML = html;
             }
+          }
+
+          // ── Debate Map ────────────────────────────────────────────────
+          const mapEl = document.getElementById('debateMap');
+          if (mapEl && timeline.length) {
+            const ROW_H = 58;
+            const analysts = timeline.filter(e => e.round === 1).map(e => e.agent);
+            const idxOf = a => analysts.indexOf(a);
+
+            const stanceOf = (agent, round) => {
+              const e = timeline.find(x => x.agent === agent && x.round === round);
+              return e ? _parseStance(e.content) : null;
+            };
+
+            // Build R2 edges: challenger → target
+            const edges = [];
+            timeline.filter(e => e.round === 2).forEach(e => {
+              const ref = _findRefAgent(e.content, 1);
+              if (ref && ref !== e.agent) edges.push({ from: e.agent, to: ref });
+            });
+
+            const sc = s => s === 'bearish' ? '#e05048' : s === 'bullish' ? '#22c55e' : 'var(--ds-muted,#7a93b8)';
+            const sb = s => s === 'bearish' ? 'rgba(179,39,28,.15)' : s === 'bullish' ? 'rgba(15,138,86,.15)' : 'rgba(107,122,146,.15)';
+
+            const totalH = analysts.length * ROW_H;
+            let svgPaths = '';
+            edges.forEach(({ from, to }) => {
+              const fi = idxOf(from), ti = idxOf(to);
+              if (fi < 0 || ti < 0) return;
+              const col = colorMap[from] || AVATAR_COLORS[0];
+              const y1 = fi * ROW_H + ROW_H / 2;
+              const y2 = ti * ROW_H + ROW_H / 2;
+              if (fi === ti) {
+                svgPaths += `<line x1="0" y1="${y1}" x2="100%" y2="${y2}" stroke="${col}" stroke-width="1.5" stroke-opacity=".5"/>`;
+              } else {
+                const cx = 50;
+                svgPaths += `<path d="M0,${y1} C${cx},${y1} ${cx},${y2} 100,${y2}" fill="none" stroke="${col}" stroke-width="1.5" stroke-opacity=".5" vector-effect="non-scaling-stroke"/>`;
+                svgPaths += `<circle cx="100" cy="${y2}" r="3.5" fill="${col}" fill-opacity=".75"/>`;
+              }
+            });
+
+            // Which analysts were targeted in R2
+            const challenged = new Set(edges.map(e => e.to));
+
+            let leftRows = '', rightRows = '';
+            analysts.forEach(agent => {
+              const col = colorMap[agent] || AVATAR_COLORS[0];
+              const r1 = stanceOf(agent, 1), r3 = stanceOf(agent, 3);
+              const shifted = r1 && r3 && r1 !== r3;
+              const unchallenged = !challenged.has(agent);
+              const ini = _initials(agent);
+              leftRows += `<div class="dm-row">
+                <div class="dm-av" style="background:${col}">${ini}</div>
+                <div class="dm-info">
+                  <div class="dm-name">${agent}</div>
+                  ${r1 ? `<span class="dm-pill" style="background:${sb(r1)};color:${sc(r1)}">${r1}</span>` : ''}
+                </div></div>`;
+              rightRows += `<div class="dm-row">
+                <div class="dm-info" style="align-items:flex-end">
+                  ${r3 ? `<span class="dm-pill" style="background:${sb(r3)};color:${sc(r3)}">${r3}</span>` : ''}
+                  ${shifted ? `<span class="dm-shifted">↕ shifted</span>` : ''}
+                  ${unchallenged ? `<span class="dm-unchallenged">unchallenged</span>` : ''}
+                </div>
+                <div class="dm-av" style="background:${col}">${ini}</div>
+              </div>`;
+            });
+
+            const legendItems = edges.map(({ from, to }) => {
+              const col = colorMap[from] || AVATAR_COLORS[0];
+              return `<div class="dm-legend-item"><div class="dm-legend-dot" style="background:${col}"></div><span>${from}</span><span class="dm-legend-arrow">challenged</span><span>${to}</span></div>`;
+            }).join('');
+
+            mapEl.innerHTML = `
+              <div class="dm-outer">
+                <div class="dm-header">
+                  <div class="dm-hdr-label dm-hdr-l">Round 1 — Initial Stances</div>
+                  <div class="dm-hdr-label dm-hdr-m">Round 2 — Who Challenged Whom</div>
+                  <div class="dm-hdr-label dm-hdr-r">Round 3 — Final</div>
+                </div>
+                <div class="dm-wrap">
+                  <div class="dm-col-l">${leftRows}</div>
+                  <svg class="dm-svg" height="${totalH}" viewBox="0 0 100 ${totalH}" preserveAspectRatio="none">${svgPaths}</svg>
+                  <div class="dm-col-r">${rightRows}</div>
+                </div>
+                ${legendItems ? `<div class="dm-legend">${legendItems}</div>` : ''}
+              </div>`;
           }
 
           // Default to Transcript tab so users see the deliberation flow, not agent cards
@@ -330,6 +648,7 @@
       <div class="agent-tabs">
         <button class="agent-tab" id="tabByAgent" onclick="switchAgentTab('agents')">By Agent</button>
         <button class="agent-tab active" id="tabTimeline" onclick="switchAgentTab('timeline')">Transcript</button>
+        <button class="agent-tab" id="tabDebateMap" onclick="switchAgentTab('map')">Debate Map</button>
       </div>
     </div>
     <div id="agentLoading" style="font-size:12px;color:var(--muted,#7d94c0);padding:8px 0;">Loading agent data…</div>
@@ -338,6 +657,9 @@
     </div>
     <div id="agentTimelineWrap" style="display:none;">
       <div id="agentTimeline"></div>
+    </div>
+    <div id="debateMapWrap" style="display:none;">
+      <div id="debateMap"></div>
     </div>
   </div>
 
