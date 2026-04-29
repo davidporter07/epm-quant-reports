@@ -1154,6 +1154,18 @@ body[data-page="markets"][data-ds="v3"][data-density="dense"] .market-kpi-pill .
 }
 
 /* --------------------------------------------------------------------------
+   14a. FUND SEARCH — Search card stacking context
+        The search input card must sit above the sticky snapshot header
+        (z-index: 40) so the suggestion dropdown renders on top of it.
+   -------------------------------------------------------------------------- */
+
+body[data-page="search"][data-ds="v3"] .page-shell > .ds-card:first-of-type {
+  position: relative;
+  z-index: 50;
+  overflow: visible;
+}
+
+/* --------------------------------------------------------------------------
    14b. DENSE MODE — Search-specific
         Tightens KV metric grid rows and news items on Fund Search.
    -------------------------------------------------------------------------- */
