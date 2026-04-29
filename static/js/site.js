@@ -2591,7 +2591,8 @@ function mountGlobalHeaderSearch() {
 
 function mountTickerTape() {
   const shell = document.querySelector('.page-shell');
-  const header = shell?.querySelector('.topbar');
+  // .topbar now lives in #epmChrome (sibling of .page-shell), not inside it
+  const header = document.querySelector('.topbar');
   if (!shell || !header || shell.querySelector('#tickerTapeShell')) return;
 
   const tapeShell = document.createElement('section');
@@ -2604,7 +2605,7 @@ function mountTickerTape() {
     <div class="ticker-tape-viewport" aria-label="Live S&amp;P 500 ticker tape">
       <canvas id="tickerTapeCanvas" class="ticker-tape-canvas" aria-hidden="true"></canvas>
     </div>`;
-  shell.insertBefore(tapeShell, header);
+  shell.insertBefore(tapeShell, shell.firstChild);
 
   const cacheKey = 'ticker_tape_items_v3';
   const metaKey = 'ticker_tape_meta_v3';
