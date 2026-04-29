@@ -278,6 +278,14 @@
       const data = await r.json();
       if (!data.ok) throw new Error(data.detail || 'Failed to start');
       _saveJob(ticker, data.job_id);
+      if (data.earnings_triggered) {
+        const errEl = document.getElementById('dalError');
+        if (errEl) {
+          errEl.textContent = 'New earnings data detected — running fresh analysis.';
+          errEl.style.display = '';
+          errEl.style.color = 'var(--ds-amber, #d4a017)';
+        }
+      }
       _startPolling(data.job_id);
     } catch (err) {
       if (btn) { btn.disabled = false; btn.textContent = 'Run Analyst Council'; }

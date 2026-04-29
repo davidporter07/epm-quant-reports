@@ -288,10 +288,52 @@ def stop_worker() -> None:
 # Public API used by app.py
 # ---------------------------------------------------------------------------
 
-def enqueue(ticker: str) -> str:
-    """Create a new job and return its job_id. If an active job already exists
-    for this ticker, return that job_id instead of stacking duplicates."""
+def get_today_cached_job(ticker: str) -> Optional[dict]:
+    """Return the most-recently-completed non-invalidated job for this ticker from today (UTC)."""
     ticker = ticker.upper()
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    candidates = []
+    for p in _jobs_dir().glob("*.json"):
+        try:
+            j = json.loads(p.read_text())
+            if (j.get("ticker") == ticker
+                    and j.get("status") == "completed"
+                    and (j.get("completed_at") or "").startswith(today)
+                    and not j.get("invalidated")):
+                candidates.append(j)
+        except Exception:
+            continue
+    if not candidates:
+        return None
+    return max(candidates, key=lambda j: j.get("completed_at", ""))
+
+
+def invalidate_today_cache(ticker: str) -> None:
+    """Mark all of today's completed jobs for this ticker as invalidated."""
+    ticker = ticker.upper()
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    for p in _jobs_dir().glob("*.json"):
+        try:
+            j = json.loads(p.read_text())
+            if (j.get("ticker") == ticker
+                    and j.get("status") == "completed"
+                    and (j.get("completed_at") or "").startswith(today)):
+                j["invalidated"] = True
+                _write_job(j)
+        except Exception:
+            continue
+
+
+def enqueue(ticker: str, force_fresh: bool = False) -> str:
+    """Create a new job and return its job_id.
+
+    - Active job (queued/running) for this ticker → return its job_id (in-progress dedup).
+    - Completed job for today and force_fresh=False → return cached job_id (daily cache).
+    - Otherwise create a new job.
+    """
+    ticker = ticker.upper()
+
+    # In-progress dedup
     for p in _jobs_dir().glob("*.json"):
         try:
             j = json.loads(p.read_text())
@@ -299,6 +341,12 @@ def enqueue(ticker: str) -> str:
                 return j["job_id"]
         except Exception:
             continue
+
+    # Daily cache
+    if not force_fresh:
+        cached = get_today_cached_job(ticker)
+        if cached:
+            return cached["job_id"]
 
     job_id = f"deep_{ticker}_{uuid.uuid4().hex[:8]}"
     job: Dict[str, Any] = {
@@ -308,6 +356,7 @@ def enqueue(ticker: str) -> str:
         "stage":        "queued",
         "progress":     0,
         "retry_count":  0,
+        "invalidated":  False,
         "created_at":   datetime.utcnow().isoformat(),
         "started_at":   None,
         "completed_at": None,

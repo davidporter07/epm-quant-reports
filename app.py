@@ -37,7 +37,8 @@ from services.auth_service import (
     verify_login,
 )
 from services.email_service import EmailError, send_password_reset_email
-from deep_analysis_worker import cancel_job, enqueue, get_job_status, start_worker, stop_worker
+from deep_analysis_worker import (cancel_job, enqueue, get_job_status, get_today_cached_job,
+                                   invalidate_today_cache, start_worker, stop_worker)
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -2033,8 +2034,27 @@ def deep_analysis_start(ticker: str, request: Request) -> JSONResponse:
     t = ticker.strip().upper()
     if not _DEEP_TICKER_RE.match(t):
         raise HTTPException(status_code=400, detail="Invalid ticker.")
-    job_id = enqueue(t)
-    return JSONResponse({"ok": True, "job_id": job_id, "ticker": t})
+
+    force_fresh = request.query_params.get("force_fresh") == "1"
+    earnings_triggered = False
+
+    if not force_fresh:
+        cached = get_today_cached_job(t)
+        if cached:
+            from datetime import datetime as _dt
+            key_facts = cached.get("key_facts") or {}
+            next_earnings_date = key_facts.get("next_earnings_date")
+            today_str = _dt.utcnow().strftime("%Y-%m-%d")
+            if next_earnings_date == today_str:
+                from deep_analysis import check_earnings_released
+                if check_earnings_released(t, next_earnings_date):
+                    invalidate_today_cache(t)
+                    force_fresh = True
+                    earnings_triggered = True
+
+    job_id = enqueue(t, force_fresh=force_fresh)
+    return JSONResponse({"ok": True, "job_id": job_id, "ticker": t,
+                         "earnings_triggered": earnings_triggered})
 
 
 @app.get("/api/deep/{job_id}/status")

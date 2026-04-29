@@ -444,13 +444,27 @@ def _get_spy_trend() -> Dict:
 
 
 def _get_earnings_info(ticker: str) -> Optional[Dict]:
-    """Next earnings date from yfinance calendar."""
+    """Next earnings date + release time (BMO/AMC/None) from yfinance calendar."""
     try:
         t = yf.Ticker(ticker)
         cal = t.calendar
         if cal is None:
             return None
         today = datetime.now().date()
+
+        def _release_time_from_ts(raw) -> Optional[str]:
+            try:
+                ts = pd.to_datetime(raw)
+                h = ts.hour
+                if h == 0:
+                    return None
+                if h < 12:
+                    return "BMO"
+                if h >= 16:
+                    return "AMC"
+                return "intraday"
+            except Exception:
+                return None
 
         # calendar is a DataFrame (columns = dates, rows = metrics)
         if hasattr(cal, "columns"):
@@ -459,7 +473,8 @@ def _get_earnings_info(ticker: str) -> Optional[Dict]:
                     d = pd.to_datetime(col).date()
                     if d >= today:
                         days_until = (d - today).days
-                        return {"date": str(d), "days_until": days_until}
+                        return {"date": str(d), "days_until": days_until,
+                                "release_time": _release_time_from_ts(col)}
                 except Exception:
                     continue
 
@@ -473,12 +488,40 @@ def _get_earnings_info(ticker: str) -> Optional[Dict]:
                     d = pd.to_datetime(raw).date()
                     if d >= today:
                         days_until = (d - today).days
-                        return {"date": str(d), "days_until": days_until}
+                        return {"date": str(d), "days_until": days_until,
+                                "release_time": _release_time_from_ts(raw)}
                 except Exception:
                     continue
     except Exception:
         pass
     return None
+
+
+def check_earnings_released(ticker: str, earnings_date_str: str) -> bool:
+    """Return True if actual EPS data is available for the given earnings date.
+
+    Checks yfinance earnings_dates DataFrame — if Reported EPS is non-null for
+    the expected date, the report has dropped. Called only on the earnings date
+    itself after the announced release window, so network cost is rare.
+    """
+    try:
+        t = yf.Ticker(ticker)
+        df = t.earnings_dates
+        if df is None or (hasattr(df, "empty") and df.empty):
+            return False
+        target = pd.to_datetime(earnings_date_str).date()
+        for idx in df.index:
+            try:
+                d = pd.to_datetime(idx).date()
+                if d == target:
+                    reported = df.loc[idx, "Reported EPS"] if "Reported EPS" in df.columns else None
+                    if reported is not None and not (isinstance(reported, float) and pd.isna(reported)):
+                        return True
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return False
 
 
 def _vix_label(vix: float) -> str:
