@@ -36,7 +36,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -268,12 +268,17 @@ def _fetch_treasury_gov_yields() -> dict[str, dict]:
             if entry:
                 result[name] = entry
 
-        y10 = result.get("10-Year Yield", {}).get("level")
-        y2  = result.get("2-Year Yield",  {}).get("level")
+        y10     = result.get("10-Year Yield", {}).get("level")
+        y2      = result.get("2-Year Yield",  {}).get("level")
+        y10_chg = result.get("10-Year Yield", {}).get("change")
+        y2_chg  = result.get("2-Year Yield",  {}).get("change")
         if y10 is not None and y2 is not None:
+            spread_chg = None
+            if y10_chg is not None and y2_chg is not None:
+                spread_chg = round((y10_chg - y2_chg) * 100, 1)
             result["10s-2s Spread"] = {
                 "level": round((y10 - y2) * 100, 1),
-                "change": None,
+                "change": spread_chg,
                 "pct_change": None,
             }
         return result
@@ -872,6 +877,77 @@ def fetch_economic_calendar() -> list[dict]:
             except Exception as exc3:
                 print(f"[WARN] Finnhub calendar fallback also failed: {exc3}")
 
+    # ── Inject FOMC dates from the Fed's published schedule. ─────────────────
+    # FRED's /releases/dates API misses the current meeting when the press
+    # release falls on or before today's realtime_start boundary. We supplement
+    # from the Fed's own JSON calendar (with a hardcoded 2026 fallback) so the
+    # FOMC always appears in the 4-week view regardless of FRED timing.
+    import calendar as _cal_mod
+    from datetime import date as _ddate
+    _today_d  = today.date() if hasattr(today, "date") else _ddate.fromisoformat(str(today)[:10])
+    _next4w_d = next_4w.date() if hasattr(next_4w, "date") else _ddate.fromisoformat(str(next_4w)[:10])
+    _fomc_label = "FOMC Meeting / Rate Decision"
+    _fomc_dates: list[str] = []
+    try:
+        _fed_r = requests.get(
+            "https://www.federalreserve.gov/monetarypolicy/json/fomcCalendars.json",
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=10,
+        )
+        _fed_r.raise_for_status()
+        _fed_json = _fed_r.json()
+        # Format: list of year-blocks, each with "year" and list of meeting dicts.
+        # Each meeting has "month" (name string) and "day" (e.g. "27-28" or "28").
+        for _yr_block in (_fed_json if isinstance(_fed_json, list) else []):
+            try:
+                _yr = int(_yr_block.get("year", 0))
+            except (ValueError, TypeError):
+                continue
+            for _mtg in (_yr_block.get("meetings") or []):
+                _month_str = str(_mtg.get("month") or _mtg.get("Month") or "").strip().capitalize()
+                _day_str   = str(_mtg.get("day")   or _mtg.get("Day")   or "").strip()
+                if not _month_str or not _day_str:
+                    continue
+                try:
+                    _month_num = list(_cal_mod.month_name).index(_month_str)
+                    _last_day  = int(_day_str.split("-")[-1].strip())
+                    _fomc_dates.append(f"{_yr:04d}-{_month_num:02d}-{_last_day:02d}")
+                except Exception:
+                    continue
+        if _fomc_dates:
+            print(f"[CAL] Fed calendar: {len(_fomc_dates)} FOMC announcement dates fetched.")
+    except Exception as _fe:
+        print(f"[CAL] Fed calendar fetch failed ({_fe}); using hardcoded 2026 FOMC dates.")
+
+    if not _fomc_dates:
+        # Announcement dates (last day of each 2026 FOMC meeting).
+        # Source: Federal Reserve published schedule.
+        # Update annually when the Fed releases the following year's dates (usually November).
+        _fomc_dates = [
+            "2026-01-28", "2026-03-18", "2026-04-29", "2026-06-10",
+            "2026-07-29", "2026-09-16", "2026-10-28", "2026-12-09",
+        ]
+
+    # Add any FOMC date in [today, next_4w] not already covered in events.
+    _existing_fomc = {e["date"] for e in events if e["event"] == _fomc_label}
+    for _fd in _fomc_dates:
+        try:
+            _fd_d = _ddate.fromisoformat(_fd)
+        except ValueError:
+            continue
+        if _fd_d < _today_d or _fd_d > _next4w_d:
+            continue
+        # Skip if already present within ±2 days (catches FRED's day-1 variant)
+        if any(abs((_fd_d - _ddate.fromisoformat(_ex)).days) <= 2 for _ex in _existing_fomc):
+            continue
+        events.append({
+            "date": _fd, "event": _fomc_label, "country": "US",
+            "importance": "high", "actual": None, "consensus": None, "previous": None,
+        })
+        _existing_fomc.add(_fd)
+        print(f"[CAL] Injected FOMC date: {_fd}")
+    events.sort(key=lambda x: x["date"])
+
     try:
         cal_path = DATA_DIR / "economic_calendar.json"
         with open(cal_path, "w", encoding="utf-8") as f:
@@ -881,6 +957,46 @@ def fetch_economic_calendar() -> list[dict]:
         print(f"[WARN] Could not save economic_calendar.json: {exc}")
 
     return [e for e in events if e["importance"] in ("high", "moderate", "medium")]
+
+
+RECENT_EARNINGS_LOOKBACK_DAYS = 7
+
+
+def load_recent_earnings_actuals() -> list[dict]:
+    """Return tickers with confirmed actuals released within the last N days.
+
+    Reads data/earnings_releases.json (written by earnings_refresh.py) and
+    surfaces the structured result to the LLM prompt so it knows which tickers
+    have ALREADY reported and can cite actual EPS / surprise figures instead of
+    writing 'upcoming earnings' for them.
+    """
+    path = DATA_DIR / "earnings_releases.json"
+    if not path.exists():
+        return []
+    try:
+        releases = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    cutoff = datetime.now(timezone.utc) - timedelta(days=RECENT_EARNINGS_LOOKBACK_DAYS)
+    out: list[dict] = []
+    for ticker, rec in (releases or {}).items():
+        if not rec.get("actuals_available"):
+            continue
+        try:
+            as_of = datetime.fromisoformat(str(rec.get("as_of", "")).replace("Z", "+00:00"))
+        except Exception:
+            continue
+        if as_of < cutoff:
+            continue
+        out.append({
+            "ticker":           ticker,
+            "earnings_date":    rec.get("earnings_date"),
+            "eps_actual":       rec.get("eps_actual"),
+            "eps_estimate":     rec.get("eps_estimate"),
+            "eps_surprise_pct": rec.get("eps_surprise_pct"),
+        })
+    out.sort(key=lambda r: r.get("earnings_date") or "", reverse=True)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -907,6 +1023,14 @@ SYSTEM_PROMPT_NARRATIVE = WRITING_RULES + """
 
 Return JSON with EXACTLY these 6 keys:
 
+NUMBER FIDELITY (non-negotiable):
+- Every percent and price you cite MUST equal the value in the payload to within 0.01.
+- S&P 500: use market_levels["S&P 500"]["pct_change"] for the percent; ["level"] for the price.
+- Apply the same rule for Nasdaq 100, DXY, 10-Yr Yield, Gold, WTI Crude against market_levels / bonds / commodities_top6 / currencies_top5.
+- Direction words (rose/fell/gained/slid) MUST agree with the SIGN of pct_change. A pct_change of -0.04% is "essentially flat" or "barely changed" — NOT "lower" or "fell".
+- If a number is missing from the payload, OMIT it entirely. Do NOT estimate, round, or invent.
+- Tickers in recent_earnings_actuals have ALREADY released earnings this week — never write "later this week" or "upcoming earnings" for them. If you mention one, cite the reported EPS and surprise % from the payload.
+
 pre_market_bullets: Array of 5 strings:
   [0] "Markets closed [higher/lower]  S&P 500 [pct]%, Nasdaq 100 [pct]%; [specific catalyst from news]."
   [1] International/macro driver  cite a specific event from the payload.
@@ -916,7 +1040,7 @@ pre_market_bullets: Array of 5 strings:
 
 equities_commentary: 5-8 sentences. Lead with S&P 500 direction and level. Sector leadership. Connect to macro driver from news. Global market context. Risk ahead.
 
-fixed_income_commentary: 5-6 sentences. Lead with 10-yr yield direction and exact level. Connect to inflation/growth data. Note 2s10s spread. Implication for equity multiples.
+fixed_income_commentary: 5-6 sentences. Lead with 10-yr yield direction and exact level. Connect to inflation/growth data. For the 2s10s spread: read bonds["10s-2s Spread"]["change"] from the payload — if that value is negative the spread NARROWED (flattened), if positive it WIDENED (steepened); state the direction and magnitude in basis points. Implication for equity multiples.
 
 commodities_commentary: 5-6 sentences. WTI direction and level first, then gold. Specific fundamental driver for each. Key price level nearby. Connect to macro thesis.
 
@@ -924,8 +1048,8 @@ currencies_commentary: 4-5 sentences. DXY direction and level. Rate differential
 
 economics_commentary: 4-5 sentences. Most important recent data release from payload (actual vs consensus). Macro cycle context (soft landing, slowdown, re-acceleration). Fed implications.
 
-FILLED EXAMPLE — model your pre_market_bullets on this (replace every value with data from the payload):
-{"pre_market_bullets":["Markets closed lower — S&P 500 -0.8%, Nasdaq 100 -1.2%; tech sector led the selloff after weak forward guidance from a mega-cap platform name.","Euro Stoxx 50 fell 0.9% as ECB officials reiterated rates stay elevated through mid-year, adding pressure to rate-sensitive European sectors.","Key data today: Non-Farm Payrolls (high importance) — consensus 185K vs prior 228K; a miss would reinforce soft-landing caution.","10-yr yield rose 5 bps to 4.32%, extending a week-long move on sticky CPI expectations; real yields near cycle highs.","WTI crude fell 1.4% to $81.20 on a reported inventory build; gold held near $2,340 as dollar strength applied modest pressure."],...}
+STRUCTURE EXAMPLE — shows format only; replace {placeholders} with EXACT values from the payload (do NOT reuse placeholder syntax in your output):
+{"pre_market_bullets":["Markets closed {higher/lower} — S&P 500 {spx_pct}%, Nasdaq 100 {ndx_pct}%; [specific catalyst from recent_headlines].","[International index] {rose/fell} {pct}% as [specific macro driver from payload].","Key data today: [event from upcoming_economic_events] ({importance}) — consensus [value] vs prior [value]; [implication].","10-yr yield {rose/fell} {bps} bps to {ust10_level}%, [specific driver]; real yields [direction].","[Top commodity or currency] {rose/fell} {pct}% to {level} on [specific driver from payload]."],...}
 
 Output schema (replace "..." with your generated content for all 6 keys):
 {"pre_market_bullets":["...","...","...","...","..."],"equities_commentary":"...","fixed_income_commentary":"...","commodities_commentary":"...","currencies_commentary":"...","economics_commentary":"..."}"""
@@ -951,7 +1075,7 @@ ONE-SHOT EXAMPLE for portfolio_spotlight_winners:
   BAD commentary: "JAAA benefited from the technology rally and strong consumer spending data."
   GOOD commentary: "JAAA's AAA-rated CLO exposure insulates the fund from credit spread widening, making it a relative shelter as equity volatility rises. The short duration profile limits rate sensitivity, so outperformance should persist as long as credit markets remain orderly."
 
-portfolio_spotlight_watch: Array of up to 2 objects: {"ticker":"...","metric_label":"...","commentary":"2 sentences on the specific risk and what to monitor."}. IMPORTANT: same as above — use the "description" field to write accurate commentary for each fund's actual strategy. Do NOT describe a bond or income fund as an equity fund.
+portfolio_spotlight_watch: MUST contain exactly one entry for EACH ticker listed in portfolio_names_to_watch — use the exact ticker symbol and metric_label from that input, do not substitute other tickers. {"ticker":"...","metric_label":"...","commentary":"2 sentences on what to monitor for this fund given current market conditions."}. IMPORTANT: use the "description" field to write accurate, strategy-specific commentary. Do NOT describe a bond or income fund as an equity fund.
 
 JSON template:
 {"market_outlook_label":"...","market_outlook_rationale":"...","tactical_outperforming":"...","tactical_underperforming":"...","asset_class_outlooks":{"Equities":{"label":"...","rationale":"..."},"Fixed Income":{"label":"...","rationale":"..."},"Commodities":{"label":"...","rationale":"..."},"US Dollar":{"label":"...","rationale":"..."}},"portfolio_spotlight_winners":[{"ticker":"...","metric_label":"...","commentary":"..."}],"portfolio_spotlight_watch":[{"ticker":"...","metric_label":"...","commentary":"..."}]}"""
@@ -973,8 +1097,32 @@ watch_today: Array of exactly 3 strings — actionable items for TODAY's session
 
 international_section: 3-4 sentences covering non-US market impact on US outlook. Use global_markets and international_macro data. Include at least one of: EU/ECB, Japan/BOJ, China/Asia. Connect explicitly to how it affects US equities, rates, or commodities.
 
+Tickers in recent_earnings_actuals have ALREADY released earnings this week — never write "later this week" or "upcoming earnings" for them in watch_today or session_recap.
+
 JSON template:
 {"session_recap":["...","...","..."],"watch_today":["...","...","..."],"international_section":"..."}"""
+
+# Call 4: Cross-asset synthesis — runs AFTER parts 1-3, reads their output
+SYSTEM_PROMPT_SYNTHESIS = WRITING_RULES + """
+
+Return JSON with EXACTLY one key:
+
+cross_asset_synthesis: Exactly 3-4 sentences. This is the "Market Take" wrap-up that ties together equities, rates, commodities, and the forward catalyst into a single coherent thesis.
+
+Rules:
+- Commit to a directional view — do NOT hedge with "risk remains elevated", "uncertainty persists", or "the outlook is mixed".
+- Name the dominant cross-asset linkage (e.g., "oil is driving yields which is compressing tech multiples" — pick the actual theme from the payload).
+- Name the single most important upcoming catalyst (from upcoming_economic_events or earnings_upcoming) and state exactly what outcome you are watching for (beat vs miss, hawkish vs dovish).
+- The tone MUST be consistent with market_outlook_label: if Cautious, explain the specific mechanism of risk without adding false balance; if Bullish, name the specific driver without inventing caveats.
+- 3-4 sentences total. No preamble. No conclusion phrase. Start directly with the cross-asset theme.
+
+ONE-SHOT EXAMPLE:
+  market_outlook_label: "Cautious"
+  BAD: "Markets face multiple headwinds but show resilience; the outlook remains mixed as investors weigh risks against opportunities."
+  GOOD: "WTI's 6% surge above $105 is feeding directly into 10-yr yield pressure at 4.36%, which in turn is compressing Nasdaq multiples — the oil-rates-tech linkage is the dominant driver today. The dollar's modest strengthening (+0.2%) confirms the market is pricing a sticky-inflation regime rather than a growth shock. Friday's Core PCE print is the key release: an above-consensus read would validate the hawkish rate path and add another leg down in tech; a miss would relieve duration pressure and let the MAG7 stabilize."
+
+JSON template:
+{"cross_asset_synthesis":"..."}"""
 
 BANNED_PHRASES = [
     "geopolitical tensions", "geopolitical risks", "global uncertainties",
@@ -1072,6 +1220,7 @@ NARRATIVE_KEYS = [
     "commodities_commentary", "currencies_commentary", "economics_commentary",
     "market_outlook_rationale",
     "session_recap", "watch_today", "international_section",
+    "cross_asset_synthesis",
 ]
 
 
@@ -1142,6 +1291,7 @@ def call_ollama(payload: dict) -> dict:
         "currencies_top5":          fx,
         "upcoming_economic_events": econ,
         "recent_headlines":         flat_headlines,
+        "recent_earnings_actuals":  payload.get("recent_earnings_actuals") or [],
     }
 
     print("  [LLM Call 1/3] Generating market narrative sections...")
@@ -1202,6 +1352,7 @@ def call_ollama(payload: dict) -> dict:
         "international_macro":      payload.get("international_macro") or {},
         "fear_greed":               payload.get("fear_greed") or {},
         "news_headlines":           {k: v[:2] for k, v in news_trimmed.items()},
+        "recent_earnings_actuals":  payload.get("recent_earnings_actuals") or [],
     }
 
     print("  [LLM Call 3/3] Generating session recap and watch-today section...")
@@ -1230,7 +1381,34 @@ def call_ollama(payload: dict) -> dict:
         if isinstance(entry, dict) and entry.get("ticker"):
             known_tickers.add(str(entry["ticker"]).upper())
 
-    merged = {**part1, **part2, **part3}
+    # Compact synthesis payload — reads already-generated text, no raw market data needed
+    synthesis_payload = {
+        "market_outlook_label":     part2.get("market_outlook_label"),
+        "equities_commentary":      part1.get("equities_commentary", ""),
+        "fixed_income_commentary":  part1.get("fixed_income_commentary", ""),
+        "commodities_commentary":   part1.get("commodities_commentary", ""),
+        "currencies_commentary":    part1.get("currencies_commentary", ""),
+        "economics_commentary":     part1.get("economics_commentary", ""),
+        "upcoming_economic_events": econ,
+        "earnings_upcoming":        (payload.get("earnings_calendar") or [])[:3],
+    }
+
+    print("  [LLM Call 4/4] Generating cross-asset synthesis...")
+    part4 = {}
+    for attempt in range(2):
+        try:
+            part4 = _call_ollama_raw(SYSTEM_PROMPT_SYNTHESIS, synthesis_payload)
+            print(f"    Keys returned: {list(part4.keys())}")
+            part4 = scrub_banned_phrases(part4)
+            banned = find_banned_phrases(part4)
+            if not banned:
+                break
+            print(f"  [RETRY] Attempt {attempt + 1} synthesis still had banned phrases: {banned}. Retrying...")
+        except Exception as exc:
+            print(f"  [WARN] Synthesis call failed (attempt {attempt + 1}): {exc}")
+            part4 = {}
+
+    merged = {**part1, **part2, **part3, **part4}
 
     # Remap any remaining aliases (part1 loop already remapped its keys; this catches part2/3 stragglers)
     for alias, canonical in LLM_KEY_ALIASES.items():
@@ -1247,6 +1425,7 @@ def call_ollama(payload: dict) -> dict:
         "tactical_outperforming", "tactical_underperforming", "asset_class_outlooks",
         "portfolio_spotlight_winners", "portfolio_spotlight_watch",
         "session_recap", "watch_today", "international_section",
+        "cross_asset_synthesis",
     }
     unexpected = set(merged) - _ALLOWED_LLM_KEYS
     if unexpected:
@@ -1268,7 +1447,47 @@ def find_banned_phrases(data: dict) -> list[str]:
     return found
 
 
-def validate_commentary(data: dict, known_tickers: set = None) -> bool:
+def _check_numeric_consistency(data: dict, snapshot: dict) -> list[str]:
+    """Compare sign/magnitude of LLM narrative numbers against the market snapshot.
+
+    Returns a list of violation strings (empty = clean). Checks the first percent
+    figure mentioned in each commentary field against the corresponding pct_change
+    in the snapshot. Tolerance: 0.5 percentage points; sign mismatch always fails.
+    """
+    import re
+    PCT_RE = re.compile(r"([-+]?\d+(?:\.\d+)?)\s*%")
+
+    def _first_pct(text: str) -> float | None:
+        m = PCT_RE.search(text or "")
+        return float(m.group(1)) if m else None
+
+    checks = [
+        ("equities_commentary",    "S&P 500"),
+        ("commodities_commentary", "WTI Crude"),
+        ("currencies_commentary",  "U.S. Dollar (DXY)"),
+    ]
+    violations = []
+    for narrative_key, snap_key in checks:
+        snap = (snapshot or {}).get(snap_key) or {}
+        truth_pct = snap.get("pct_change")
+        if truth_pct is None:
+            continue
+        prose = data.get(narrative_key, "")
+        cited = _first_pct(prose if isinstance(prose, str) else " ".join(prose))
+        if cited is None:
+            continue
+        if (truth_pct >= 0) != (cited >= 0):
+            violations.append(
+                f"{snap_key}: snapshot {truth_pct:+.2f}%, LLM cited {cited:+.2f}% (sign mismatch)"
+            )
+        elif abs(truth_pct - cited) > 0.5:
+            violations.append(
+                f"{snap_key}: snapshot {truth_pct:+.2f}%, LLM cited {cited:+.2f}% (magnitude > 0.5pp)"
+            )
+    return violations
+
+
+def validate_commentary(data: dict, known_tickers: set = None, snapshot: dict = None) -> bool:
     if not isinstance(data, dict):
         return False
     # commodities_commentary and economics_commentary are optional  model reliably omits them when
@@ -1295,6 +1514,12 @@ def validate_commentary(data: dict, known_tickers: set = None) -> bool:
         elif not str(val).strip():
             print(f"[WARN] Empty string for '{key}'")
             return False
+    # Numeric consistency gate — compare LLM prose directions/magnitudes to market snapshot
+    if snapshot is not None:
+        violations = _check_numeric_consistency(data, snapshot)
+        if violations:
+            print(f"[VALIDATE] Numeric consistency violations vs market_snapshot: {violations}")
+            return False
     # Normalize market_outlook_label
     label = str(data.get("market_outlook_label", "")).strip()
     if label not in ("Bullish", "Cautious", "Neutral", "Bearish"):
@@ -1307,6 +1532,7 @@ def validate_commentary(data: dict, known_tickers: set = None) -> bool:
     data.setdefault("session_recap", [])
     data.setdefault("watch_today", [])
     data.setdefault("international_section", "")
+    data.setdefault("cross_asset_synthesis", "")
 
     # Strip spotlight entries whose tickers are outside the known universe
     if known_tickers:
@@ -1549,6 +1775,7 @@ def main() -> int:
         "international_macro":       international_macro,
         "earnings_calendar":         _top_earnings,
         "news_sentiment_summary":    sent_summary,
+        "recent_earnings_actuals":   load_recent_earnings_actuals(),
     }
 
     # Always write market data + report_date first so the PDF and email have fresh
@@ -1614,7 +1841,7 @@ def main() -> int:
 
     commentary = scrub_banned_phrases(commentary)
 
-    if not validate_commentary(commentary, known_tickers=known_tickers):
+    if not validate_commentary(commentary, known_tickers=known_tickers, snapshot=snapshot):
         print("[WARN] Commentary response invalid  skipping LLM text.")
         return 0
 

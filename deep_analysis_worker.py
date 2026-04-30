@@ -18,7 +18,7 @@ import os
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -28,6 +28,8 @@ JOBS_DIR = Path("data") / "jobs"
 # static/js/deep_analysis.js STAGE_LABELS.
 STAGES = {
     "queued":             ("Queued",                     0),
+    "waiting_earnings":   ("Waiting for earnings",        0),
+    "earnings_refresh":   ("Refreshing earnings/news",    3),
     "seed_doc":           ("Building analysis document", 5),
     "council_personas":   ("Council deliberating",      15),
     "council_synthesis":  ("Synthesizing report",       85),
@@ -94,20 +96,35 @@ def _get_queue_info(job_id: str) -> dict:
     position = next((i + 1 for i, j in enumerate(active) if j["job_id"] == job_id), 1)
     ahead = position - 1
     # Local Council averages ~30 minutes per ticker (7x R1 + 7x R2 + 7x R3 + 2x synthesis passes).
-    return {
+    info = {
         "queue_position": position,
         "queue_ahead":    ahead,
         "queue_wait_min": ahead * 30,
     }
+    job = next((j for j in active if j["job_id"] == job_id), None)
+    if job and job.get("not_before"):
+        info["not_before"] = job.get("not_before")
+    return info
 
 
 def _next_queued_job() -> Optional[dict]:
     """Return oldest queued job by created_at, or None."""
+    now = datetime.utcnow()
     candidates = []
     for p in _jobs_dir().glob("*.json"):
         try:
             j = json.loads(p.read_text())
             if j.get("status") == "queued":
+                not_before = j.get("not_before")
+                if not_before:
+                    try:
+                        not_before_dt = datetime.fromisoformat(str(not_before).replace("Z", "+00:00"))
+                        if not_before_dt.tzinfo is not None:
+                            not_before_dt = not_before_dt.astimezone(timezone.utc).replace(tzinfo=None)
+                        if not_before_dt > now:
+                            continue
+                    except Exception:
+                        pass
                 candidates.append(j)
         except Exception:
             continue
@@ -123,7 +140,7 @@ def _reset_interrupted_jobs() -> None:
             j = json.loads(p.read_text())
             if j.get("status") == "running":
                 j["status"] = "queued"
-                j["stage"] = "queued"
+                j["stage"] = "waiting_earnings" if j.get("not_before") else "queued"
                 j["progress"] = 0
                 j["started_at"] = None
                 _write_job(j)
@@ -143,10 +160,35 @@ def _run_pipeline(job_id: str, ticker: str) -> None:
 
     logger = logging.getLogger(__name__)
 
+    # Optional pre-step — same-day earnings refresh. This is intentionally
+    # ticker-scoped so the web server can update one report without running
+    # the full monitor pipeline.
+    try:
+        from earnings_calendar import get_next_earnings_date
+        from earnings_refresh import wait_for_same_day_earnings_data
+
+        from zoneinfo import ZoneInfo
+        today_str = datetime.now(tz=ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+        next_earnings_date, release_time = get_next_earnings_date(ticker)
+        if next_earnings_date == today_str:
+            _update_job(job_id, stage="earnings_refresh", progress=3)
+            refresh = wait_for_same_day_earnings_data(ticker, today_str, release_time)
+            _update_job(job_id, earnings_refresh=refresh)
+            if refresh.get("actuals_available"):
+                from earnings_calendar import mark_earnings_passed
+                mark_earnings_passed(ticker)
+    except Exception as exc:
+        logger.warning("Same-day earnings refresh skipped for %s: %s", ticker, exc)
+
     # Step 0 — Build seed doc + key_facts
     _update_job(job_id, stage="seed_doc", progress=5)
     t0 = time.time()
     seed_text, key_facts = build_seed_doc(ticker, pred_len=10)
+    try:
+        from earnings_calendar import update_from_key_facts
+        update_from_key_facts(ticker, key_facts)
+    except Exception:
+        pass
     _update_job(job_id, seed_text=seed_text, key_facts=key_facts, progress=12)
     logger.info("Seed doc for %s: %d chars, %d facts, %.1fs",
                 ticker, len(seed_text), len(key_facts), time.time() - t0)
@@ -324,7 +366,12 @@ def invalidate_today_cache(ticker: str) -> None:
             continue
 
 
-def enqueue(ticker: str, force_fresh: bool = False) -> str:
+def enqueue(
+    ticker: str,
+    force_fresh: bool = False,
+    not_before: Optional[str] = None,
+    earnings_refresh_required: bool = False,
+) -> str:
     """Create a new job and return its job_id.
 
     - Active job (queued/running) for this ticker → return its job_id (in-progress dedup).
@@ -353,10 +400,12 @@ def enqueue(ticker: str, force_fresh: bool = False) -> str:
         "job_id":       job_id,
         "ticker":       ticker,
         "status":       "queued",
-        "stage":        "queued",
+        "stage":        "waiting_earnings" if not_before else "queued",
         "progress":     0,
         "retry_count":  0,
         "invalidated":  False,
+        "not_before":   not_before,
+        "earnings_refresh_required": earnings_refresh_required,
         "created_at":   datetime.utcnow().isoformat(),
         "started_at":   None,
         "completed_at": None,
@@ -397,6 +446,7 @@ def get_job_status(job_id: str) -> Optional[dict]:
 
     stage_label, _ = STAGES.get(job.get("stage", "queued"), ("Unknown", 0))
     result = {
+        "ok":           True,
         "job_id":       job["job_id"],
         "ticker":       job.get("ticker"),
         "status":       job.get("status"),
@@ -411,4 +461,6 @@ def get_job_status(job_id: str) -> Optional[dict]:
     }
     if job.get("status") == "queued":
         result.update(_get_queue_info(job_id))
+    elif job.get("not_before"):
+        result["not_before"] = job["not_before"]
     return result
