@@ -1076,3 +1076,101 @@ Recommended next step:
    - Predicted bullish rate not collapsed, e.g. 35%-75%
    - MAE/RMSE within guard thresholds
 ```
+
+## Continuation Update: Sign Calibration Tests
+
+Added:
+
+```text
+dl_sign_calibration_eval.py
+dl_rolling_sign_calibration_eval.py
+```
+
+Static sign calibration command:
+
+```powershell
+python dl_sign_calibration_eval.py
+```
+
+Outputs:
+
+```text
+data/experiment/sign_calibration_eval.json
+data/experiment/sign_calibration_eval.csv
+```
+
+Important holdout regime split:
+
+```text
+Full 252-day holdout bullish rate: 63.66%
+First half calibration bullish rate: 79.98%
+Second half evaluation bullish rate: 47.09%
+```
+
+Static thresholds failed to generalize across that regime shift. Best rows on
+the second half only reached about 53.5% directional accuracy and still had
+negative IC.
+
+Rolling calibration command:
+
+```powershell
+python dl_rolling_sign_calibration_eval.py
+```
+
+Outputs:
+
+```text
+data/experiment/rolling_sign_calibration_eval.json
+data/experiment/rolling_sign_calibration_eval.csv
+```
+
+Best rolling result:
+
+```text
+Model: seed 20260505
+Method: max_balanced_score
+Lookback: 84 trading days
+Label lag: 21 trading days
+Directional accuracy: 62.73%
+Bullish signal rate: 59.63%
+MAE: 0.050938
+RMSE: 0.063459
+IC_Spearman: -0.1124
+Coverage: 161 samples / 23 evaluated dates
+```
+
+Broader rolling windows:
+
+```text
+Top 3 ensemble, 42-day lookback:
+Directional accuracy: 59.56%
+Bullish signal rate: 82.20%
+IC_Spearman: -0.1087
+Coverage: 455 samples / 65 evaluated dates
+
+Seed 20260505, 42-day lookback:
+Directional accuracy: 57.80%
+Bullish signal rate: 76.48%
+IC_Spearman: -0.0845
+Coverage: 455 samples / 65 evaluated dates
+```
+
+Conclusion:
+
+- Calibration can reduce sign collapse in narrow windows.
+- It does not yet produce a robust promotion candidate because IC remains
+  negative and the strongest result has limited date coverage.
+- The model score itself is still poorly ranked cross-sectionally in the
+  regime-shift period.
+
+Recommended next step:
+
+```text
+1. Stop trying to repair this candidate with output thresholds alone.
+2. Add explicit sign-balance diagnostics to training/backtest.
+3. Try training objective changes that penalize sign collapse directly:
+   - batch-level bullish-rate regularization
+   - correlation/IC auxiliary objective
+   - validation selection requiring direction + IC + bullish-rate bounds
+4. Keep all of this research-only until repeated-seed IC is non-negative.
+```
