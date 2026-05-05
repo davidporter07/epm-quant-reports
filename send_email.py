@@ -27,7 +27,11 @@ TZ = ZoneInfo('America/Chicago')
 FROM = "davidporter0731@gmail.com"
 TO = "dporter@epmfinancial.com"
 def _build_subject():
-    """Dynamic subject line: EPM Markets Recap with S&P direction."""
+    """Dynamic subject line: EPM Markets Recap with S&P direction.
+
+    Set SUBJECT_PREFIX env var to prepend a tag (e.g. '[Corrected] ') for one-off resends.
+    """
+    prefix = os.getenv("SUBJECT_PREFIX", "")
     base = f"EPM Markets Recap  {date.today().strftime('%B %d, %Y')}"
     try:
         if COMMENTARY_JSON.exists():
@@ -38,10 +42,11 @@ def _build_subject():
             if pct is not None:
                 sign  = '+' if float(pct) >= 0 else ''
                 arrow = '' if float(pct) >= 0 else ''
-                return f"{base}  |  S&P {arrow} {sign}{pct}%"
+                subject = f"{base}  |  S&P {arrow} {sign}{pct}%"
+                return f"{prefix}{subject}" if prefix else subject
     except Exception:
         pass
-    return base
+    return f"{prefix}{base}" if prefix else base
 
 SUBJECT = _build_subject()
 
@@ -250,6 +255,7 @@ def build_commentary_email_blocks(commentary):
     commodities  = _clean(c.get('commodities_commentary', ''))
     currencies   = _clean(c.get('currencies_commentary', ''))
     economics    = _clean(c.get('economics_commentary', ''))
+    synthesis    = _clean(c.get('cross_asset_synthesis', ''))
 
     analysis_html = ''
     analysis_text = []
@@ -269,6 +275,19 @@ def build_commentary_email_blocks(commentary):
             f'{html_lib.escape(text)}</p>'
         )
         analysis_text.append(f'{label}: {text}')
+
+    synthesis_html = ''
+    if synthesis:
+        synthesis_html = (
+            f'<div style="margin:14px 0 0 0;padding:10px 14px;'
+            f'border-left:3px solid #2c4a6e;background:#f8f9fb;border-radius:2px;">'
+            f'<p style="margin:0 0 4px 0;font-size:11px;font-weight:700;color:#2c4a6e;'
+            f'text-transform:uppercase;letter-spacing:0.06em;">Market Take</p>'
+            f'<p style="margin:0;font-size:13px;line-height:1.65;color:#1a1f27;">'
+            f'{html_lib.escape(synthesis)}</p>'
+            f'</div>'
+        )
+        analysis_text.append(f'Market Take: {synthesis}')
 
     # ── International Context ───────────────────────────────────────────────
     intl = _clean(c.get('international_section', ''))
@@ -340,6 +359,9 @@ def build_commentary_email_blocks(commentary):
     if analysis_html:
         hp.append(_section_header('Market Analysis'))
         hp.append(analysis_html)
+
+    if synthesis_html:
+        hp.append(synthesis_html)
 
     if snapshot_html:
         hp.append(snapshot_html)
@@ -446,6 +468,41 @@ if __name__ == "__main__":
             logging.info(" Running monitor.py to generate new report...")
             subprocess.run([PY, 'monitor.py'], cwd=str(ROOT), env={**os.environ, 'PDF_MODE': 'true'}, check=True)
             logging.info(" Report updated.")
+
+            # Freshness gate — block send if narrative is stale or missing.
+            _today = datetime.now(TZ).strftime('%Y-%m-%d')
+            try:
+                with open(COMMENTARY_JSON, 'r', encoding='utf-8') as _f:
+                    _c = json.load(_f)
+                _narrative_date = _c.get('narrative_source_date', '')
+                _narrative_ts   = _c.get('narrative_generated_at', '')
+                _narrative_fields = [
+                    "equities_commentary", "fixed_income_commentary",
+                    "commodities_commentary", "currencies_commentary",
+                    "economics_commentary", "pre_market_bullets",
+                ]
+                _stale = (
+                    _c.get('report_date') != _today
+                    or _narrative_date != _today
+                    or not _narrative_ts
+                    or any(not _c.get(k) for k in _narrative_fields)
+                )
+                if _stale:
+                    _msg = (
+                        f"[BLOCK] Narrative stale or missing "
+                        f"(report_date={_c.get('report_date')!r}, "
+                        f"narrative_source_date={_narrative_date!r}, "
+                        f"narrative_generated_at={_narrative_ts!r}). "
+                        f"Email send blocked."
+                    )
+                    print(_msg)
+                    logging.error(_msg)
+                    sys.exit(1)
+            except Exception as _gate_err:
+                _msg = f"[BLOCK] Could not verify commentary freshness ({_gate_err}). Email send blocked."
+                print(_msg)
+                logging.error(_msg)
+                sys.exit(1)
 
             logging.info(" Preparing and sending email...")
             msg = build_email()

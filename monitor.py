@@ -1915,6 +1915,30 @@ def _format_expected_highlight_bullets(top_highlights):
         bullets.append(f"{bias}  {ticker}: {reason}")
     return bullets
 
+
+def _format_all_mag7_bullets(ticker_rows):
+    """Generate one bullet per ticker — used for the MAG7 signal summary box."""
+    bullets = []
+    for row in ticker_rows:
+        val = _safe_float_value(row.get("consensus_forecast_pct"), default=np.nan)
+        bias = "Bullish" if pd.notna(val) and val >= 0 else "Bearish"
+        ticker = str(row.get("ticker", "")).strip()
+        reasons = []
+        if pd.notna(val):
+            direction = "positive" if val >= 0 else "negative"
+            reasons.append(f"consensus is {direction} at {val:.2f}%")
+        conf = str(row.get("confidence_label", ""))
+        if conf and conf.lower() != "n/a":
+            reasons.append(f"confidence is {conf.lower()}")
+        model_agreement = str(row.get("model_agreement", ""))
+        if model_agreement:
+            reasons.append(f"model agreement is {model_agreement.lower()}")
+        reason = "; ".join(reasons[:3])
+        if reason and not reason.endswith("."):
+            reason += "."
+        bullets.append(f"{bias}  {ticker}: {reason}")
+    return bullets
+
 def _bullets_need_replacement(bullets, top_highlights):
     if not isinstance(bullets, list) or len(bullets) != 3:
         return True
@@ -2089,7 +2113,7 @@ def _build_deterministic_commentary_data(market_summary, top_highlights, ticker_
     else:
         reflection = "Leadership appears selective rather than broad, with conviction concentrated in a smaller set of names while the rest of the group remains less aligned."
 
-    bullets = _format_expected_highlight_bullets(top_highlights) if top_highlights else []
+    bullets = _format_all_mag7_bullets(ticker_rows) if ticker_rows else []
 
     return {
         "portfolio_overview": overview,
@@ -2233,15 +2257,20 @@ models_overview_html = """
 if not DEV_MODE:
     subprocess.run([VENV_PYTHON, "generate_toggle_chart.py"], check=True)
     subprocess.run([VENV_PYTHON, "generate_charts.py"], check=True)
-# Generate market-level LLM commentary (non-fatal  PDF will keep previous if this fails)
-subprocess.run([VENV_PYTHON, "generate_market_commentary.py"])
+# Generate market-level LLM commentary; non-zero exit means narrative unavailable.
+_gmc_result = subprocess.run([VENV_PYTHON, "generate_market_commentary.py"])
+_gmc_ok = (_gmc_result.returncode == 0)
+if not _gmc_ok:
+    print("[WARN] generate_market_commentary.py returned non-zero — narrative unavailable; PDF will be skipped.")
 # Arbitrate YCharts vs yfinance data  enriches bonds_table and economic data
 try:
     subprocess.run([VENV_PYTHON, "data_arbiter.py"], check=True, timeout=60)
 except Exception as e:
     print(f"  Data arbitration failed (non-fatal): {e}")
-if not DEV_MODE:
+if not DEV_MODE and _gmc_ok:
     subprocess.run([VENV_PYTHON, "generate_pdf_report.py"], check=True)
+elif not DEV_MODE:
+    print("[SKIP] PDF generation skipped — narrative unavailable.")
 
 # --- Read charts ---
 fund_chart_html = _safe_read_text(

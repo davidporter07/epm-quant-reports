@@ -51,7 +51,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-OLLAMA_HOST    = os.getenv("LOCAL_OLLAMA_URL",     "http://192.168.1.145:11434")
+OLLAMA_HOST    = os.getenv("LOCAL_OLLAMA_URL",     "http://100.101.63.65:11434")
 OLLAMA_MODEL   = os.getenv("LOCAL_OLLAMA_MODEL",   "qwen2.5:14b")
 OLLAMA_TIMEOUT = int(os.getenv("LOCAL_OLLAMA_TIMEOUT", "900"))
 
@@ -114,9 +114,31 @@ BOND_TICKERS: dict[str, str] = {
 # Market data helpers
 # ---------------------------------------------------------------------------
 def _fetch_quote(ticker: str, days_back: int = 7, prev_close: float | None = None) -> dict | None:
-    """Return {level, change, pct_change} for a single ticker, or None."""
+    """Return {level, change, pct_change} for a single ticker, or None.
+
+    Tries fast_info first for a live intraday quote (avoids 0% pct_change when
+    the daily bar is incomplete at market open). Falls back to historical daily bars.
+    """
     if yf is None:
         return None
+    # --- fast_info path: live intraday price vs previous session close ---
+    try:
+        fi = yf.Ticker(ticker).fast_info
+        last = float(fi.last_price)
+        prev_fi = float(fi.previous_close)
+        if last > 0 and prev_fi > 0:
+            # Honour stored prev_close for contract-roll tickers (futures) when provided.
+            prev = prev_close if (prev_close and prev_close > 0) else prev_fi
+            change = last - prev
+            pct    = (change / prev) * 100
+            return {
+                "level":      round(last, 4),
+                "change":     round(change, 4),
+                "pct_change": round(pct, 2),
+            }
+    except Exception:
+        pass
+    # --- fallback: historical daily bars ---
     try:
         end   = datetime.today()
         start = end - timedelta(days=days_back)
@@ -1451,8 +1473,9 @@ def _check_numeric_consistency(data: dict, snapshot: dict) -> list[str]:
     """Compare sign/magnitude of LLM narrative numbers against the market snapshot.
 
     Returns a list of violation strings (empty = clean). Checks the first percent
-    figure mentioned in each commentary field against the corresponding pct_change
-    in the snapshot. Tolerance: 0.5 percentage points; sign mismatch always fails.
+    figure in equity/commodities/currencies commentary against pct_change in the
+    snapshot (tolerance: 0.5pp; sign mismatch always fails). Also checks
+    direction-word contradictions and pre_market_bullets sign consistency.
     """
     import re
     PCT_RE = re.compile(r"([-+]?\d+(?:\.\d+)?)\s*%")
@@ -1461,6 +1484,8 @@ def _check_numeric_consistency(data: dict, snapshot: dict) -> list[str]:
         m = PCT_RE.search(text or "")
         return float(m.group(1)) if m else None
 
+    # Magnitude + sign check for fields where the first % is the pct_change.
+    # fixed_income excluded — yield level (e.g. "4.39%") ≠ yield pct_change.
     checks = [
         ("equities_commentary",    "S&P 500"),
         ("commodities_commentary", "WTI Crude"),
@@ -1472,19 +1497,168 @@ def _check_numeric_consistency(data: dict, snapshot: dict) -> list[str]:
         truth_pct = snap.get("pct_change")
         if truth_pct is None:
             continue
+        if abs(truth_pct) < 0.1:
+            # Snapshot too close to zero to enforce sign — likely stale/pre-open data.
+            continue
         prose = data.get(narrative_key, "")
         cited = _first_pct(prose if isinstance(prose, str) else " ".join(prose))
         if cited is None:
             continue
         if (truth_pct >= 0) != (cited >= 0):
             violations.append(
-                f"{snap_key}: snapshot {truth_pct:+.2f}%, LLM cited {cited:+.2f}% (sign mismatch)"
+                f"{snap_key}: snapshot {truth_pct:+.2f}%, narrative cited {cited:+.2f}% (sign mismatch)"
             )
         elif abs(truth_pct - cited) > 0.5:
             violations.append(
-                f"{snap_key}: snapshot {truth_pct:+.2f}%, LLM cited {cited:+.2f}% (magnitude > 0.5pp)"
+                f"{snap_key}: snapshot {truth_pct:+.2f}%, narrative cited {cited:+.2f}% (magnitude > 0.5pp)"
             )
+
+    # Direction-word check: strong directional words that contradict the snapshot sign.
+    _BEARISH_STRONG = {"selloff", "plunged", "plunge", "collapsed", "collapse", "tumbled", "tumble"}
+    _BULLISH_STRONG = {"surged", "surge", "soared", "soar", "skyrocketed"}
+    _FIELD_ASSET = {
+        "equities_commentary":     "S&P 500",
+        "commodities_commentary":  "WTI Crude",
+        "currencies_commentary":   "U.S. Dollar (DXY)",
+        "fixed_income_commentary": "10-Yr Yield",
+    }
+    for narrative_key, snap_key in _FIELD_ASSET.items():
+        snap = (snapshot or {}).get(snap_key) or {}
+        truth_pct = snap.get("pct_change")
+        if truth_pct is None:
+            continue
+        prose = data.get(narrative_key, "")
+        words = set((prose if isinstance(prose, str) else " ".join(prose or [])).lower().split())
+        if truth_pct > 0.3 and words & _BEARISH_STRONG:
+            violations.append(
+                f"{snap_key}: snapshot {truth_pct:+.2f}% (positive) but narrative uses strongly bearish language"
+            )
+        elif truth_pct < -0.3 and words & _BULLISH_STRONG:
+            violations.append(
+                f"{snap_key}: snapshot {truth_pct:+.2f}% (negative) but narrative uses strongly bullish language"
+            )
+
+    # pre_market_bullets: each bullet that names a known asset and cites a % must match sign.
+    _ASSET_KW = {
+        "s&p": "S&P 500",
+        "nasdaq": "Nasdaq 100",
+        "wti": "WTI Crude",
+        "crude": "WTI Crude",
+        "gold": "Gold",
+        "dxy": "U.S. Dollar (DXY)",
+    }
+    bullets = data.get("pre_market_bullets", [])
+    if isinstance(bullets, list):
+        for bullet in bullets:
+            btext = str(bullet).lower()
+            m = PCT_RE.search(btext)
+            if not m:
+                continue
+            cited = float(m.group(1))
+            for kw, snap_key in _ASSET_KW.items():
+                if kw in btext:
+                    snap = (snapshot or {}).get(snap_key) or {}
+                    truth_pct = snap.get("pct_change")
+                    if truth_pct is not None and (truth_pct >= 0) != (cited >= 0):
+                        violations.append(
+                            f"pre_market_bullets: mentions {snap_key} {cited:+.2f}% but snapshot is {truth_pct:+.2f}% (sign mismatch)"
+                        )
+                    break
+
     return violations
+
+
+def _atomic_write_json(path: Path, data: dict) -> None:
+    """Write JSON atomically via a temp file + os.replace to avoid partial writes."""
+    tmp = path.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, path)
+
+
+def _build_deterministic_market_commentary(
+    snapshot: dict,
+    commodities_tbl: list,
+    currencies_tbl: list,
+    bonds_tbl: list,
+) -> dict:
+    """Build plain-text market narrative from snapshot data when LLM is unavailable.
+
+    Output is numerically consistent with the snapshot and passes validate_commentary
+    when called with snapshot=None. Called as fallback when Ollama fails or times out.
+    """
+    def _pct(val: Any) -> float:
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _lvl(val: Any, fmt: str = ",.2f") -> str:
+        try:
+            return format(float(val), fmt)
+        except Exception:
+            return "N/A"
+
+    def _dir(pct: float, style: str = "generic") -> str:
+        if style == "yield":
+            if pct > 0.05:  return "rose"
+            if pct < -0.05: return "fell"
+            return "was little changed"
+        if pct > 0.5:    return "rose"
+        if pct > 0.1:    return "edged higher"
+        if pct < -0.5:   return "fell"
+        if pct < -0.1:   return "edged lower"
+        return "was little changed"
+
+    sp  = snapshot.get("S&P 500", {})
+    ndx = snapshot.get("Nasdaq 100", {})
+    wti = snapshot.get("WTI Crude", {})
+    gld = snapshot.get("Gold", {})
+    dxy = snapshot.get("U.S. Dollar (DXY)", {})
+    tyr = snapshot.get("10-Yr Yield", {})
+
+    sp_pct  = _pct(sp.get("pct_change"));  sp_lvl  = _lvl(sp.get("level"))
+    ndx_pct = _pct(ndx.get("pct_change")); ndx_lvl = _lvl(ndx.get("level"))
+    wti_pct = _pct(wti.get("pct_change")); wti_lvl = _lvl(wti.get("level"))
+    gld_pct = _pct(gld.get("pct_change")); gld_lvl = _lvl(gld.get("level"))
+    dxy_pct = _pct(dxy.get("pct_change")); dxy_lvl = _lvl(dxy.get("level"))
+    tyr_pct = _pct(tyr.get("pct_change")); tyr_lvl = _lvl(tyr.get("level"), ".3f")
+
+    return {
+        "pre_market_bullets": [
+            f"S&P 500 {_dir(sp_pct)} {sp_pct:+.2f}% to {sp_lvl}; Nasdaq 100 {_dir(ndx_pct)} {ndx_pct:+.2f}%.",
+            f"10-Yr yield at {tyr_lvl}%.",
+            f"WTI crude {_dir(wti_pct)} {wti_pct:+.2f}% to ${wti_lvl}; gold {_dir(gld_pct)} {gld_pct:+.2f}%.",
+            f"DXY {_dir(dxy_pct)} {dxy_pct:+.2f}% to {dxy_lvl}.",
+        ],
+        "equities_commentary": (
+            f"The S&P 500 {_dir(sp_pct)} {sp_pct:+.2f}% to {sp_lvl}. "
+            f"The Nasdaq 100 {_dir(ndx_pct)} {ndx_pct:+.2f}% to {ndx_lvl}."
+        ),
+        "fixed_income_commentary": (
+            f"The 10-year Treasury yield {_dir(tyr_pct, 'yield')} to {tyr_lvl}, "
+            f"reflecting prevailing market conditions."
+        ),
+        "commodities_commentary": (
+            f"WTI crude {_dir(wti_pct)} {wti_pct:+.2f}% to ${wti_lvl}. "
+            f"Gold {_dir(gld_pct)} {gld_pct:+.2f}% to ${gld_lvl}."
+        ),
+        "currencies_commentary": (
+            f"The U.S. Dollar Index (DXY) {_dir(dxy_pct)} {dxy_pct:+.2f}% to {dxy_lvl}."
+        ),
+        "economics_commentary":      "Economic calendar data was unavailable for this session.",
+        "market_outlook_label":      "Neutral",
+        "market_outlook_rationale":  "Deterministic fallback — LLM commentary unavailable.",
+        "tactical_outperforming":    "",
+        "tactical_underperforming":  "",
+        "asset_class_outlooks":      {},
+        "portfolio_spotlight_winners": [],
+        "portfolio_spotlight_watch":   [],
+        "session_recap":             [],
+        "watch_today":               [],
+        "international_section":     "",
+        "cross_asset_synthesis":     "",
+    }
 
 
 def validate_commentary(data: dict, known_tickers: set = None, snapshot: dict = None) -> bool:
@@ -1778,8 +1952,10 @@ def main() -> int:
         "recent_earnings_actuals":   load_recent_earnings_actuals(),
     }
 
-    # Always write market data + report_date first so the PDF and email have fresh
-    # snapshot data even when the Ollama call fails.
+    # Write market data first so snapshot/tables are always fresh.
+    # Narrative keys are explicitly cleared here — if LLM and deterministic fallback
+    # both fail, the file will have empty narrative fields that downstream freshness
+    # gates will detect and block from reaching clients.
     existing: dict = {}
     if COMMENTARY_PATH.exists():
         try:
@@ -1807,11 +1983,9 @@ def main() -> int:
             "rating":     fg.get("rating", ""),
             "prev_score": fg.get("prev_score"),
         }
-        # Warn if the Fear & Greed data is stale (timestamp more than 24 h old)
         ts = fg.get("timestamp")
         if ts:
             try:
-                from datetime import timezone
                 fg_dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
                 age_hours = (datetime.now(timezone.utc) - fg_dt).total_seconds() / 3600
                 if age_hours > 24:
@@ -1819,48 +1993,75 @@ def main() -> int:
             except Exception:
                 pass
 
+    # Clear all narrative keys so prior-run prose cannot survive a failed LLM call.
+    for _k in [
+        "pre_market_bullets", "pre_market_summary",
+        "equities_commentary", "fixed_income_commentary",
+        "commodities_commentary", "currencies_commentary",
+        "economics_commentary", "cross_asset_synthesis",
+        "market_outlook_label", "market_outlook_rationale",
+        "tactical_outperforming", "tactical_underperforming", "asset_class_outlooks",
+        "portfolio_spotlight_winners", "portfolio_spotlight_watch",
+        "session_recap", "watch_today", "international_section",
+        "narrative_generated_at", "narrative_source_date", "narrative_source",
+    ]:
+        existing.pop(_k, None)
+
     DATA_DIR.mkdir(exist_ok=True)
-    with open(COMMENTARY_PATH, "w", encoding="utf-8") as f:
-        json.dump(existing, f, indent=2, ensure_ascii=False)
+    _atomic_write_json(COMMENTARY_PATH, existing)
     print(f"[OK] Market data saved -> {COMMENTARY_PATH}")
 
     print(f"[LLM] Requesting commentary from Ollama ({OLLAMA_HOST}, model={OLLAMA_MODEL})...")
     commentary = None
     known_tickers: set[str] = set()
+    llm_ok = False
     try:
         commentary, known_tickers = call_ollama(payload)
+        commentary = scrub_banned_phrases(commentary)
+        if validate_commentary(commentary, known_tickers=known_tickers, snapshot=snapshot):
+            banned = find_banned_phrases(commentary)
+            if banned:
+                print(f"[WARN] Commentary still contains banned phrases after scrub: {banned}")
+            llm_ok = True
+        else:
+            print("[WARN] Commentary response invalid — falling back to deterministic prose.")
     except requests.exceptions.ConnectionError:
-        print("[WARN] Ollama unreachable  LLM commentary skipped.")
-        return 0
+        print("[WARN] Ollama unreachable — falling back to deterministic prose.")
     except requests.exceptions.Timeout:
-        print("[WARN] Ollama timed out  LLM commentary skipped.")
-        return 0
+        print("[WARN] Ollama timed out — falling back to deterministic prose.")
     except Exception as exc:
-        print(f"[WARN] Ollama call failed ({exc})  LLM commentary skipped.")
+        print(f"[WARN] Ollama call failed ({exc}) — falling back to deterministic prose.")
+
+    if llm_ok and commentary:
+        existing.update(commentary)
+        existing["narrative_generated_at"] = datetime.now(timezone.utc).isoformat()
+        existing["narrative_source_date"]  = today
+        existing["narrative_source"]       = "llm"
+        _atomic_write_json(COMMENTARY_PATH, existing)
+        print(f"[OK] Commentary saved -> {COMMENTARY_PATH}")
         return 0
 
-    commentary = scrub_banned_phrases(commentary)
+    # LLM failed or produced invalid output — try deterministic fallback.
+    print("[INFO] Building deterministic market commentary from snapshot data...")
+    try:
+        det = _build_deterministic_market_commentary(snapshot, commodities_tbl, currencies_tbl, bonds_tbl)
+        if validate_commentary(det, snapshot=None):
+            existing.update(det)
+            existing["narrative_generated_at"] = datetime.now(timezone.utc).isoformat()
+            existing["narrative_source_date"]  = today
+            existing["narrative_source"]       = "deterministic"
+            _atomic_write_json(COMMENTARY_PATH, existing)
+            print(f"[OK] Deterministic commentary saved -> {COMMENTARY_PATH}")
+            return 0
+        else:
+            print("[WARN] Deterministic commentary failed validation.")
+    except Exception as exc:
+        print(f"[WARN] Deterministic commentary build failed ({exc}).")
 
-    if not validate_commentary(commentary, known_tickers=known_tickers, snapshot=snapshot):
-        print("[WARN] Commentary response invalid  skipping LLM text.")
-        return 0
-
-    banned = find_banned_phrases(commentary)
-    if banned:
-        print(f"[WARN] Commentary still contains banned phrases after scrub: {banned}")
-
-    if commentary is None:
-        print("[WARN] No commentary produced  skipping LLM text.")
-        return 0
-
-    # Merge LLM commentary text into the already-saved JSON
-    existing.update(commentary)
-
-    with open(COMMENTARY_PATH, "w", encoding="utf-8") as f:
-        json.dump(existing, f, indent=2, ensure_ascii=False)
-
-    print(f"[OK] Commentary saved -> {COMMENTARY_PATH}")
-    return 0
+    # Both LLM and deterministic fallback failed — narrative keys are already cleared.
+    # Non-zero exit signals monitor.py to skip PDF; send_email.py freshness gate blocks email.
+    print("[ERROR] No valid commentary available — blocking PDF/email generation.")
+    return 1
 
 
 if __name__ == "__main__":

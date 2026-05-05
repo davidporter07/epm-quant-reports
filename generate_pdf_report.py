@@ -229,7 +229,18 @@ def load_commentary() -> dict:
 
 
 def is_commentary_fresh(commentary: dict) -> bool:
-    return commentary.get("report_date") == TODAY_STR
+    if commentary.get("report_date") != TODAY_STR:
+        return False
+    if commentary.get("narrative_source_date") != TODAY_STR:
+        return False
+    if not commentary.get("narrative_generated_at"):
+        return False
+    for _k in ("equities_commentary", "fixed_income_commentary",
+               "commodities_commentary", "currencies_commentary",
+               "economics_commentary", "pre_market_bullets"):
+        if not commentary.get(_k):
+            return False
+    return True
 
 
 def fmt_pct(val: Any, decimals: int = 2) -> str:
@@ -493,6 +504,12 @@ body {{
   font-size: 9.5pt;
   line-height: 1.62;
   color: {TEXT};
+}}
+.synthesis-p {{
+  border-left: 3px solid {NAVY_LIGHT};
+  padding-left: 10px;
+  background: {OFF_WHITE};
+  border-radius: 2px;
 }}
 .commentary-unavailable {{
   font-style: italic;
@@ -1110,6 +1127,15 @@ def build_simple_data_table(data: dict, title: str, is_currency: bool = False) -
 </table>"""
 
 
+def build_synthesis_html(commentary: dict) -> str:
+    text = str(commentary.get("cross_asset_synthesis") or "").strip()
+    if not text:
+        return ""
+    return f"""
+<div class="sec-header">Market Synthesis</div>
+<p class="commentary-p synthesis-p">{esc(text)}</p>"""
+
+
 def build_page3_html(logo_b64: str, commentary: dict) -> str:
     def para(key: str) -> str:
         text = str(commentary.get(key, "") or "").strip()
@@ -1146,6 +1172,8 @@ def build_page3_html(logo_b64: str, commentary: dict) -> str:
     {fx_tbl}
   </div>
 </div>
+
+{build_synthesis_html(commentary)}
 """
 
 
