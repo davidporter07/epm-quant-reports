@@ -299,7 +299,9 @@ def build_panel(
 
     panel = pd.concat(rows, ignore_index=True)
 
-    required = ["Close", "Ret_21D", "Vol_21D", "Gap_MA200", "RSI_14", "Target_Forward_21D"]
+    # Keep the most recent rows for live inference even though their 21-day
+    # forward target is not known yet. Training code filters target-null rows.
+    required = ["Close", "Ret_21D", "Vol_21D", "Gap_MA200", "RSI_14"]
     panel = panel.dropna(subset=required)
 
     return panel

@@ -24,6 +24,7 @@ import pandas as pd
 DATA_DIR = Path("data")
 FEATURES_PATH = DATA_DIR / "features.parquet"
 LOG_PATH = DATA_DIR / "prediction_log.parquet"
+ARIMAX_FORECASTS_PATH = DATA_DIR / "arimax_forecasts.csv"
 
 DEFAULT_TICKERS = ["AAPL", "MSFT", "AMZN", "NVDA", "GOOG", "META", "TSLA"]
 HORIZON = 21
@@ -182,6 +183,13 @@ def _ensure_log_schema(df: pd.DataFrame) -> pd.DataFrame:
 
     df["Ticker"] = df["Ticker"].astype(str).str.upper().str.strip().astype("string")
     df["Model"] = df["Model"].astype(str).str.strip().astype("string")
+    df["Model"] = df["Model"].replace(
+        {
+            "Deep Learning": "DeepLearning",
+            "DL": "DeepLearning",
+            "Fama-French": "FamaFrench",
+        }
+    ).astype("string")
 
     df["Horizon"] = pd.to_numeric(df["Horizon"], errors="coerce").fillna(HORIZON).astype(int)
 
@@ -189,6 +197,52 @@ def _ensure_log_schema(df: pd.DataFrame) -> pd.DataFrame:
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
     return df[cols]
+
+
+def _append_arimax_records(records: List[dict], tickers: List[str], run_date: str) -> int:
+    """Add ARIMAX forecasts, which are written to their own CSV rather than features.parquet."""
+    if not ARIMAX_FORECASTS_PATH.exists():
+        return 0
+
+    try:
+        df = pd.read_csv(ARIMAX_FORECASTS_PATH)
+    except Exception as exc:
+        print(f" [WARN] Could not read {ARIMAX_FORECASTS_PATH}: {exc}")
+        return 0
+
+    if df.empty or "Ticker" not in df.columns:
+        return 0
+
+    value_col = _first_present(df, ["Forecast_Return", "ARIMAX Forecast", "ARIMAX Forecast (%)"])
+    if value_col is None:
+        return 0
+
+    tickers_set = set(tickers)
+    n = 0
+    for _, row in df.iterrows():
+        t = str(row.get("Ticker", "")).upper().strip()
+        if t not in tickers_set:
+            continue
+        forecast = _to_float(row.get(value_col, np.nan))
+        if np.isnan(forecast):
+            continue
+        # ARIMAX Forecast_Return is stored as a decimal return; log format is percent.
+        if value_col == "Forecast_Return":
+            forecast *= 100.0
+        records.append(
+            {
+                "RunDate": run_date,
+                "Ticker": t,
+                "Model": "ARIMAX",
+                "Horizon": HORIZON,
+                "ForecastPct": float(forecast),
+                "CI_Lower": np.nan,
+                "CI_Upper": np.nan,
+                "AsOfDate": _normalize_one_date(row.get("Date")) or run_date,
+            }
+        )
+        n += 1
+    return n
 
 
 def record_predictions(tickers: List[str], log_path: Path = LOG_PATH, debug: bool = False) -> int:
@@ -253,6 +307,10 @@ def record_predictions(tickers: List[str], log_path: Path = LOG_PATH, debug: boo
                 }
             )
             per_model[model] += 1
+
+    arimax_count = _append_arimax_records(records, tickers, run_date)
+    if arimax_count:
+        per_model["ARIMAX"] = arimax_count
 
     if not records:
         print(" No non-null model forecasts found to log.")

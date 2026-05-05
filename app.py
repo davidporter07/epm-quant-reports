@@ -267,6 +267,27 @@ NAME_ALIASES: dict[str, list[str]] = {
     "GD": ["general dynamics"],
 }
 
+def _merge_alias_text(*groups: object) -> str:
+    seen: set[str] = set()
+    out: list[str] = []
+    for group in groups:
+        if not group:
+            continue
+        if isinstance(group, str):
+            parts = group.split("|")
+        else:
+            try:
+                parts = list(group)
+            except TypeError:
+                parts = [str(group)]
+        for part in parts:
+            alias = str(part or "").strip()
+            key = alias.lower()
+            if alias and key not in seen:
+                seen.add(key)
+                out.append(alias)
+    return " | ".join(out)
+
 POPULAR_SUGGESTIONS = ["AAPL", "MSFT", "AMZN", "NVDA", "META", "GOOG", "AVGO", "QQQ", "SPY", "VOO", "VTI", "LMT"]
 
 TOP100_SP500_BY_WEIGHT_SYMBOLS = [
@@ -347,7 +368,25 @@ def _forecast_store() -> dict[str, dict]:
         feats = pd.read_parquet(DATA_DIR / "features.parquet")
         feats = feats.set_index("Ticker")
 
-        rankings_df = pd.read_csv(DATA_DIR / "model_rankings.csv")
+        leaderboard_path = DATA_DIR / "model_leaderboard_by_ticker.csv"
+        if leaderboard_path.exists():
+            rankings_df = pd.read_csv(leaderboard_path)
+            rankings_df = rankings_df.sort_values(["Ticker", "MAE", "RMSE"]).copy()
+            rankings_df["Rank"] = rankings_df.groupby("Ticker").cumcount() + 1
+            if "Composite_Score" not in rankings_df.columns:
+                rankings_df["Composite_Score"] = float("nan")
+        else:
+            rankings_df = pd.read_csv(DATA_DIR / "model_rankings.csv")
+
+        model_key_map = {
+            "DeepLearning": "DL",
+            "Deep Learning": "DL",
+            "Fama-French": "FamaFrench",
+        }
+
+        def _model_key(name) -> str:
+            raw = str(name or "").strip()
+            return model_key_map.get(raw, raw)
 
         result: dict[str, dict] = {}
         for ticker in summary.index:
@@ -401,14 +440,22 @@ def _forecast_store() -> dict[str, dict]:
                 .sort_values("Rank")
                 .to_dict(orient="records")
             )
+            for r in ticker_rankings:
+                r["Model"] = _model_key(r.get("Model"))
+            winning_model = ticker_rankings[0]["Model"] if ticker_rankings else _model_key(row.get("Winning_Model"))
+            winning_forecast = (
+                models.get(winning_model, {}).get("forecast")
+                if winning_model in models
+                else _safe(row.get("Winning_Forecast"))
+            )
 
             result[ticker] = {
                 "consensus": _safe(row.get("Consensus_Forecast")),
                 "confidence_label": str(row.get("Confidence_Label") or ""),
                 "agreement_ratio": _safe(row.get("Agreement_Ratio")),
                 "std_dev": _safe(row.get("Forecast_StdDev")),
-                "winning_model": str(row.get("Winning_Model") or ""),
-                "winning_forecast": _safe(row.get("Winning_Forecast")),
+                "winning_model": winning_model,
+                "winning_forecast": winning_forecast,
                 "models": models,
                 "rankings": ticker_rankings,
             }
@@ -596,13 +643,13 @@ def _optional_symbol_rows() -> list[dict[str, str]]:
 def _search_universe() -> tuple[dict[str, str], ...]:
     records: dict[str, dict[str, str]] = {}
     for ticker, name in SUGGESTION_NAME_MAP.items():
-        records[ticker] = {"ticker": ticker, "name": name, "aliases": " | ".join(NAME_ALIASES.get(ticker, []))}
+        records[ticker] = {"ticker": ticker, "name": name, "aliases": _merge_alias_text(NAME_ALIASES.get(ticker, []))}
     for row in _optional_symbol_rows():
         ticker = row["ticker"]
         base = records.get(ticker, {"ticker": ticker, "name": row["name"], "aliases": ""})
         if base.get("name") == ticker and row.get("name"):
             base["name"] = row["name"]
-        base["aliases"] = " | ".join(filter(None, [base.get("aliases", ""), *NAME_ALIASES.get(ticker, [])])).strip(" |")
+        base["aliases"] = _merge_alias_text(base.get("aliases", ""), NAME_ALIASES.get(ticker, []))
         records[ticker] = base
 
     for maybe_list in (
@@ -616,9 +663,96 @@ def _search_universe() -> tuple[dict[str, str], ...]:
         for raw in maybe_list:
             ticker = str(raw).upper().strip()
             if ticker and ticker not in records:
-                records[ticker] = {"ticker": ticker, "name": SUGGESTION_NAME_MAP.get(ticker, ticker), "aliases": " | ".join(NAME_ALIASES.get(ticker, []))}
+                records[ticker] = {"ticker": ticker, "name": SUGGESTION_NAME_MAP.get(ticker, ticker), "aliases": _merge_alias_text(NAME_ALIASES.get(ticker, []))}
 
     return tuple(records[k] for k in sorted(records))
+
+
+def _suggestion_tokens(value: str) -> tuple[str, ...]:
+    return tuple(token for token in re.split(r"[^A-Z0-9]+", str(value or "").upper()) if token)
+
+
+def _suggestion_record(
+    ticker: str,
+    name: str = "",
+    aliases: str = "",
+    source_priority: int = 50,
+) -> dict[str, object]:
+    clean_ticker = _normalize_symbol(ticker)
+    clean_name = str(name or "").strip() or clean_ticker
+    clean_aliases = _merge_alias_text(aliases, NAME_ALIASES.get(clean_ticker, []))
+    return {
+        "ticker": clean_ticker,
+        "name": clean_name,
+        "aliases": clean_aliases,
+        "ticker_key": clean_ticker.replace(".", ""),
+        "alias_tokens": _suggestion_tokens(clean_aliases),
+        "source_priority": source_priority,
+        "popular_rank": POPULAR_SUGGESTIONS.index(clean_ticker) if clean_ticker in POPULAR_SUGGESTIONS else 999,
+    }
+
+
+@lru_cache(maxsize=1)
+def _suggestion_index() -> tuple[dict[str, object], ...]:
+    return tuple(
+        _suggestion_record(
+            str(row.get("ticker") or ""),
+            str(row.get("name") or ""),
+            str(row.get("aliases") or ""),
+            source_priority=0 if row.get("ticker") in SUGGESTION_NAME_MAP else 20,
+        )
+        for row in _search_universe()
+        if row.get("ticker")
+    )
+
+
+def _prefix_match_rank(record: dict[str, object], query: str) -> Optional[tuple[int, int]]:
+    q = _normalize_symbol(query).replace(".", "")
+    if not q:
+        return None
+    ticker_key = str(record.get("ticker_key") or "")
+    alias_tokens = tuple(record.get("alias_tokens") or ())
+
+    if ticker_key == q:
+        return (0, 0)
+    if ticker_key.startswith(q):
+        return (1, len(ticker_key))
+    if len(q) >= 2:
+        alias_lengths = [len(token) for token in alias_tokens if token.startswith(q)]
+        if alias_lengths:
+            return (2, min(alias_lengths))
+    return None
+
+
+def _rank_prefix_suggestions(rows: Iterable[dict[str, object]], query: str, limit: int) -> list[dict[str, str]]:
+    ranked: list[tuple[tuple[int, int, int, int, str], dict[str, object]]] = []
+    seen: set[str] = set()
+    for row in rows:
+        ticker = _normalize_symbol(str(row.get("ticker") or ""))
+        if not ticker or ticker in seen:
+            continue
+        match = _prefix_match_rank(row, query)
+        if match is None:
+            continue
+        seen.add(ticker)
+        sort_key = (
+            match[0],
+            int(row.get("popular_rank") or 999),
+            match[1],
+            int(row.get("source_priority") or 99),
+            ticker,
+        )
+        ranked.append((sort_key, row))
+
+    ranked.sort(key=lambda item: item[0])
+    return [
+        {
+            "ticker": str(row.get("ticker") or ""),
+            "name": str(row.get("name") or row.get("ticker") or ""),
+            "aliases": str(row.get("aliases") or ""),
+        }
+        for _, row in ranked[:limit]
+    ]
 
 
 def _looks_like_core_us_symbol(query: str) -> bool:
@@ -740,54 +874,6 @@ def _direct_symbol_candidate(query: str) -> dict[str, str] | None:
     return {'ticker': ticker, 'name': name}
 
 
-def _suggestion_score(record: dict[str, str], query: str) -> float:
-    q = query.strip().lower()
-    if not q:
-        return 0.0
-    ticker = record["ticker"].lower()
-    name = record["name"].lower()
-    aliases = str(record.get("aliases") or "").lower()
-    q_tokens = [token for token in q.replace('.', ' ').replace(',', ' ').split() if token]
-    name_tokens = [token for token in name.replace('.', ' ').replace(',', ' ').split() if token]
-    alias_parts = [x.strip() for x in aliases.split("|") if x.strip()] if aliases else []
-
-    score = 0.0
-    if ticker == q:
-        score += 200
-    elif ticker.startswith(q):
-        score += 140
-    elif q in ticker:
-        score += 95 - min(ticker.index(q), 20)
-
-    if name == q:
-        score += 170
-    elif name.startswith(q):
-        score += 120
-    elif any(token.startswith(q) for token in name_tokens):
-        score += 86
-    elif q in name:
-        score += 60
-
-    if q_tokens and all(any(token.startswith(qt) or qt in token for token in name_tokens) for qt in q_tokens):
-        score += 72
-    elif q_tokens and any(any(token.startswith(qt) for token in name_tokens) for qt in q_tokens):
-        score += 24
-
-    if alias_parts:
-        if any(alias == q for alias in alias_parts):
-            score += 110
-        elif any(alias.startswith(q) for alias in alias_parts):
-            score += 72
-        elif any(q in alias for alias in alias_parts):
-            score += 48
-        if q_tokens and all(any(qt in alias for alias in alias_parts) for qt in q_tokens):
-            score += 36
-
-    if score > 0 and record["ticker"] in POPULAR_SUGGESTIONS:
-        score += 8
-    return score
-
-
 @lru_cache(maxsize=512)
 def _remote_yf_suggestions_cached(query: str, limit: int) -> tuple[tuple[str, str], ...]:
     query = query.strip()
@@ -842,39 +928,6 @@ def _resolve_remote_symbol_name(ticker: str) -> str:
     except Exception:
         pass
     return ""
-
-
-def _enrich_suggestion_names(rows: list[dict[str, str]]) -> list[dict[str, str]]:
-    out: list[dict[str, str]] = []
-    for row in rows:
-        ticker = str(row.get("ticker") or "").strip().upper()
-        name = str(row.get("name") or "").strip()
-        if not name or name.upper() == ticker:
-            name = SUGGESTION_NAME_MAP.get(ticker, "") or _resolve_remote_symbol_name(ticker) or ticker
-        out.append({"ticker": ticker, "name": name})
-    return out
-
-
-def _clean_suggestions(rows: list[dict[str, str]], query: str) -> list[dict[str, str]]:
-    normalized_query = _normalize_symbol(query or "").replace(".", "")
-    out: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for row in rows:
-        ticker = _normalize_symbol(row.get("ticker") or "")
-        name = str(row.get("name") or "").strip()
-        if not ticker or ticker in seen:
-            continue
-        upper_name = name.upper()
-        if len(ticker) <= 3 and (not name or upper_name == ticker) and ticker not in SUGGESTION_NAME_MAP:
-            continue
-        if normalized_query:
-            comparable_ticker = ticker.replace(".", "")
-            comparable_name = re.sub(r"[^A-Z0-9]", "", upper_name)
-            if normalized_query not in comparable_ticker and normalized_query not in comparable_name:
-                continue
-        seen.add(ticker)
-        out.append({"ticker": ticker, "name": name or ticker})
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1118,29 +1171,39 @@ def health() -> dict:
 def suggest_tickers(q: str = Query("", max_length=60), limit: int = Query(15, ge=1, le=20)) -> dict:
     query = _normalize_symbol(q.strip())
     if not query:
-        suggestions = _clean_suggestions(_enrich_suggestion_names([{'ticker': t, 'name': SUGGESTION_NAME_MAP.get(t, '')} for t in POPULAR_SUGGESTIONS[:limit]]), query)
+        suggestions = [
+            {
+                "ticker": t,
+                "name": SUGGESTION_NAME_MAP.get(t, t),
+                "aliases": _merge_alias_text(NAME_ALIASES.get(t, [])),
+            }
+            for t in POPULAR_SUGGESTIONS[:limit]
+        ]
         return {'ok': True, 'suggestions': suggestions}
 
-    merged: dict[str, dict[str, str]] = {row['ticker']: dict(row) for row in _search_universe()}
+    records: dict[str, dict[str, object]] = {
+        str(row["ticker"]): dict(row) for row in _suggestion_index()
+    }
 
     direct = _direct_symbol_candidate(query)
     if direct is not None:
         ticker = direct['ticker']
-        existing = merged.get(ticker, {'ticker': ticker, 'name': direct.get('name') or ticker, 'aliases': ''})
-        if (not existing.get('name') or existing.get('name') == ticker) and direct.get('name'):
-            existing['name'] = direct['name']
-        merged[ticker] = existing
+        records[ticker] = _suggestion_record(
+            ticker,
+            direct.get('name') or records.get(ticker, {}).get("name") or ticker,
+            str(records.get(ticker, {}).get("aliases") or ""),
+            source_priority=5,
+        )
 
     for row in _remote_yf_suggestions(query, limit=max(limit * 2, 12)):
         ticker = row['ticker']
-        existing = merged.get(ticker, {'ticker': ticker, 'name': row.get('name') or ticker, 'aliases': ''})
-        if (not existing.get('name') or existing.get('name') == ticker) and row.get('name'):
-            existing['name'] = row['name']
-        merged[ticker] = existing
+        if ticker in records:
+            if (not records[ticker].get("name") or records[ticker].get("name") == ticker) and row.get("name"):
+                records[ticker]["name"] = row["name"]
+            continue
+        records[ticker] = _suggestion_record(ticker, row.get('name') or ticker, "", source_priority=40)
 
-    ranked = [(score, record) for record in merged.values() if (score := _suggestion_score(record, query)) > 0]
-    ranked.sort(key=lambda item: (-item[0], len(item[1]['ticker']), item[1]['ticker']))
-    suggestions = _clean_suggestions(_enrich_suggestion_names([{'ticker': r['ticker'], 'name': r.get('name', '')} for _, r in ranked[:limit]]), query)
+    suggestions = _rank_prefix_suggestions(records.values(), query, limit)
     return {'ok': True, 'suggestions': suggestions}
 
 
@@ -1711,6 +1774,11 @@ def get_forecast_chart_data() -> dict:
                     preds: dict[str, float] = {}
                     for _, row in t_rows.iterrows():
                         model = str(row["Model"])
+                        model = {
+                            "DeepLearning": "DL",
+                            "Deep Learning": "DL",
+                            "Fama-French": "FamaFrench",
+                        }.get(model, model)
                         try:
                             val = float(row["ForecastPct"])
                         except Exception:
@@ -1882,6 +1950,8 @@ def _build_chat_context() -> str:
             lines.append(f"Tactical underperforming: {c['tactical_underperforming']}")
         if c.get("watch_today"):
             lines.append(f"Watch today: {str(c['watch_today'])[:200]}")
+        if c.get("cross_asset_synthesis"):
+            lines.append(f"Market synthesis: {str(c['cross_asset_synthesis'])[:400]}")
         # portfolio_spotlight omitted — reflects last pipeline run and may not match
         # current holdings after manual portfolio changes. Regenerate commentary to refresh.
     except Exception:
@@ -2038,23 +2108,48 @@ def deep_analysis_start(ticker: str, request: Request) -> JSONResponse:
     force_fresh = request.query_params.get("force_fresh") == "1"
     earnings_triggered = False
 
-    if not force_fresh:
-        cached = get_today_cached_job(t)
-        if cached:
-            from datetime import datetime as _dt
-            key_facts = cached.get("key_facts") or {}
-            next_earnings_date = key_facts.get("next_earnings_date")
-            today_str = _dt.utcnow().strftime("%Y-%m-%d")
-            if next_earnings_date == today_str:
-                from deep_analysis import check_earnings_released
-                if check_earnings_released(t, next_earnings_date):
-                    invalidate_today_cache(t)
-                    force_fresh = True
-                    earnings_triggered = True
+    not_before = None
+    earnings_refresh_required = False
 
-    job_id = enqueue(t, force_fresh=force_fresh)
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo as _ZoneInfo
+    today_str = _dt.now(tz=_ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    from earnings_calendar import get_next_earnings_date
+    next_earnings_date, release_time = get_next_earnings_date(t)
+    if next_earnings_date == today_str:
+        from earnings_refresh import release_not_before_utc
+        not_before = release_not_before_utc(today_str, release_time)
+        invalidate_today_cache(t)
+        force_fresh = True
+        earnings_triggered = True
+        earnings_refresh_required = True
+
+    # Post-earnings backfill: if earnings_releases.json was updated AFTER the last
+    # cached run for this ticker, that run predates the actuals and must be rebuilt.
+    # Fires when next_earnings_date has already advanced past today (ticker already
+    # reported) but fresh actuals just landed via refresh_same_day_earnings.
+    if not force_fresh:
+        from earnings_refresh import load_recent_earnings_release
+        rel = load_recent_earnings_release(t, max_age_days=2)
+        cached = get_today_cached_job(t)
+        if rel and cached:
+            rel_as_of = pd.to_datetime(rel.get("as_of"), utc=True, errors="coerce")
+            cached_at = pd.to_datetime(cached.get("completed_at"), utc=True, errors="coerce")
+            if pd.notna(rel_as_of) and pd.notna(cached_at) and rel_as_of > cached_at:
+                invalidate_today_cache(t)
+                force_fresh = True
+                earnings_triggered = True
+                earnings_refresh_required = True
+
+    job_id = enqueue(
+        t,
+        force_fresh=force_fresh,
+        not_before=not_before,
+        earnings_refresh_required=earnings_refresh_required,
+    )
     return JSONResponse({"ok": True, "job_id": job_id, "ticker": t,
-                         "earnings_triggered": earnings_triggered})
+                         "earnings_triggered": earnings_triggered,
+                         "not_before": not_before})
 
 
 @app.get("/api/deep/{job_id}/status")
@@ -2096,6 +2191,21 @@ def deep_analysis_agents(job_id: str, request: Request) -> JSONResponse:
 
     takes_by_round = result.get("takes_by_round")
 
+    def _parse_r3_verdict(take_body: str) -> dict:
+        stance_m  = re.search(r'FINAL\s+STANCE:\s*(bear(?:ish)?|base|bull(?:ish)?)', take_body, re.IGNORECASE)
+        rat_m     = re.search(r'RATIONALE:\s*(.+?)(?:\n|$)', take_body, re.IGNORECASE)
+        shifted_m = re.search(r'POSITION\s+SHIFTED:\s*(yes|no)', take_body, re.IGNORECASE)
+        why_m     = re.search(r'\bWHY:\s*(.+?)(?:\n|$)', take_body, re.IGNORECASE)
+        raw = stance_m.group(1).lower() if stance_m else "base"
+        stance = "bearish" if raw.startswith("bear") else "base" if raw == "base" else "bullish"
+        shifted = shifted_m.group(1).lower() == "yes" if shifted_m else False
+        return {
+            "stance":       stance,
+            "rationale":    rat_m.group(1).strip() if rat_m else "",
+            "shifted":      shifted,
+            "shift_reason": why_m.group(1).strip() if (shifted and why_m) else "",
+        }
+
     if takes_by_round:
         # New 3-round format
         # Normalise keys: JSON serialises int keys as strings
@@ -2109,12 +2219,16 @@ def deep_analysis_agents(job_id: str, request: Request) -> JSONResponse:
                 if body:
                     posts_by_name.setdefault(pname, []).append(body)
 
+        # R3 takes keyed by persona name — used for per-agent verdict card
+        r3_by_name = {t.get("name", ""): (t.get("take") or "").strip() for t in tbr.get(3, [])}
+
         agents = []
         timeline = []
         for p in PERSONAS:
             meta  = persona_meta.get(p.name)
             bio   = meta.system_prompt.split(". ")[0] + "." if meta else ""
             posts = posts_by_name.get(p.name, [])
+            r3_body = r3_by_name.get(p.name, "")
             agents.append({
                 "name":       p.title,
                 "username":   p.name,
@@ -2122,6 +2236,7 @@ def deep_analysis_agents(job_id: str, request: Request) -> JSONResponse:
                 "persona":    meta.system_prompt if meta else "",
                 "post_count": len(posts),
                 "posts":      posts,
+                "verdict":    _parse_r3_verdict(r3_body) if r3_body else {"stance": "base", "rationale": "", "shifted": False, "shift_reason": ""},
             })
             for rnd in sorted(tbr.keys()):
                 round_takes = {t["name"]: t for t in tbr[rnd]}

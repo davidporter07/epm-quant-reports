@@ -1025,6 +1025,7 @@ function sanitizeSuggestionResults(items, query = "") {
     .map((item) => ({
       ticker: normalizeTickerValue(item?.ticker || ""),
       name: String(item?.name || "").trim(),
+      aliases: String(item?.aliases || "").trim(),
     }))
     .filter((item) => {
       if (!item.ticker || seen.has(item.ticker)) return false;
@@ -1032,8 +1033,14 @@ function sanitizeSuggestionResults(items, query = "") {
       if (item.ticker.length <= 3 && (!item.name || upperName === item.ticker)) return false;
       if (normalizedQuery) {
         const comparableTicker = item.ticker.replace(/\./g, "");
-        const comparableName = upperName.replace(/[^A-Z0-9]/g, "");
-        if (!comparableTicker.includes(normalizedQuery) && !comparableName.includes(normalizedQuery)) return false;
+        const aliasTokens = item.aliases.toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean);
+        const matches =
+          comparableTicker.startsWith(normalizedQuery) ||
+          (
+            normalizedQuery.length >= 2 &&
+            aliasTokens.some((token) => token.startsWith(normalizedQuery))
+          );
+        if (!matches) return false;
       }
       seen.add(item.ticker);
       return true;
@@ -1041,13 +1048,26 @@ function sanitizeSuggestionResults(items, query = "") {
 }
 
 function positionSuggestionOverlay() {
-  return;
+  if (!suggestionBox || suggestionBox.classList.contains("hidden") || !searchInputStack) return;
+  const rect = searchInputStack.getBoundingClientRect();
+  const margin = 12;
+  const width = Math.min(rect.width, window.innerWidth - margin * 2);
+  const left = Math.min(Math.max(margin, rect.left), window.innerWidth - width - margin);
+  const top = Math.min(rect.bottom + 8, window.innerHeight - 96);
+  suggestionBox.style.position = "fixed";
+  suggestionBox.style.left = `${Math.round(left)}px`;
+  suggestionBox.style.top = `${Math.round(top)}px`;
+  suggestionBox.style.width = `${Math.round(width)}px`;
+  suggestionBox.style.right = "auto";
+  suggestionBox.style.maxHeight = `${Math.max(160, Math.round(window.innerHeight - top - margin))}px`;
+  suggestionBox.classList.add("ticker-suggestions--detached", "is-open");
 }
 
 function hideSuggestions() {
   currentSuggestionItems = [];
   activeSuggestionIndex = -1;
   suggestionBox?.classList.add("hidden");
+  suggestionBox?.classList.remove("is-open");
   if (suggestionBox) suggestionBox.innerHTML = "";
 }
 
@@ -1080,6 +1100,7 @@ function renderSuggestions(items) {
     </button>
   `).join("");
   suggestionBox.classList.remove("hidden");
+  positionSuggestionOverlay();
 }
 
 function queueSuggestions(force = false) {
@@ -1286,6 +1307,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const urlParams = new URLSearchParams(window.location.search);
   const tickerParam = urlParams.get("ticker") || urlParams.get("t");
   if (tickerParam) tickerInput.value = normalizeTickerValue(tickerParam);
+
+  if (suggestionBox && suggestionBox.parentElement !== document.body) {
+    document.body.appendChild(suggestionBox);
+  }
 
   headerSummaryCard = document.getElementById("searchSummaryHeader") || document.querySelector(".sticky-search-header");
   ensureTickerDock();

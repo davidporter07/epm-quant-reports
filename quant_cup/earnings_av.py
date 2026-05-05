@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 
@@ -50,6 +51,11 @@ class _DailyLimitExhausted(Exception):
     pass
 
 
+def _sanitize_av_message(message: str, api_key: str) -> str:
+    sanitized = message.replace(api_key, "[REDACTED]") if api_key else message
+    return re.sub(r"API key as [A-Za-z0-9]+", "API key as [REDACTED]", sanitized)
+
+
 def _fetch_ticker(ticker: str, api_key: str) -> list[dict]:
     params = {"function": "EARNINGS", "symbol": ticker, "apikey": api_key}
     resp = requests.get(AV_BASE, params=params, timeout=15)
@@ -58,7 +64,7 @@ def _fetch_ticker(ticker: str, api_key: str) -> list[dict]:
         return []
     data = resp.json()
     if "Note" in data or "Information" in data:
-        msg = data.get("Note") or data.get("Information", "")
+        msg = _sanitize_av_message(data.get("Note") or data.get("Information", ""), api_key)
         log.warning(f"  AV rate limit: {msg[:80]}")
         # Daily limit exhausted — bail immediately rather than sleeping forever
         raise _DailyLimitExhausted(msg)
@@ -103,7 +109,8 @@ def download_earnings(
             log.warning(f"  AV daily limit exhausted at ticker {i}/{len(pending)} — stopping download. Re-run tomorrow.")
             break
         except Exception as exc:
-            log.warning(f"  AV {ticker} failed: {exc}")
+            # requests exceptions include the full URL, which contains the API key.
+            log.warning(f"  AV {ticker} failed: {type(exc).__name__}")
         if _DELAY:
             time.sleep(_DELAY)
 

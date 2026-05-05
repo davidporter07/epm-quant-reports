@@ -5282,6 +5282,33 @@ body[data-theme="light"][data-page="search"] #runBtn {
 /* ── 2026-03-24: hide global topbar search slot on Fund Search page ── */
 body[data-page="search"] .header-search-slot { display: none !important; }
 
+/* --- 2026-04-29: keep fund-search suggestions above all page content --- */
+body[data-page="search"] .search-bar {
+  overflow: visible !important;
+}
+body[data-page="search"] .search-panel-card,
+body[data-page="search"] .ds-card.is-panel:has(#tickerSuggestions),
+body[data-page="search"] .ds-card.is-panel:has(.search-bar),
+body[data-page="search"] .page-shell {
+  overflow: visible !important;
+}
+body[data-page="search"] .search-input-stack,
+body[data-page="search"] #tickerSuggestions {
+  position: relative;
+  z-index: 9200 !important;
+}
+body[data-page="search"] #tickerSuggestions.ticker-suggestions {
+  position: absolute !important;
+  z-index: 9201 !important;
+}
+body[data-page="search"] > #tickerSuggestions.ticker-suggestions,
+body[data-page="search"] #tickerSuggestions.ticker-suggestions.ticker-suggestions--detached {
+  position: fixed !important;
+  z-index: 12000 !important;
+  overflow: auto !important;
+  overscroll-behavior: contain;
+}
+
 /* ── 2026-04-07: Morning Briefing section (markets page) ── */
 .briefing-header { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
 .briefing-title { font-size: 15px; font-weight: 600; color: var(--text); margin: 0; }
@@ -6069,4 +6096,100 @@ body[data-page="markets"] .econ-calendar-list {
   overflow-y: auto;
   scrollbar-width: thin;
 }
+
+/* ── Deep Report: Investment Memo Hero ────────────────────────────────── */
+.investment-memo { margin: 0 0 32px; }
+.investment-memo-card { margin-top: 12px; }
+.memo-label-row {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 4px;
+}
+.memo-section-label {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .12em; color: var(--muted, #7a93b8);
+}
+
+.recommendation-chip {
+  display: inline-flex; align-items: center;
+  font-size: 11px; font-weight: 700; letter-spacing: .1em;
+  padding: 4px 14px; border-radius: 4px; margin-bottom: 18px;
+}
+.recommendation-chip--bull {
+  background: rgba(34,197,94,.1); color: #22c55e;
+  border: 1px solid rgba(34,197,94,.25);
+}
+.recommendation-chip--bear {
+  background: rgba(239,68,68,.1); color: #ef4444;
+  border: 1px solid rgba(239,68,68,.25);
+}
+.recommendation-chip--base {
+  background: rgba(212,168,75,.1); color: #d4a84b;
+  border: 1px solid rgba(212,168,75,.25);
+}
+.memo-content { line-height: 1.8; max-width: 72ch; }
+.memo-content h2 {
+  font-size: 15px; font-weight: 700; margin: 28px 0 8px;
+  color: var(--ds-ink, #e8edf4); letter-spacing: .02em;
+}
+.memo-content p { margin: 0 0 14px; }
+.memo-content ul, .memo-content ol {
+  padding-left: 20px; margin: 0 0 14px;
+}
+.memo-content li { margin-bottom: 6px; }
+
+/* ── Deep Report: Council Section Divider ─────────────────────────────── */
+.council-section-divider {
+  margin: 40px 0 20px;
+  padding-top: 32px;
+  border-top: 1px solid var(--border, #1e3050);
+}
+.council-section-title {
+  font-size: 17px; font-weight: 700;
+  color: var(--text, #e2eaf5); margin-bottom: 4px;
+}
+.council-section-subtitle {
+  font-size: 12px; color: var(--muted, #7a93b8);
+}
+
+/* ── Deep Report: Verdict Cards (By Agent tab) ────────────────────────── */
+.verdict-card {
+  background: var(--card-bg, #0e1e33);
+  border: 1px solid var(--border, #1e3050);
+  border-radius: 10px; padding: 14px 16px; margin-bottom: 10px;
+}
+.verdict-card-header {
+  display: flex; align-items: center;
+  justify-content: space-between; margin-bottom: 6px;
+}
+.agent-bio-short {
+  font-size: 11px; color: var(--muted, #7a93b8); margin-top: 2px;
+}
+.verdict-rationale {
+  font-size: 13px; line-height: 1.55;
+  color: var(--text, #e2eaf5); margin-top: 4px;
+}
+.verdict-shift-reason {
+  font-size: 11px; color: var(--muted, #7a93b8);
+  margin-top: 5px; font-style: italic;
+}
+
+/* ── Stance pills (verdict cards) ─────────────────────────────────────── */
+.stance-pill {
+  font-size: 10px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; padding: 2px 9px; border-radius: 3px;
+}
+.stance-pill--bull { background: rgba(34,197,94,.12);  color: #22c55e; }
+.stance-pill--bear { background: rgba(239,68,68,.12);  color: #ef4444; }
+.stance-pill--base { background: rgba(212,168,75,.12); color: #d4a84b; }
+
+.shifted-badge {
+  font-size: 9px; font-weight: 700; letter-spacing: .06em;
+  padding: 2px 7px; border-radius: 3px;
+  background: rgba(168,85,247,.12); color: #a855f7;
+  border: 1px solid rgba(168,85,247,.2);
+}
+
+/* Light-theme overrides */
+[data-theme="light"] .verdict-card { background: #fff; border-color: var(--border); }
+[data-theme="light"] .memo-content h2 { color: var(--text); }
+[data-theme="light"] .council-section-title { color: var(--text); }
 

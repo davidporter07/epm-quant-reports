@@ -255,15 +255,36 @@ class MarketBoardService:
         except Exception:
             return []
 
-    def _load_economic_calendar(self, limit: int = 200) -> list[dict]:
-        """Read upcoming economic events saved by generate_market_commentary.py."""
+    def _load_economic_calendar(self, weeks: int = 4) -> list[dict]:
+        """Read upcoming economic events saved by generate_market_commentary.py.
+
+        Filters to the next `weeks` weeks and drops low-importance entries so
+        the calendar is not swamped by foreign holidays and minor auctions.
+        """
         path = _DATA_DIR / "economic_calendar.json"
         if not path.exists():
             return []
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            return data.get("events", [])[:limit]
+            from datetime import date, timedelta
+            today = date.today()
+            end = today + timedelta(weeks=weeks)
+            out = []
+            for ev in data.get("events", []):
+                d = (ev.get("date") or "")[:10]
+                if not d:
+                    continue
+                try:
+                    ev_d = date.fromisoformat(d)
+                except ValueError:
+                    continue
+                if ev_d < today or ev_d > end:
+                    continue
+                if (ev.get("importance") or "").lower() == "low":
+                    continue
+                out.append(ev)
+            return out
         except Exception:
             return []
 
@@ -287,12 +308,7 @@ class MarketBoardService:
             "risk_on": self._select_cards_from_candidates(market_cards, self.config.risk_on_candidates, metric="return_1m", count=4),
             "risk_off": self._select_cards_from_candidates(market_cards, self.config.risk_off_candidates, metric="return_1m", count=4),
         }
-        broad_gainers, broad_losers = self._load_broad_market_movers(max(self.config.leaders_count, self.config.laggards_count))
-        if broad_gainers or broad_losers:
-            leaders = broad_gainers[: self.config.leaders_count]
-            laggards = broad_losers[: self.config.laggards_count]
-        else:
-            leaders, laggards = self._rank_cards_by_return(mover_cards, metric="day_change_pct", directional=True)
+        leaders, laggards = self._rank_cards_by_return(mover_cards, metric="day_change_pct", directional=True)
         sector_leaders, sector_laggards = self._rank_cards_by_return(sector_cards, metric="return_ytd", directional=True)
         trend_table = self._build_trend_table(market_cards)[:12]
 

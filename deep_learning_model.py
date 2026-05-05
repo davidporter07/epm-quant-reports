@@ -377,6 +377,24 @@ def gaussian_nll(mu: torch.Tensor, log_sigma: torch.Tensor, y: torch.Tensor) -> 
     return torch.mean(log_sigma + 0.5 * (y - mu) ** 2 * inv_var)
 
 
+def directional_bce(
+    mu: torch.Tensor,
+    y: torch.Tensor,
+    temperature: float = 0.02,
+    neutral_threshold: float = 0.0,
+) -> torch.Tensor:
+    """Binary direction loss, optionally ignoring small realized moves as noise."""
+    if neutral_threshold > 0:
+        mask = torch.abs(y) >= float(neutral_threshold)
+        if not torch.any(mask):
+            return mu.sum() * 0.0
+        mu = mu[mask]
+        y = y[mask]
+    target = (y > 0).to(dtype=mu.dtype)
+    temp = max(float(temperature), 1e-6)
+    return nn.functional.binary_cross_entropy_with_logits(mu / temp, target)
+
+
 # --------------------------
 # Train / Backtest / Infer
 # --------------------------
@@ -407,6 +425,40 @@ def time_split(panel: pd.DataFrame, val_days: int) -> Tuple[pd.Timestamp, pd.Tim
     return cutoff, dates.iloc[-1]
 
 
+def _load_compatible_warm_start(model: nn.Module, state_dict: dict) -> tuple[list[str], list[str]]:
+    target = model.state_dict()
+    loaded: list[str] = []
+    skipped: list[str] = []
+
+    for key, val in state_dict.items():
+        if key not in target:
+            skipped.append(key)
+            continue
+
+        if target[key].shape == val.shape:
+            target[key] = val.clone()
+            loaded.append(key)
+            continue
+
+        if key == "feature_gate.log_weights" and target[key].ndim == 1 and val.ndim == 1:
+            n = min(target[key].shape[0], val.shape[0])
+            target[key][:n] = val[:n].clone()
+            loaded.append(f"{key}[0:{n}]")
+            continue
+
+        if key == "in_proj.weight" and target[key].ndim == 3 and val.ndim == 3:
+            if target[key].shape[0] == val.shape[0] and target[key].shape[2] == val.shape[2]:
+                n = min(target[key].shape[1], val.shape[1])
+                target[key][:, :n, :] = val[:, :n, :].clone()
+                loaded.append(f"{key}[:,0:{n},:]")
+                continue
+
+        skipped.append(key)
+
+    model.load_state_dict(target)
+    return loaded, skipped
+
+
 def train_model(
     panel_path: Path,
     model_path: Path,
@@ -415,8 +467,16 @@ def train_model(
     cfg: TrainConfig,
     device: str,
     warm_start: bool = True,
+    direction_weight: float = 0.0,
+    direction_temperature: float = 0.02,
+    direction_neutral_threshold: float = 0.0,
+    selection_metric: str = "loss",
 ) -> None:
     panel = _ensure_panel_schema(read_panel(panel_path))
+    labeled = panel[pd.to_numeric(panel[TARGET_COL], errors="coerce").notna()].copy()
+    if labeled.empty:
+        raise RuntimeError(f"No labeled training rows found in {panel_path}")
+    panel = labeled
 
     cutoff, _ = time_split(panel, cfg.val_days)
     train_panel = panel[panel["Date"] < cutoff]
@@ -482,10 +542,10 @@ def train_model(
     if warm_start and model_path.exists():
         try:
             ckpt = torch.load(model_path, map_location=device, weights_only=True)
-            missing, unexpected = model.load_state_dict(ckpt["state_dict"], strict=False)
-            if missing:
-                print(f" Warm-start: new layers will train from scratch: {missing}")
-            print(f" Warm-start: loaded existing weights from {model_path}")
+            loaded, skipped = _load_compatible_warm_start(model, ckpt["state_dict"])
+            print(f" Warm-start: loaded {len(loaded)} tensors from {model_path}")
+            if skipped:
+                print(f" Warm-start: skipped incompatible tensors: {skipped}")
             _base_lr = cfg.lr * 0.2  # fine-tune with a lower learning rate
         except Exception as e:
             print(f"  Warm-start failed ({e}). Training from scratch.")
@@ -498,6 +558,7 @@ def train_model(
     )
 
     best_val = float("inf")
+    best_score = -float("inf")
     bad_epochs = 0
 
     for epoch in range(1, cfg.epochs + 1):
@@ -509,6 +570,10 @@ def train_model(
             opt.zero_grad(set_to_none=True)
             mu, log_sigma = model(xb)
             loss = gaussian_nll(mu, log_sigma, yb)
+            if direction_weight > 0:
+                loss = loss + float(direction_weight) * directional_bce(
+                    mu, yb, direction_temperature, direction_neutral_threshold
+                )
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()
@@ -516,22 +581,50 @@ def train_model(
 
         model.eval()
         val_losses = []
+        val_preds = []
+        val_actuals = []
         with torch.no_grad():
             for xb, yb, _, _ in val_loader:
                 xb = xb.to(device, non_blocking=pin)
                 yb = yb.to(device, non_blocking=pin)
                 mu, log_sigma = model(xb)
                 loss = gaussian_nll(mu, log_sigma, yb)
+                if direction_weight > 0:
+                    loss = loss + float(direction_weight) * directional_bce(
+                        mu, yb, direction_temperature, direction_neutral_threshold
+                    )
                 val_losses.append(loss.item())
+                val_preds.append(mu.detach().cpu().numpy().ravel())
+                val_actuals.append(yb.detach().cpu().numpy().ravel())
 
         scheduler.step()
 
         tr = float(np.mean(train_losses)) if train_losses else float("nan")
         va = float(np.mean(val_losses)) if val_losses else float("nan")
-        print(f" Epoch {epoch:02d} | train nll={tr:.6f} | val nll={va:.6f} | lr={scheduler.get_last_lr()[0]:.2e}")
+        val_dir = float("nan")
+        if val_preds and val_actuals:
+            vp = np.concatenate(val_preds)
+            vy = np.concatenate(val_actuals)
+            val_dir = float(np.mean(np.sign(vp) == np.sign(vy)))
 
-        if va < best_val - 1e-5:
+        print(
+            f" Epoch {epoch:02d} | train nll={tr:.6f} | val nll={va:.6f} "
+            f"| val dir={val_dir:.4f} | lr={scheduler.get_last_lr()[0]:.2e}"
+        )
+
+        if selection_metric == "directional":
+            score = val_dir
+            improved = score > best_score + 1e-5
+        elif selection_metric == "composite":
+            score = -va + val_dir
+            improved = score > best_score + 1e-5
+        else:
+            score = -va
+            improved = va < best_val - 1e-5
+
+        if improved:
             best_val = va
+            best_score = score
             bad_epochs = 0
             torch.save(
                 {
@@ -542,10 +635,16 @@ def train_model(
                     "dropout": cfg.dropout,
                     "cutoff": str(cutoff.date()),
                     "best_val": best_val,
+                    "selection_metric": selection_metric,
+                    "best_score": best_score,
+                    "best_val_directional_accuracy": val_dir,
                 },
                 model_path,
             )
-            print(f" Saved best model -> {model_path} (val nll={best_val:.6f})")
+            print(
+                f" Saved best model -> {model_path} "
+                f"(val nll={best_val:.6f}, score={best_score:.6f})"
+            )
         else:
             bad_epochs += 1
             if bad_epochs >= cfg.patience:
@@ -660,6 +759,9 @@ def backtest(
     out_csv: Path,
 ) -> None:
     panel = _ensure_panel_schema(read_panel(panel_path))
+    panel = panel[pd.to_numeric(panel[TARGET_COL], errors="coerce").notna()].copy()
+    if panel.empty:
+        raise RuntimeError(f"No labeled backtest rows found in {panel_path}")
     model, scaler, feature_cols, seq_len = load_model_and_scaler(model_path, scaler_path, device)
 
     dates = pd.to_datetime(panel["Date"]).drop_duplicates().sort_values()
@@ -688,12 +790,14 @@ def backtest(
     mae = float(np.mean(np.abs(y - p)))
     rmse = float(np.sqrt(np.mean((y - p) ** 2)))
     dir_acc = float(np.mean((np.sign(y) == np.sign(p)).astype(float)))
+    corr = float(np.corrcoef(p, y)[0, 1]) if len(p) > 2 and np.std(p) > 1e-12 and np.std(y) > 1e-12 else float("nan")
+    ic = float(pd.Series(p).rank().corr(pd.Series(y).rank())) if len(p) > 2 else float("nan")
 
     summary = pd.DataFrame(
         {
-            "Metric": ["MAE", "RMSE", "Directional_Accuracy", "N"],
-            "Value": [mae, rmse, dir_acc, len(y)],
-            "Test_Start": [str(cutoff.date())] * 4,
+            "Metric": ["MAE", "RMSE", "Directional_Accuracy", "Correlation", "IC_Spearman", "N"],
+            "Value": [mae, rmse, dir_acc, corr, ic, len(y)],
+            "Test_Start": [str(cutoff.date())] * 6,
         }
     )
 
@@ -722,6 +826,24 @@ def parse_args():
     tr.add_argument("--max-train-samples", type=int, default=0, help="Optional subsample for quick tests")
     tr.add_argument("--max-val-samples", type=int, default=0, help="Optional subsample for quick tests")
     tr.add_argument("--num-workers", type=int, default=0)
+    tr.add_argument(
+        "--direction-weight",
+        type=float,
+        default=0.0,
+        help="Optional BCE direction-loss weight. 0.0 preserves the original Gaussian NLL objective.",
+    )
+    tr.add_argument(
+        "--direction-temperature",
+        type=float,
+        default=0.02,
+        help="Return scale used to convert predicted return into a direction logit.",
+    )
+    tr.add_argument(
+        "--direction-neutral-threshold",
+        type=float,
+        default=0.0,
+        help="Ignore examples with abs(realized 21D return) below this threshold for direction loss.",
+    )
     tr.add_argument(
         "--from-scratch",
         action="store_true",
@@ -785,6 +907,9 @@ def main():
             cfg=cfg,
             device=device,
             warm_start=not args.from_scratch,
+            direction_weight=float(args.direction_weight),
+            direction_temperature=float(args.direction_temperature),
+            direction_neutral_threshold=float(args.direction_neutral_threshold),
         )
 
     elif args.cmd == "infer":

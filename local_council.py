@@ -74,6 +74,8 @@ PERSONAS: List[Persona] = [
             "You are a growth investor. You weigh revenue growth, earnings "
             "growth, forward P/E, PEG, margins, ROE, and whether compounding "
             "justifies the multiple. You value durable growth over cheapness. "
+            "If a recent earnings release is present (eps_release_surprise_pct), "
+            "weight it heavily — it supersedes historical averages. "
             "Every claim must cite a specific number from KEY_FACTS or the seed."
         ),
         focus_fields=[
@@ -81,6 +83,7 @@ PERSONAS: List[Persona] = [
             "peg_ratio", "ev_to_ebitda", "profit_margin_pct",
             "operating_margin_pct", "roe_pct", "analyst_target_price",
             "analyst_target_upside_pct", "analyst_recommendation_score",
+            "eps_release_surprise_pct", "reported_eps", "analyst_targets_may_be_stale",
         ],
     ),
     Persona(
@@ -149,14 +152,18 @@ PERSONAS: List[Persona] = [
         system_prompt=(
             "You are the earnings catalyst analyst. You focus on the next "
             "earnings date, EPS surprise history, beat rate, and the PEAD "
-            "(post-earnings announcement drift) signal. Explain what the "
-            "historical pattern implies for the upcoming print. Every claim "
-            "must cite a specific number from KEY_FACTS or the seed."
+            "(post-earnings announcement drift) signal. If eps_release_surprise_pct "
+            "is present in KEY_FACTS, it is the CONFIRMED most-recent-quarter actual — "
+            "treat it as your primary evidence and note whether it is extraordinary (>30%). "
+            "The pead_signal field reflects this. Every claim must cite a specific "
+            "number from KEY_FACTS or the seed."
         ),
         focus_fields=[
             "next_earnings_date", "days_to_earnings",
             "eps_beat_rate_str", "eps_beat_rate_pct",
             "avg_eps_surprise_pct", "pead_signal",
+            "eps_release_surprise_pct", "reported_eps", "estimated_eps",
+            "earnings_release_detected", "pead_extraordinary_note",
         ],
     ),
 ]
@@ -212,6 +219,12 @@ _FIELD_GLOSSARY = (
     "  vix_regime          → VIX risk regime\n"
     "  epm_most_pessimistic_model → most pessimistic EPM model\n"
     "  epm_ensemble_implied_pct → EPM ensemble implied return\n"
+    "  eps_release_surprise_pct → most recent quarter EPS surprise % (confirmed post-release)\n"
+    "  reported_eps             → most recent quarter reported EPS\n"
+    "  estimated_eps            → most recent quarter EPS estimate\n"
+    "  earnings_release_detected → whether a same-day earnings release was captured\n"
+    "  analyst_targets_may_be_stale → analyst price targets predate the most recent earnings release\n"
+    "  pead_extraordinary_note  → explanation when EPS surprise is extraordinary (>30%)\n"
     "Example: write '3-month return vs. sector ETF at -5.19%' NOT 'rel_perf_3m_diff_pct at -5.19'.\n"
 )
 
@@ -265,10 +278,14 @@ Synthesis task: identify the real crux of disagreement — do not average the op
 # Ollama and helpers
 # ---------------------------------------------------------------------------
 
-def _call_ollama(prompt: str, timeout: int = 240) -> str:
+def _call_ollama(prompt: str, timeout: int = 240, mode: str = "factual") -> str:
+    if mode == "synthesis":
+        options = {"temperature": 0.55, "top_p": 0.9, "top_k": 40, "repeat_penalty": 1.05, "num_ctx": 16384}
+    else:
+        options = {"temperature": 0.2, "top_p": 0.85, "top_k": 20, "repeat_penalty": 1.05, "num_ctx": 8192}
     r = requests.post(
         f"{OLLAMA_URL}/api/generate",
-        json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
+        json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False, "options": options},
         timeout=timeout,
     )
     r.raise_for_status()
@@ -298,6 +315,15 @@ def _kf_json(key_facts: Dict[str, Any]) -> str:
     return json.dumps(clean, indent=2, default=str)
 
 
+def _kf_json_filtered(key_facts: Dict[str, Any], focus_fields: List[str]) -> str:
+    """Persona-relevant KEY_FACTS slice for R1/R2. Reduces noise and context load."""
+    always = {"current_price", "ticker", "sector", "next_earnings_date",
+              "eps_release_surprise_pct", "earnings_release_detected"}
+    keep = set(focus_fields or []) | always
+    clean = {k: v for k, v in (key_facts or {}).items() if v is not None and k in keep}
+    return json.dumps(clean, indent=2, default=str)
+
+
 # ---------------------------------------------------------------------------
 # Round 1 — independent stance
 # ---------------------------------------------------------------------------
@@ -316,9 +342,10 @@ def _persona_prompt(
         f"{persona.system_prompt}\n\n"
         f"TICKER: {ticker}\n\n"
         "KEY_FACTS — authoritative numeric ground truth. Field names with `_pct` are already in percent "
-        "form (34.2 means 34.2%). Use these EXACT values verbatim. Do NOT round, re-derive, or invent "
-        "numbers not present here:\n"
-        f"```json\n{_kf_json(key_facts)}\n```\n\n"
+        "form (34.2 means 34.2%). CITATION RULE: when you cite any number, quote its KEY_FACTS field "
+        "name in parentheses, e.g. '91.39% (eps_release_surprise_pct)'. If you cannot name the source "
+        "field, do not state the number:\n"
+        f"```json\n{_kf_json_filtered(key_facts, persona.focus_fields)}\n```\n\n"
         f"YOUR FOCUS FIELDS (emphasize these): {focus_list}\n\n"
         "YOUR SECTION FROM THE SEED DOCUMENT (narrative context; if a number here conflicts with "
         "KEY_FACTS, KEY_FACTS wins):\n"
@@ -372,14 +399,38 @@ def _debate_prompt(
         f"### {t['title']}\n{t['take']}" for t in others_r1
     )
     exemplar = _R2_EXEMPLAR.format(ticker=ticker)
+
+    # Domain constraint — prevents non-TA agents from echo-chambering RSI/ATR
+    is_ta = persona.name == "technical_analyst"
+    if is_ta:
+        domain_constraint = (
+            f"DOMAIN CONSTRAINT: As {persona.title}, your EVIDENCE must cite price-action, "
+            f"momentum, or volatility data. Do not stray into fundamental valuation territory."
+        )
+    elif persona.focus_fields:
+        domain_constraint = (
+            f"DOMAIN CONSTRAINT: As {persona.title}, your EVIDENCE must draw from YOUR OWN "
+            f"analytical domain — do NOT echo RSI, ATR percentile, or volatility regime as "
+            f"primary evidence; those belong to the Technical Analyst. "
+            f"Cite data specific to your lens: {', '.join(persona.focus_fields)}."
+        )
+    else:
+        domain_constraint = (
+            f"DOMAIN CONSTRAINT: As {persona.title}, your EVIDENCE must be qualitative and "
+            f"domain-specific (geopolitical risk, supply chain factors, etc.). "
+            f"Do NOT echo RSI or ATR — those belong to the Technical Analyst."
+        )
+
     return (
         "IMPORTANT: Respond in English only. Prose only — no bullet lists, no markdown headers, no code fences.\n\n"
         f"PERSONA: {persona.title}\n"
         f"{persona.system_prompt}\n\n"
         f"TICKER: {ticker}\n\n"
         "KEY_FACTS — authoritative numeric ground truth. Field names with `_pct` are in percent form. "
-        "Use EXACT values. Do NOT invent numbers:\n"
-        f"```json\n{_kf_json(key_facts)}\n```\n\n"
+        "CITATION RULE: when you cite any number, quote its KEY_FACTS field name in parentheses, "
+        "e.g. '91.39% (eps_release_surprise_pct)'. If you cannot name the source field, do not state "
+        "the number:\n"
+        f"```json\n{_kf_json_filtered(key_facts, persona.focus_fields)}\n```\n\n"
         "YOUR ROUND 1 TAKE (defend or update this):\n"
         f"```\n{my_r1_take}\n```\n\n"
         "OTHER ANALYSTS' ROUND 1 TAKES — read these, find at least one you disagree with:\n\n"
@@ -390,10 +441,12 @@ def _debate_prompt(
         "CLAIM: one decisive sentence — your thesis after reviewing the other analysts\n"
         "EVIDENCE: 2-3 specific KEY_FACTS field names and exact values that support your claim\n"
         "MECHANISM: 2-3 sentences — the transmission chain from current conditions to your predicted outcome\n"
-        "DISAGREEMENT: name exactly one analyst by role (e.g. 'The Technical Analyst') + "
-        "identify the specific claim they made + explain precisely why their data or logic is wrong, "
-        "citing at least one KEY_FACTS field\n"
+        "DISAGREEMENT: name exactly one analyst by role (e.g. 'The Technical Analyst') from the "
+        "OTHER ANALYSTS' ROUND 1 TAKES section — you CANNOT disagree with yourself or your own "
+        "Round 1 take. Identify the specific claim that analyst made + explain precisely why their "
+        "data or logic is wrong, citing at least one KEY_FACTS field\n"
         "WHAT WOULD CHANGE MY MIND: one specific data signal that would force you to revise your stance\n\n"
+        f"{domain_constraint}\n\n"
         f"{_BANNED_PHRASES_RULE}\n\n"
         f"{_FIELD_GLOSSARY}\n\n"
         "Rules: DISAGREEMENT is mandatory — name a real analyst from the Round 1 takes above. "
@@ -436,13 +489,53 @@ def _final_position_prompt(
         f"### {t['title']}\n{t['take']}"
         for t in all_r2 if t["name"] != persona.name
     )
+
+    # Domain anchor — mirrors R2 domain_constraint; prevents pile-on conformance in R3.
+    # A persona must hold its domain-grounded view unless a counter-argument cited
+    # new evidence from *its own* focus fields. Majority consensus is not a valid shift trigger.
+    is_ta = persona.name == "technical_analyst"
+    if is_ta:
+        domain_anchor = (
+            f"DOMAIN ANCHOR: As {persona.title}, your final stance must rest on price action, "
+            f"momentum, and volatility signals. Do not be swayed by fundamental or macro "
+            f"arguments from other analysts — those are outside your domain.\n"
+            f"SHIFTING RULE: Write 'POSITION SHIFTED: yes' ONLY if a Round 2 argument "
+            f"directly contradicted your specific technical signals with price-action data "
+            f"you had not considered. Majority consensus is NOT grounds for shifting."
+        )
+    elif persona.focus_fields:
+        focus_list = ", ".join(persona.focus_fields)
+        domain_anchor = (
+            f"DOMAIN ANCHOR: As {persona.title}, your final stance must be grounded in your "
+            f"own analytical domain — {focus_list}. Do NOT capitulate to RSI, ATR, or "
+            f"volatility-regime arguments; those belong to the Technical Analyst.\n"
+            f"SHIFTING RULE: Write 'POSITION SHIFTED: yes' ONLY if a Round 2 argument cited "
+            f"new evidence from YOUR domain fields above that directly refutes your specific "
+            f"R1-R2 position. Majority consensus pressure is NOT a valid reason to shift — "
+            f"you are an independent expert who holds a domain-grounded view. If you shift, "
+            f"your WHY must name the specific field and value that changed your mind."
+        )
+    else:
+        domain_anchor = (
+            f"DOMAIN ANCHOR: As {persona.title}, your final stance must be grounded in your "
+            f"qualitative domain expertise (geopolitical risk, supply chain, structural factors).\n"
+            f"SHIFTING RULE: Write 'POSITION SHIFTED: yes' ONLY if a Round 2 argument "
+            f"introduced concrete structural evidence that directly refutes your specific claims. "
+            f"Majority consensus alone is NOT grounds for shifting."
+        )
+
     return (
         "IMPORTANT: Respond in English only. Prose only — no bullet lists, no markdown headers.\n\n"
         f"PERSONA: {persona.title}\n"
         f"{persona.system_prompt}\n\n"
         f"TICKER: {ticker}\n\n"
+        "KEY_FACTS — authoritative numeric ground truth. CITATION RULE: when you cite any number, "
+        "quote its KEY_FACTS field name in parentheses, e.g. '91.39% (eps_release_surprise_pct)'. "
+        "If you cannot name the source field, do not state the number:\n"
+        f"```json\n{_kf_json(key_facts)}\n```\n\n"
         f"YOUR ROUND 1:\n{my_r1_take}\n\n"
         f"YOUR ROUND 2:\n{my_r2_take}\n\n"
+        f"{domain_anchor}\n\n"
         f"OTHER ANALYSTS' ROUND 2 RESPONSES:\n\n{others_r2_block}\n\n"
         "Write your final 60-80 word position statement. "
         "Use EXACTLY these four fields:\n\n"
@@ -495,6 +588,9 @@ def _distill_prompt(
 
     return (
         "IMPORTANT: Respond ONLY with valid JSON. No preamble, no markdown fences, no commentary.\n\n"
+        "KEY_FACTS — authoritative numeric ground truth. When extracting evidence strings, use "
+        "EXACT values from this block:\n"
+        f"```json\n{_kf_json(key_facts)}\n```\n\n"
         f"You have just reviewed a three-round analyst council deliberation on {ticker}. "
         "Extract the following into a single JSON object with these exact keys:\n\n"
         '{\n'
@@ -522,59 +618,72 @@ def _chief_analyst_prompt(
 ) -> str:
     return (
         "IMPORTANT: Your entire response must be written in English only.\n\n"
-        f"You are the Chief Analyst at a top-tier institutional equity research firm. "
-        f"Your research team has completed a three-round deliberation on {ticker}. "
-        "Write the final research note that a portfolio manager will use to make a position decision. "
-        "This is NOT a summary of the debate — it is your own authoritative call informed by the deliberation.\n\n"
-        "KEY_FACTS — AUTHORITATIVE NUMERIC GROUND TRUTH. Use these EXACT values anywhere you cite a number:\n"
+        f"You are a senior research analyst at a top-tier institutional equity research firm. "
+        f"Your council has just completed a three-round deliberation on {ticker}. "
+        "Write the investment memo that will be delivered to the portfolio manager. "
+        "This is NOT a recap of who argued what — it is your authoritative analysis of the stock, "
+        "informed by the deliberation but written in your own voice.\n\n"
+        "TONE: Write as a senior analyst to a sophisticated PM. Conversational professional. "
+        "Narrative paragraphs throughout — no bullet lists except in sections 6 and 7. "
+        "Take a clear position. A memo that hedges in every direction is a failed memo. "
+        "If the evidence is mixed, say which side weighs more and why.\n\n"
+        "KEY_FACTS — AUTHORITATIVE NUMERIC GROUND TRUTH. Use EXACT values anywhere you cite a number. "
+        "CITATION RULE: every number you state must be followed by its KEY_FACTS field name in "
+        "parentheses — e.g. '68.48% (eps_release_surprise_pct)'. If you cannot name the source field, "
+        "do not state the number.\n"
         f"```json\n{_kf_json(key_facts)}\n```\n\n"
         "RESEARCH TEAM FINDINGS (distilled from the council deliberation):\n"
         f"```json\n{json.dumps(distilled, indent=2)}\n```\n\n"
         f"{_BANNED_PHRASES_RULE}\n\n"
         f"{_SYNTHESIS_QUALITY_STANDARD}\n\n"
-        "Write exactly these six sections in order. Start immediately with ## Verdict. No preamble.\n\n"
-        "## Verdict\n"
-        f"One sentence: your rating (OVERWEIGHT / UNDERWEIGHT / NEUTRAL), 12-month price target range, "
-        "and the single most important reason. Then one paragraph (3-4 sentences) investment thesis. "
-        "You MUST acknowledge the council's `consensus_stance` and `vote_distribution` from RESEARCH TEAM FINDINGS. "
-        "If your rating diverges from the consensus (e.g., OVERWEIGHT when consensus_stance is bearish with 5+ votes), "
-        "you MUST explicitly name the specific insight the majority missed that justifies your contrarian call. "
-        "If you cannot name a concrete, data-backed reason, align with the council consensus.\n\n"
-        "## Bull Case\n"
-        "The strongest argument for owning this stock. Attribute it to the analyst by their EXACT role title "
-        "from RESEARCH TEAM FINDINGS (e.g. 'Earnings Catalyst Analyst', 'Growth Investor') — NEVER invent "
-        "a human name. Cite the specific KEY_FACTS evidence, explain the mechanism that produces upside. "
-        "End with: what must be TRUE for this case to play out.\n\n"
-        "## Bear Case\n"
-        "The strongest argument against this stock. Attribute it to the analyst by their EXACT role title "
-        "from RESEARCH TEAM FINDINGS (e.g. 'Technical Analyst', 'Value Investor') — NEVER invent a human "
-        "name. Cite the specific KEY_FACTS evidence, explain the mechanism that produces downside. "
-        "End with: what must be TRUE for this case to play out.\n\n"
-        "## Key Catalysts\n"
-        "Three specific catalysts in order of time. For each: what it is, which scenario it "
-        "accelerates (bull/bear/base), and by how much. "
-        "ONLY cite dates present in KEY_FACTS (e.g. `next_earnings_date`, `days_to_earnings`). "
-        "For any other catalyst, name the quarter or fiscal period only — do NOT invent specific "
-        "calendar dates not in KEY_FACTS.\n\n"
-        "## Primary Risks\n"
-        f"Three risks specific to {ticker}'s business model that the quantitative models miss. "
-        "For each: the risk, its trigger mechanism, and the earliest-warning signal to watch. "
-        "BANNED generic risk categories — do not use any of these: 'Supply Chain Disruptions', "
-        "'Competition', 'Economic Slowdown', 'Interest Rates', 'Market Correction', 'Geopolitical'. "
-        "Each risk MUST cite a specific KEY_FACTS field as its early-warning signal "
-        f"(e.g. eps_beat_rate_pct, pead_signal, rel_perf_1m_stock_pct). "
-        f"Think about what is structurally unique to {ticker}'s revenue model, margin structure, "
-        "or customer base that Wall Street consensus tends to underweight.\n\n"
-        "## What Changes My View\n"
-        "Two concrete, measurable conditions: one that forces an upgrade, one that forces a downgrade. "
-        "Cite specific price levels, KEY_FACTS fields, or fundamental thresholds — not vague conditions. "
-        "Close with one sentence on position sizing given the current `volatility_regime`.\n\n"
+        "Write exactly these seven sections in order. Start immediately with ## Investment Thesis. "
+        "No preamble. No sign-off.\n\n"
+        "## Investment Thesis\n"
+        f"One paragraph (4-6 sentences). State your directional view on {ticker} — OVERWEIGHT, "
+        "UNDERWEIGHT, or NEUTRAL — with conviction level (high / moderate / cautious) and time horizon "
+        "(3–6 months / 6–12 months / 12+ months). Name the single most important reason. "
+        "If the council's consensus_stance and your own view align, say so directly. "
+        "If you diverge from a strong consensus (5+ votes), name the specific insight the majority "
+        "missed that justifies the contrarian call — or align with the consensus.\n\n"
+        "## Where This Stands Today\n"
+        f"One to two paragraphs. Set the scene: where {ticker} is trading now, what the valuation "
+        "picture looks like relative to its own history and peers, and what has happened recently "
+        "(earnings release, guidance, significant price move) that makes this analysis timely. "
+        "Tie every number to a KEY_FACTS field. This is context, not opinion — save the argument for "
+        "the bull and bear sections.\n\n"
+        "## The Bull Case\n"
+        "Two to three paragraphs of narrative. Weave together the strongest pro-ownership argument. "
+        "Draw on the council's RESEARCH TEAM FINDINGS (cite the analyst by their EXACT role title — "
+        "never invent a human name). Cite KEY_FACTS evidence and explain the causal mechanism that "
+        "produces upside. End this section with one sentence: what must be true for this case to play out.\n\n"
+        "## The Bear Case\n"
+        "Two to three paragraphs of narrative. Present the strongest argument against owning the stock. "
+        "Cite the analyst by their EXACT role title. Cite KEY_FACTS evidence, explain the downside "
+        "mechanism. End with: what structural risk specific to this business model do the quantitative "
+        f"models underweight? (BANNED generic categories: 'Competition', 'Economic Slowdown', "
+        "'Interest Rates', 'Market Correction', 'Geopolitical'. Name something concrete to {ticker}.)\n\n"
+        "## What Tilts the Decision\n"
+        "One to two paragraphs. This is the synthesis — which side wins on the current evidence and why. "
+        "Acknowledge the strongest counter-argument and explain why it does not override your view. "
+        "This section is what separates a memo from a debate transcript. You must land on a side.\n\n"
+        "## Catalysts to Watch (Next 60–90 Days)\n"
+        "Three to five specific, named events or data releases. For each, one line: what it is, "
+        "which scenario (bull / bear / base) it accelerates if it breaks the stated direction, "
+        "and the approximate magnitude (e.g. +3-5% / -8-12%). "
+        "ONLY cite dates in KEY_FACTS (next_earnings_date, days_to_earnings). "
+        "For other catalysts, name the quarter or fiscal period only — do NOT invent calendar dates.\n\n"
+        "## What Would Change This View\n"
+        "Two numbered items. One that forces an upgrade; one that forces a downgrade. "
+        "Each must be a concrete, measurable condition — a price level, a KEY_FACTS field crossing a "
+        "threshold, or a fundamental data point. No vague conditions. "
+        "Close with one sentence on position sizing given the current volatility regime "
+        "(volatility_regime).\n\n"
         f"{_FIELD_GLOSSARY}\n\n"
         "Rules: KEY_FACTS numbers override any conflicting number. No blockquotes. "
-        "No mention of MiroFish, swarm, ontology, or panorama_search. English only. "
-        "Do NOT re-summarize the debate — make your own call and defend it. "
-        "NEVER invent analyst names, product version numbers, event dates, or any specifics not present "
-        "in KEY_FACTS or RESEARCH TEAM FINDINGS. Start with ## Verdict.\n"
+        "No mention of MiroFish, swarm, ontology, panorama_search, or the council deliberation format. "
+        "English only. NEVER invent analyst names, product version numbers, event dates, or any "
+        "specifics not present in KEY_FACTS or RESEARCH TEAM FINDINGS. "
+        "Start with ## Investment Thesis.\n"
     )
 
 
@@ -682,7 +791,7 @@ def run_council(
     chief_p = _chief_analyst_prompt(ticker, key_facts, distilled)
     t0 = time.time()
     try:
-        enhanced = _call_ollama(chief_p, timeout=420)
+        enhanced = _call_ollama(chief_p, timeout=600, mode="synthesis")
     except Exception as exc:
         logger.error("Chief analyst pass failed: %s", exc)
         enhanced = ""

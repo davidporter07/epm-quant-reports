@@ -1633,6 +1633,7 @@ function sanitizeSuggestionResults(items, query = '') {
     .map((item) => ({
       ticker: normalizeTickerValue(item?.ticker || ''),
       name: String(item?.name || '').trim(),
+      aliases: String(item?.aliases || '').trim(),
     }))
     .filter((item) => {
       if (!item.ticker || seen.has(item.ticker)) return false;
@@ -1640,8 +1641,14 @@ function sanitizeSuggestionResults(items, query = '') {
       if (item.ticker.length <= 3 && (!item.name || upperName === item.ticker)) return false;
       if (normalizedQuery) {
         const comparableTicker = item.ticker.replace(/\./g, '');
-        const comparableName = upperName.replace(/[^A-Z0-9]/g, '');
-        if (!comparableTicker.includes(normalizedQuery) && !comparableName.includes(normalizedQuery)) return false;
+        const aliasTokens = item.aliases.toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean);
+        const matches =
+          comparableTicker.startsWith(normalizedQuery) ||
+          (
+            normalizedQuery.length >= 2 &&
+            aliasTokens.some((token) => token.startsWith(normalizedQuery))
+          );
+        if (!matches) return false;
       }
       seen.add(item.ticker);
       return true;

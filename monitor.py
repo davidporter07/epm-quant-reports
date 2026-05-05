@@ -177,9 +177,97 @@ except subprocess.CalledProcessError as e:
 import shutil as _shutil
 _dl_ckpt = os.path.join("models", "dl_tcn.pt")
 _dl_backup = os.path.join("models", "dl_tcn_backup.pt")
+_dl_scaler = os.path.join("models", "dl_scaler.json")
+_dl_scaler_backup = os.path.join("models", "dl_scaler_backup.json")
+_dl_fi = os.path.join("models", "dl_feature_importance.csv")
+_dl_fi_backup = os.path.join("models", "dl_feature_importance_backup.csv")
+_dl_guard_before = os.path.join("data", "dl_guard_before.csv")
+_dl_guard_after = os.path.join("data", "dl_guard_after.csv")
+_dl_guard_tolerance = 1.02
+_dl_guard_dir_drop_limit = 0.03
+_dl_guard_ic_drop_limit = 0.03
+
+
+def _read_dl_guard_metrics(path):
+    try:
+        df = pd.read_csv(path)
+        metrics = {}
+        for _, row in df.iterrows():
+            name = str(row.get("Metric") or "").strip()
+            try:
+                val = float(row.get("Value"))
+            except Exception:
+                continue
+            if name and np.isfinite(val):
+                metrics[name] = val
+        return metrics or None
+    except Exception:
+        return None
+
+
+def _run_dl_guard_eval(out_path):
+    try:
+        subprocess.run(
+            [
+                VENV_PYTHON,
+                "deep_learning_model.py",
+                "backtest",
+                "--test-days",
+                "252",
+                "--out",
+                out_path,
+            ],
+            check=True,
+        )
+        return _read_dl_guard_metrics(out_path)
+    except subprocess.CalledProcessError as e:
+        print(f" Warning: DL guard evaluation failed: {e}")
+        return None
+
+
+def _dl_guard_rejection_reason(before, after):
+    before_mae = before.get("MAE")
+    after_mae = after.get("MAE")
+    if before_mae is None or after_mae is None:
+        return "missing MAE metric"
+    if after_mae > before_mae * _dl_guard_tolerance:
+        return f"MAE worsened from {before_mae:.6f} to {after_mae:.6f}"
+
+    before_dir = before.get("Directional_Accuracy")
+    after_dir = after.get("Directional_Accuracy")
+    if before_dir is not None and after_dir is not None:
+        if after_dir < before_dir - _dl_guard_dir_drop_limit:
+            return f"directional accuracy fell from {before_dir:.4f} to {after_dir:.4f}"
+
+    before_ic = before.get("IC_Spearman")
+    after_ic = after.get("IC_Spearman")
+    if before_ic is not None and after_ic is not None:
+        if after_ic < before_ic - _dl_guard_ic_drop_limit:
+            return f"IC fell from {before_ic:.4f} to {after_ic:.4f}"
+
+    return None
+
+
 if os.path.exists(_dl_ckpt):
     _shutil.copy2(_dl_ckpt, _dl_backup)
     print(f" DL checkpoint backed up -> {_dl_backup}")
+if os.path.exists(_dl_scaler):
+    _shutil.copy2(_dl_scaler, _dl_scaler_backup)
+if os.path.exists(_dl_fi):
+    _shutil.copy2(_dl_fi, _dl_fi_backup)
+
+_dl_mae_before = None
+_dl_metrics_before = None
+if os.path.exists(_dl_ckpt) and os.path.exists(_dl_scaler):
+    _dl_metrics_before = _run_dl_guard_eval(_dl_guard_before)
+    if _dl_metrics_before is not None:
+        _dl_mae_before = _dl_metrics_before.get("MAE")
+        print(
+            " DL guard baseline "
+            f"MAE={_dl_metrics_before.get('MAE', float('nan')):.6f} "
+            f"Dir={_dl_metrics_before.get('Directional_Accuracy', float('nan')):.4f} "
+            f"IC={_dl_metrics_before.get('IC_Spearman', float('nan')):.4f}"
+        )
 
 # Runs 2 epochs of fine-tuning on the refreshed panel. If no checkpoint exists
 # yet, trains from scratch. This keeps the model learning from new market data
@@ -196,6 +284,33 @@ try:
     )
 except subprocess.CalledProcessError as e:
     print(f" Warning: DL warm-start fine-tune failed (inference will use existing checkpoint). Details: {e}")
+
+_dl_mae_after = None
+_dl_metrics_after = None
+if _dl_metrics_before is not None and os.path.exists(_dl_ckpt) and os.path.exists(_dl_scaler):
+    _dl_metrics_after = _run_dl_guard_eval(_dl_guard_after)
+    if _dl_metrics_after is not None:
+        _dl_mae_after = _dl_metrics_after.get("MAE")
+        print(
+            " DL guard candidate "
+            f"MAE={_dl_metrics_after.get('MAE', float('nan')):.6f} "
+            f"Dir={_dl_metrics_after.get('Directional_Accuracy', float('nan')):.4f} "
+            f"IC={_dl_metrics_after.get('IC_Spearman', float('nan')):.4f}"
+        )
+        _reject_reason = _dl_guard_rejection_reason(_dl_metrics_before, _dl_metrics_after)
+        if _reject_reason:
+            print(
+                " DL guard rejected candidate checkpoint "
+                f"({_reject_reason}). Restoring backup."
+            )
+            if os.path.exists(_dl_backup):
+                _shutil.copy2(_dl_backup, _dl_ckpt)
+            if os.path.exists(_dl_scaler_backup):
+                _shutil.copy2(_dl_scaler_backup, _dl_scaler)
+            if os.path.exists(_dl_fi_backup):
+                _shutil.copy2(_dl_fi_backup, _dl_fi)
+        else:
+            print(" DL guard accepted candidate checkpoint.")
 
 # Commit updated model checkpoint to git so there is a versioned record
 # of how the model evolves over time.

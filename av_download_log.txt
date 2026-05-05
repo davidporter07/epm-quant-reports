@@ -1,0 +1,17 @@
+  AV rate limit: We have detected your API key as 4687M8W3Q9XWLYU4 and our standard API rate limi
+  AV daily limit exhausted at ticker 25/411 — stopping download. Re-run tomorrow.
+  AV rate limit: We have detected your API key as 4687M8W3Q9XWLYU4 and our standard API rate limi
+  AV daily limit exhausted at ticker 25/387 — stopping download. Re-run tomorrow.
+  AV rate limit: We have detected your API key as 4687M8W3Q9XWLYU4 and our standard API rate limi
+  AV daily limit exhausted at ticker 25/363 — stopping download. Re-run tomorrow.
+  AV rate limit: We have detected your API key as 4687M8W3Q9XWLYU4 and our standard API rate limi
+  AV daily limit exhausted at ticker 25/339 — stopping download. Re-run tomorrow.
+  AV EXC failed: HTTPSConnectionPool(host='www.alphavantage.co', port=443): Read timed out. (read timeout=15)
+  AV rate limit: We have detected your API key as 4687M8W3Q9XWLYU4 and our standard API rate limi
+  AV daily limit exhausted at ticker 26/315 — stopping download. Re-run tomorrow.
+  AV rate limit: We have detected your API key as 4687M8W3Q9XWLYU4 and our standard API rate limi
+  AV daily limit exhausted at ticker 25/291 — stopping download. Re-run tomorrow.
+  AV rate limit: We have detected your API key as 4687M8W3Q9XWLYU4 and our standard API rate limi
+  AV daily limit exhausted at ticker 26/267 — stopping download. Re-run tomorrow.
+  AV rate limit: We have detected your API key as 4687M8W3Q9XWLYU4 and our standard API rate limi
+  AV daily limit exhausted at ticker 25/242 — stopping download. Re-run tomorrow.

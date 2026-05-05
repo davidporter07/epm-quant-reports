@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-OLLAMA_HOST = os.getenv("LOCAL_OLLAMA_URL", "http://192.168.1.145:11434")
+OLLAMA_HOST = os.getenv("LOCAL_OLLAMA_URL", "http://100.101.63.65:11434")
 OLLAMA_MODEL = os.getenv("LOCAL_OLLAMA_MODEL", "qwen2.5:7b")
 OLLAMA_TIMEOUT = int(os.getenv("LOCAL_OLLAMA_TIMEOUT", "180"))
 

@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 
@@ -42,9 +43,16 @@ def _ticker_cache_path(ticker: str) -> Path:
     return CACHE_DIR / f"{ticker}.json"
 
 
+def _sanitize_fmp_message(message: str, api_key: str) -> str:
+    sanitized = message.replace(api_key, "[REDACTED]") if api_key else message
+    return re.sub(r"apikey=[A-Za-z0-9]+", "apikey=[REDACTED]", sanitized)
+
+
 def _is_cached(ticker: str, max_age_days: int = 30) -> bool:
     p = _ticker_cache_path(ticker)
     if not p.exists():
+        return False
+    if p.stat().st_size <= 2:
         return False
     age = (time.time() - p.stat().st_mtime) / 86400
     return age < max_age_days
@@ -52,7 +60,7 @@ def _is_cached(ticker: str, max_age_days: int = 30) -> bool:
 
 def _fetch_ticker(ticker: str, api_key: str) -> list[dict]:
     """Fetch earnings surprises for one ticker from FMP. Returns raw JSON list."""
-    url = f"{FMP_BASE}/earnings-surprises?symbol={ticker}&apikey={api_key}"
+    url = f"{FMP_BASE}/earnings?symbol={ticker}&apikey={api_key}"
     resp = requests.get(url, timeout=15)
     if resp.status_code == 429:
         log.warning(f"  FMP rate limit hit on {ticker} — sleeping 60s")
@@ -63,7 +71,8 @@ def _fetch_ticker(ticker: str, api_key: str) -> list[dict]:
         return []
     data = resp.json()
     if isinstance(data, dict) and "Error Message" in data:
-        log.warning(f"  FMP {ticker}: {data['Error Message']}")
+        msg = _sanitize_fmp_message(str(data["Error Message"]), api_key)
+        log.warning(f"  FMP {ticker}: {msg}")
         return []
     return data if isinstance(data, list) else []
 
@@ -84,10 +93,12 @@ def _normalize(records: list[dict], ticker: str) -> pd.DataFrame:
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df = df.dropna(subset=["date"])
 
-    # FMP column names: actualEarningResult, estimatedEarning
+    # FMP column names vary by endpoint/version.
     rename = {
         "actualEarningResult": "epsActual",
         "estimatedEarning": "epsEstimate",
+        "epsActual": "epsActual",
+        "epsEstimated": "epsEstimate",
     }
     df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
 
@@ -129,7 +140,8 @@ def download_earnings(
             with open(cache_path, "w") as f:
                 json.dump(records, f)
         except Exception as exc:
-            log.warning(f"  {ticker} failed: {exc}")
+            # requests exceptions can include the full URL, which contains the API key.
+            log.warning(f"  {ticker} failed: {type(exc).__name__}")
         if _DELAY:
             time.sleep(_DELAY)
 

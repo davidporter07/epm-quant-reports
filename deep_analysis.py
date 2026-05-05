@@ -19,6 +19,7 @@ import pandas as pd
 import requests
 import yfinance as yf
 
+from earnings_refresh import load_recent_earnings_release, ticker_variants
 from news_store import load_news_store
 from universe_config import get_portfolio_tickers
 
@@ -150,7 +151,8 @@ def _get_epm_forecasts(ticker: str) -> Optional[Dict[str, float]]:
 
 def _get_news_headlines(ticker: str, max_headlines: int = 10) -> List[str]:
     store = load_news_store()
-    ticker_news = store[store["Ticker"] == ticker.upper()].copy()
+    variants = set(ticker_variants(ticker))
+    ticker_news = store[store["Ticker"].astype(str).str.upper().isin(variants)].copy()
 
     if not ticker_news.empty:
         ticker_news = ticker_news.sort_values("PublishedAt", ascending=False)
@@ -582,6 +584,7 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> Tuple[str, Dict[str, Any]]
     rel_perf     = _get_relative_performance(ticker, co_info.get("sector") or "")
     overnight    = _get_overnight_stats(ohlcv)
     eps_history  = _get_earnings_surprise_history(ticker)
+    earnings_release = load_recent_earnings_release(ticker)
 
     current = tech["current"]
     sector  = (co_info.get("sector") or "").lower()
@@ -787,6 +790,23 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> Tuple[str, Dict[str, Any]]
         f"and reinvestment rate justify the current growth premium. Does near-term volatility represent "
         f"an entry opportunity in a structural winner, or a breakdown in the growth thesis?"
     )
+    if earnings_release and earnings_release.get("actuals_available"):
+        eps_surprise = earnings_release.get("eps_surprise_pct")
+        eps_actual   = earnings_release.get("eps_actual")
+        eps_estimate = earnings_release.get("eps_estimate")
+        if eps_surprise is not None:
+            beat_label = (
+                "EXTRAORDINARY BEAT" if abs(eps_surprise) > 50
+                else "STRONG BEAT" if abs(eps_surprise) > 10
+                else "BEAT"
+            )
+            est_str = f"Est ${eps_estimate:.2f} → " if eps_estimate is not None else ""
+            act_str = f"Actual ${eps_actual:.2f}. " if eps_actual is not None else ". "
+            lines.append(
+                f"RECENT EARNINGS QUALITY ({beat_label}): Most recent quarter EPS surprised by "
+                f"{eps_surprise:+.1f}% ({est_str}{act_str}"
+                f"Analyst consensus price targets predate this release and may understate upside."
+            )
     lines.append("")
 
     # ── VALUE INVESTOR PERSPECTIVE ────────────────────────────────────────────
@@ -881,6 +901,29 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> Tuple[str, Dict[str, Any]]
             "Energy sector subject to OPEC+ production decisions, geopolitical supply disruptions, "
             "and energy transition policy risk. Global demand growth tied to China economic activity."
         )
+    elif "communication" in sector:
+        lines.append(
+            f"{ticker} as a communication services company faces infrastructure concentration risk: "
+            f"AI and cloud infrastructure depends on custom silicon (e.g. TPUs) sourced from TSMC's "
+            f"advanced nodes — subject to Taiwan geopolitical risk and semiconductor export controls. "
+            f"Digital advertising revenue is exposed to EU/US antitrust actions that could force "
+            f"structural remedies. Data center build-out requires rare-earth materials and power "
+            f"infrastructure subject to permitting and grid constraints. These are structural risks "
+            f"not captured by price-based models."
+        )
+    elif "consumer cyclical" in sector or "retail" in sector or "consumer discretionary" in sector:
+        lines.append(
+            f"{ticker} as a consumer-cyclical business carries structural risks not captured by "
+            f"price-based momentum models: tariff exposure on imported goods (China remains the "
+            f"dominant sourcing geography for many discretionary categories and third-party seller "
+            f"inventory), consumer spending sensitivity to real wage growth, credit card "
+            f"delinquencies, and interest rates, and category-specific regulatory pressure — "
+            f"for platform retailers, FTC/DOJ/EU antitrust scrutiny of self-preferencing, bundling, "
+            f"and seller fee structures; for auto and durable-goods makers, EV credit policy, "
+            f"NHTSA recall regimes, and battery raw-material supply concentration. For diversified "
+            f"businesses, cloud or ad segments may carry most of the profit while retail margins "
+            f"stay structurally compressed."
+        )
     else:
         lines.append(
             f"{ticker} faces sector-specific supply chain dependencies and geopolitical "
@@ -918,6 +961,30 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> Tuple[str, Dict[str, Any]]
     else:
         lines.append("Earnings date not available. Monitor for pre-earnings implied volatility expansion.")
 
+    if earnings_release:
+        src = earnings_release.get("source") or "unknown"
+        as_of = earnings_release.get("as_of", "")
+        lines.append(f"── POST-RELEASE EARNINGS ACTUALS (source: {src}, captured: {as_of}) ───────────")
+        lines.append("NOTE: These are CONFIRMED POST-RELEASE figures and supersede any pre-release estimates elsewhere in this brief.")
+        if earnings_release.get("actuals_available"):
+            parts = []
+            if earnings_release.get("eps_estimate") is not None:
+                parts.append(f"Est EPS ${earnings_release['eps_estimate']:.2f}")
+            if earnings_release.get("eps_actual") is not None:
+                parts.append(f"Reported EPS ${earnings_release['eps_actual']:.2f}")
+            if earnings_release.get("eps_surprise_pct") is not None:
+                parts.append(f"EPS surprise {earnings_release['eps_surprise_pct']:+.1f}%")
+            if earnings_release.get("revenue_estimate") is not None:
+                parts.append(f"Rev Est ${earnings_release['revenue_estimate'] / 1e6:.0f}M")
+            lines.append("  " + " | ".join(parts))
+        else:
+            lines.append("  Reported EPS not yet available — analysis uses pre-release estimates.")
+        if earnings_release.get("headlines"):
+            lines.append("  Same-day earnings headlines:")
+            for h in earnings_release["headlines"][:5]:
+                lines.append(f"    - {h}")
+        lines.append("")
+
     if eps_history:
         lines.append(f"Recent EPS Surprise History (last {len(eps_history)} quarters):")
         for rec in eps_history:
@@ -944,6 +1011,17 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> Tuple[str, Dict[str, Any]]
             lines.append(
                 "PEAD Signal: Below-50% beat rate increases downside risk around earnings. "
                 "Negative surprises tend to generate sharper post-earnings selling pressure."
+            )
+
+    # Flag extraordinary recent beat — may not appear in historical avg if just released
+    if earnings_release and earnings_release.get("eps_surprise_pct") is not None:
+        recent_surprise = earnings_release["eps_surprise_pct"]
+        if abs(recent_surprise) > 30:
+            lines.append(
+                f"EXTRAORDINARY EARNINGS BEAT: Most recent quarter EPS surprised by {recent_surprise:+.1f}%. "
+                f"This exceeds the historical PEAD threshold by a wide margin. Historical research "
+                f"shows mega-beats of this magnitude (>30%) generate sustained positive drift of "
+                f"3-6%+ over 20-60 trading days — substantially stronger than the standard PEAD signal."
             )
     lines.append("")
 
@@ -1100,7 +1178,36 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> Tuple[str, Dict[str, Any]]
         key_facts.update({
             "next_earnings_date":  earnings.get("date"),
             "days_to_earnings":    earnings.get("days_until"),
+            "earnings_release_time": earnings.get("release_time"),
         })
+
+    if earnings_release:
+        key_facts.update({
+            "earnings_release_detected": earnings_release.get("actuals_available") or earnings_release.get("news_available"),
+            "earnings_release_date": earnings_release.get("earnings_date"),
+            "earnings_refresh_complete": earnings_release.get("refresh_complete"),
+            "reported_eps": earnings_release.get("eps_actual"),
+            "estimated_eps": earnings_release.get("eps_estimate"),
+            "eps_release_surprise_pct": earnings_release.get("eps_surprise_pct"),
+            "earnings_release_source": earnings_release.get("source"),
+            "earnings_release_as_of": earnings_release.get("as_of"),
+        })
+        if earnings_release.get("headlines"):
+            key_facts["earnings_release_headlines"] = earnings_release["headlines"][:8]
+
+        # Flag stale analyst targets — targets predate the release so upside calc is unreliable
+        if earnings_release.get("actuals_available"):
+            key_facts["analyst_targets_may_be_stale"] = True
+
+        # Enhance PEAD signal when most recent beat is extraordinary
+        _release_surprise = earnings_release.get("eps_surprise_pct")
+        if _release_surprise is not None and abs(_release_surprise) > 30:
+            key_facts["pead_signal"] = "extraordinary_beat_positive_drift"
+            key_facts["pead_extraordinary_note"] = (
+                f"Most recent EPS beat of {_release_surprise:+.1f}% is extraordinary — "
+                f"far exceeds the historical PEAD threshold (>3%). Historical research indicates "
+                f"beats of this magnitude generate positive drift of 3-6%+ over 20-60 trading days."
+            )
 
     if scenarios:
         ranked = sorted(scenarios, key=lambda s: s[-1]["close"])

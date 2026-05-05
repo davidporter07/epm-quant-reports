@@ -72,8 +72,8 @@ const MODEL_DESCRIPTIONS = [
     color: '#f472b6',
     summary: 'A PyTorch Temporal Convolutional Network that learns directly from 60-day price sequences.',
     howItWorks: [
-      'Processes a 60-trading-day window of 11 price/volume features (returns, volatility, MA gaps, RSI) as a sequence.',
-      'A FeatureGate layer (learnable sigmoid weights) lets the network discover which of the 11 inputs are most predictive — and these weights strengthen with each training run.',
+      'Processes a 60-trading-day window of approved price-sequence features (returns, volatility, and moving-average gaps) as a sequence.',
+      'A FeatureGate layer (learnable sigmoid weights) lets the network discover which approved inputs are most predictive — and these weights are preserved across warm-start training runs.',
       'Four dilated TCN blocks with residual connections capture patterns at multiple time scales (days, weeks, months).',
       'A TemporalAttentionPool then learns which specific days within the 60-day window are most informative for the prediction, replacing a naive average.',
       'Outputs both a mean forecast (μ) and an uncertainty estimate (σ) trained via Gaussian negative log-likelihood — so confidence intervals come from the model\'s own learned uncertainty, not a fixed rule.',

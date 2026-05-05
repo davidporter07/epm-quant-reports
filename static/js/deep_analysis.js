@@ -14,9 +14,13 @@
   let _jobStartedAt = null;
   let _queueWaitMin = 0;
   let _queueWaitSetAt = null;
+  let _countdownTimer = null;
+  let _notBeforeTarget = null;
   const TOTAL_EST_MIN = 30;
 
   const STAGE_LABELS = [
+    { key: 'waiting_earnings',  label: 'Earnings',  full: 'Waiting for Earnings Release' },
+    { key: 'earnings_refresh',  label: 'Refresh',   full: 'Refreshing Earnings & News' },
     { key: 'seed_doc',          label: 'Data',      full: 'Building Analysis Document' },
     { key: 'council_personas',  label: 'Council',   full: 'Analyst Council Deliberating' },
     { key: 'council_synthesis', label: 'Synthesis', full: 'Synthesizing Report' },
@@ -24,6 +28,8 @@
   ];
 
   const STAGE_DESCS = {
+    waiting_earnings:  'Analysis will start after the projected earnings release window',
+    earnings_refresh:  'Fetching same-day earnings actuals and current headlines',
     seed_doc:          'Synthesizing Kronos forecasts, EPM models, technicals & news',
     council_personas:  'Seven specialist analysts writing grounded perspectives',
     council_synthesis: 'Chief Analyst writing the final institutional research note',
@@ -75,6 +81,28 @@
     }
   }
 
+  function _formatCountdown(ms) {
+    const totalSec = Math.max(0, Math.floor(ms / 1000));
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  }
+
+  function _tickCountdown() {
+    const queueEl = document.getElementById('dalQueueInfo');
+    if (!queueEl || !_notBeforeTarget) return;
+    const remaining = _notBeforeTarget - Date.now();
+    if (remaining > 0) {
+      queueEl.textContent = `Waiting for earnings release — ${_formatCountdown(remaining)} remaining`;
+    } else {
+      queueEl.textContent = 'Earnings window reached — fetching actuals…';
+      clearInterval(_countdownTimer);
+      _countdownTimer = null;
+      _notBeforeTarget = null;
+    }
+    queueEl.style.display = '';
+  }
+
   function _showLaunchCards() {
     const launch = document.getElementById('dalLaunchCards');
     const progress = document.getElementById('dalProgress');
@@ -103,6 +131,21 @@
     const queueAhead = status.queue_ahead || 0;
     if (nameEl) nameEl.textContent = isQueued ? (queueAhead > 0 ? 'Waiting in Queue' : 'Starting…') : stageMeta.full;
     if (descEl) descEl.textContent = isQueued ? (queueAhead > 0 ? 'Another analysis is running — yours will start automatically' : 'Picked up by worker shortly') : (STAGE_DESCS[status.stage] || '');
+
+    const isWaitingEarnings = status.stage === 'waiting_earnings';
+    if (isWaitingEarnings) {
+      if (nameEl) nameEl.textContent = stageMeta.full;
+      if (descEl) descEl.textContent = STAGE_DESCS.waiting_earnings;
+    }
+    if (isWaitingEarnings && status.not_before) {
+      _notBeforeTarget = new Date(status.not_before).getTime();
+      _tickCountdown();
+      if (!_countdownTimer) _countdownTimer = setInterval(_tickCountdown, 1000);
+    } else if (!isWaitingEarnings && _countdownTimer) {
+      clearInterval(_countdownTimer);
+      _countdownTimer = null;
+      _notBeforeTarget = null;
+    }
 
     // Progress bar + pct
     const bar = document.getElementById('dalProgressBar');
@@ -137,7 +180,14 @@
     // Queue position info
     const queueEl = document.getElementById('dalQueueInfo');
     if (queueEl) {
-      if (isQueued && status.queue_position) {
+      if (isQueued && status.not_before) {
+        const target = new Date(status.not_before).getTime();
+        const remaining = Math.max(0, Math.round((target - Date.now()) / 60000));
+        queueEl.textContent = remaining > 0
+          ? `Waiting for earnings window - starts in ~${remaining} min`
+          : 'Earnings window reached - starting soon';
+        queueEl.style.display = '';
+      } else if (isQueued && status.queue_position) {
         queueEl.dataset.queuePos = status.queue_position;
         const elapsedMin = _queueWaitSetAt ? (Date.now() - _queueWaitSetAt) / 60000 : 0;
         const remaining  = Math.max(0, Math.round(_queueWaitMin - elapsedMin));
@@ -186,7 +236,7 @@
         if (runBtn) {
           runBtn.disabled = false;
           runBtn.textContent = 'Run Analyst Council';
-          runBtn.onclick = () => _runDeepAnalysis(_currentTicker);
+          runBtn.onclick = () => _runDeepAnalysis(_currentTicker, true);
         }
         const lab = document.getElementById('deepAnalysisLab');
         if (lab) lab.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -195,8 +245,10 @@
   }
 
   function _stopPolling() {
-    if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
-    if (_etaTimer)  { clearInterval(_etaTimer);  _etaTimer  = null; }
+    if (_pollTimer)      { clearInterval(_pollTimer);      _pollTimer      = null; }
+    if (_etaTimer)       { clearInterval(_etaTimer);       _etaTimer       = null; }
+    if (_countdownTimer) { clearInterval(_countdownTimer); _countdownTimer = null; }
+    _notBeforeTarget = null;
   }
 
   async function _cancelJob() {
@@ -262,7 +314,7 @@
     if (cancelBtn) { cancelBtn.disabled = false; cancelBtn.textContent = 'Cancel Analysis'; cancelBtn.onclick = _cancelJob; }
   }
 
-  async function _runDeepAnalysis(ticker) {
+  async function _runDeepAnalysis(ticker, forceFresh = false) {
     _jobStartedAt   = null;
     _queueWaitMin   = 0;
     _queueWaitSetAt = null;
@@ -270,7 +322,8 @@
     if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
 
     try {
-      const r = await fetch(`/api/deep/${encodeURIComponent(ticker)}`, {
+      const url = `/api/deep/${encodeURIComponent(ticker)}` + (forceFresh ? '?force_fresh=1' : '');
+      const r = await fetch(url, {
         method: 'POST',
         credentials: 'include',
       });
@@ -324,7 +377,7 @@
       if (runBtn) {
         runBtn.disabled = false;
         runBtn.textContent = 'Run Analyst Council';
-        runBtn.onclick = () => _runDeepAnalysis(_currentTicker);
+        runBtn.onclick = () => _runDeepAnalysis(_currentTicker, true);
       }
       return;
     }

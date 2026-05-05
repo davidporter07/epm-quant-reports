@@ -28,7 +28,7 @@ sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 MAG7_DEFAULT = "AAPL,MSFT,AMZN,NVDA,GOOG,META,TSLA"
 
 SERVER_USER = "dporter02"
-SERVER_HOST = "192.168.1.145"
+SERVER_HOST = "100.101.63.65"
 SERVER_PATH = "/opt/epm-market-intelligence"
 SSH_KEY = str(Path.home() / ".ssh" / "epm_server")
 
@@ -39,6 +39,8 @@ SYNC_PY_FILES = [
     "app.py",
     "fetch_enrichment.py",
     "generate_market_commentary.py",
+    "generate_pdf_report.py",
+    "send_email.py",
     "monitor.py",
     "features.py",
     "fama_french.py",
@@ -47,6 +49,8 @@ SYNC_PY_FILES = [
     "dl_feature_gate.py",
     "deep_analysis.py",
     "deep_analysis_worker.py",
+    "earnings_calendar.py",
+    "earnings_refresh.py",
     "local_council.py",
 ]
 
@@ -160,6 +164,17 @@ def main():
         rc = run([py, "feature_dashboard_gen.py"])
         if rc != 0:
             print("[WARN] feature_dashboard_gen.py failed.")
+
+    # Refresh earnings calendar for watched tickers
+    try:
+        from earnings_calendar import refresh_expired
+        refreshed = refresh_expired()
+        if refreshed:
+            print(f"[earnings_calendar] Refreshed {len(refreshed)} ticker(s): {', '.join(refreshed)}")
+        else:
+            print("[earnings_calendar] All watched ticker dates are current.")
+    except Exception as e:
+        print(f"[WARN] earnings_calendar refresh failed: {e}")
 
     # Sync output to server
     sync_to_server()
