@@ -498,6 +498,16 @@ if __name__ == "__main__":
                     print(_msg)
                     logging.error(_msg)
                     sys.exit(1)
+                _source = _c.get('narrative_source', '')
+                if _source != 'llm':
+                    _msg = (
+                        f"[BLOCK] Narrative source is {_source!r} (expected 'llm') — "
+                        f"deterministic fallback was used. Email send blocked. "
+                        f"Investigate logs/generate_market_commentary.log."
+                    )
+                    print(_msg)
+                    logging.error(_msg)
+                    sys.exit(1)
             except Exception as _gate_err:
                 _msg = f"[BLOCK] Could not verify commentary freshness ({_gate_err}). Email send blocked."
                 print(_msg)

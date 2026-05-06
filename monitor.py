@@ -2373,7 +2373,17 @@ if not DEV_MODE:
     subprocess.run([VENV_PYTHON, "generate_toggle_chart.py"], check=True)
     subprocess.run([VENV_PYTHON, "generate_charts.py"], check=True)
 # Generate market-level LLM commentary; non-zero exit means narrative unavailable.
-_gmc_result = subprocess.run([VENV_PYTHON, "generate_market_commentary.py"])
+os.makedirs("logs", exist_ok=True)
+_gmc_log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "generate_market_commentary.log")
+_gmc_result = subprocess.run(
+    [VENV_PYTHON, "generate_market_commentary.py"],
+    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    text=True, encoding="utf-8", errors="replace",
+)
+sys.stdout.write(_gmc_result.stdout)
+with open(_gmc_log_path, "a", encoding="utf-8") as _gmc_lf:
+    _gmc_lf.write(f"\n--- {datetime.now().isoformat()} ---\n")
+    _gmc_lf.write(_gmc_result.stdout)
 _gmc_ok = (_gmc_result.returncode == 0)
 if not _gmc_ok:
     print("[WARN] generate_market_commentary.py returned non-zero — narrative unavailable; PDF will be skipped.")
