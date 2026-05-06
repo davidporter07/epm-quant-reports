@@ -1174,3 +1174,130 @@ Recommended next step:
    - validation selection requiring direction + IC + bullish-rate bounds
 4. Keep all of this research-only until repeated-seed IC is non-negative.
 ```
+
+## Continuation Update: Anti-Collapse Objective Tests
+
+Added:
+
+```text
+dl_sign_regularized_experiment.py
+```
+
+This is research-only and does not modify production inference. It trains the
+same TCN architecture with optional:
+
+```text
+batch sign-balance loss
+Pearson correlation auxiliary loss
+pairwise ranking auxiliary loss
+balanced sign sampler
+validation selection score including direction, IC, MAE, and bullish-rate penalty
+```
+
+Initial objective grid:
+
+```powershell
+python dl_sign_regularized_experiment.py --seeds 20260505,20260506,20260507 --corr-weights 0,0.05 --balance-weights 0,0.1,0.5 --epochs 3
+```
+
+Result:
+
+```text
+Best direction: 65.07%, but bullish rate 93.19%, IC -0.0419
+Best in-bounds bullish-rate rows: direction around 48%-54%, IC negative
+Conclusion: Pearson + simple sign-balance did not fix rank quality.
+```
+
+Pairwise ranking grid:
+
+```powershell
+python dl_sign_regularized_experiment.py --seeds 20260505,20260506,20260507 --corr-weights 0 --balance-weights 0.1,0.5 --rank-weights 0.01,0.05 --epochs 3 --output data\experiment\sign_regularized_rank_comparison.json --csv-output data\experiment\sign_regularized_rank_comparison.csv
+```
+
+Result:
+
+```text
+Best IC: +0.0355, direction 63.39%, but bullish rate 100%
+Only in-bounds bullish-rate row: direction 49.22%, IC -0.0573
+Conclusion: pairwise rank loss can improve IC, but still collapses sign.
+```
+
+Smoother/stronger balance grid:
+
+```powershell
+python dl_sign_regularized_experiment.py --seeds 20260505,20260506,20260507 --corr-weights 0 --balance-weights 1.0,2.0 --rank-weights 0.01,0.05 --balance-temperature 0.05 --rank-temperature 0.02 --epochs 3 --output data\experiment\sign_regularized_smooth_balance_comparison.json --csv-output data\experiment\sign_regularized_smooth_balance_comparison.csv
+```
+
+Result:
+
+```text
+Best IC: +0.0185, direction 63.17%, but bullish rate 97.99%
+Best in-bounds row: direction 56.58%, IC -0.0305, bullish rate 72.66%
+Conclusion: smoother sign-balance helps, but does not stabilize IC.
+```
+
+Balanced sampler grid:
+
+```powershell
+python dl_sign_regularized_experiment.py --seeds 20260505,20260506,20260507 --corr-weights 0 --balance-weights 0,0.5,1.0 --rank-weights 0,0.01 --balance-temperature 0.05 --balanced-sampler --epochs 3 --output data\experiment\sign_regularized_balanced_sampler_comparison.json --csv-output data\experiment\sign_regularized_balanced_sampler_comparison.csv
+```
+
+Notable result:
+
+```text
+seed 20260505, balance 0.5, rank 0, balanced sampler:
+MAE: 0.064269
+RMSE: 0.083220
+Directional Accuracy: 64.17%
+IC_Spearman: +0.0213
+Bullish raw signal rate: 87.83%
+```
+
+Post-hoc threshold check on that model:
+
+```text
+Raw threshold 0.000000:
+Direction 64.17%, bullish 87.83%, IC +0.0213
+
+Threshold 0.005022, bullish capped at 75%:
+Direction 59.15%, bullish 75.00%, IC +0.0213
+```
+
+This is the first candidate with positive IC and materially better direction
+while price-error metrics are also improved. However, it is still one seed.
+
+Additional seeds for same setup:
+
+```powershell
+python dl_sign_regularized_experiment.py --seeds 20260508,20260509 --corr-weights 0 --balance-weights 0.5 --rank-weights 0 --balance-temperature 0.05 --balanced-sampler --epochs 3 --output data\experiment\sign_regularized_balanced_sampler_more_seeds.json --csv-output data\experiment\sign_regularized_balanced_sampler_more_seeds.csv
+```
+
+Result:
+
+```text
+seed 20260508: direction 55.02%, IC -0.0836, bullish 71.76%
+seed 20260509: direction 53.57%, IC -0.1338, bullish 78.57%
+```
+
+Conclusion:
+
+- Balanced sign sampling is the most promising lever so far.
+- It produced one genuinely promising seed, especially after thresholding.
+- It is not stable enough across seeds for promotion.
+- The next step should be a longer training run and/or architecture change that
+  explicitly separates magnitude and rank/sign learning while enforcing a
+  validation gate.
+
+Recommended next experiment:
+
+```text
+1. Continue with balanced sampler enabled.
+2. Train the best setup for longer (8-12 epochs) across 5 seeds.
+3. Add stricter validation gate:
+   - bullish rate inside 35%-75%
+   - IC non-negative
+   - direction above production baseline
+   - MAE/RMSE within guardrails
+4. If stability remains poor, revisit dual-head with balanced sampler and
+   validation gate, not raw BCE direction loss.
+```
