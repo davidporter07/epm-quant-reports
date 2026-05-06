@@ -1447,3 +1447,101 @@ Conclusion:
   - select by non-negative IC and bounded bullish rate as hard constraints,
   - or test a small multi-task objective where the direction head influences
     representation learning but final sign/rank comes from the return head.
+
+## Continuation Update: Return-Head Rank/IC Hard-Gate Run
+
+Updated:
+
+```text
+dl_sign_regularized_experiment.py
+```
+
+Added research-only diagnostics and controls:
+
+```text
+Daily_IC_Mean
+Daily_IC_Positive_Rate
+Daily_Directional_Accuracy
+--nll-weights
+--hard-gate
+--ic-min
+--direction-min
+```
+
+The selector can now heavily penalize checkpoints that miss:
+
+```text
+IC_Spearman >= --ic-min
+Directional_Accuracy >= --direction-min
+--bullish-min <= pct_bullish_pred <= --bullish-max
+```
+
+Focused rank/IC grid:
+
+```powershell
+python dl_sign_regularized_experiment.py --seeds 20260505,20260506,20260507 --corr-weights 0.05 --balance-weights 0.5,1.0 --rank-weights 0.01,0.05 --nll-weights 1.0,0.5 --balance-temperature 0.05 --rank-temperature 0.02 --balanced-sampler --hard-gate --ic-min 0 --direction-min 0.5085 --epochs 5 --batch-size 256 --val-days 252 --lr 0.001 --output data\experiment\sign_regularized_hard_gate_rank_ic.json --csv-output data\experiment\sign_regularized_hard_gate_rank_ic.csv
+```
+
+Aggregate:
+
+```text
+Mean MAE: 0.070473
+Mean RMSE: 0.090142
+Mean Direction: 46.56%
+Mean IC_Spearman: -0.0853
+Mean Daily_IC_Mean: -0.0811
+Mean Daily_IC_Positive_Rate: 40.76%
+Mean bullish rate: 53.19%
+```
+
+Best pooled-IC row:
+
+```text
+seed 20260505, corr 0.05, balance 1.0, rank 0.01, nll 1.0:
+MAE 0.064108, RMSE 0.083279, Direction 58.15%, IC +0.0403,
+Daily_IC_Mean -0.0232, bullish 75.56%
+```
+
+With the strict 75% bullish cap, no row satisfied all hard gates:
+
+```text
+IC >= 0
+Direction >= 50.85%
+35% <= bullish <= 75%
+```
+
+Sanity check with a slightly wider 80% bullish cap on the best setup across
+five seeds:
+
+```powershell
+python dl_sign_regularized_experiment.py --seeds 20260505,20260506,20260507,20260508,20260509 --corr-weights 0.05 --balance-weights 1.0 --rank-weights 0.01 --nll-weights 1.0 --balance-temperature 0.05 --rank-temperature 0.02 --balanced-sampler --hard-gate --ic-min 0 --direction-min 0.5085 --bullish-max 0.80 --epochs 5 --batch-size 256 --val-days 252 --lr 0.001 --output data\experiment\sign_regularized_best_rank_ic_5seed.json --csv-output data\experiment\sign_regularized_best_rank_ic_5seed.csv
+```
+
+Five-seed aggregate:
+
+```text
+Mean MAE: 0.069628
+Mean RMSE: 0.089292
+Mean Direction: 48.10%
+Mean IC_Spearman: -0.0764
+Mean Daily_IC_Mean: -0.0900
+Mean Daily_IC_Positive_Rate: 41.41%
+Mean bullish rate: 56.76%
+```
+
+Interpretation:
+
+- The rank/IC objective can create an attractive single checkpoint, but the
+  signal did not repeat across seeds.
+- Daily cross-sectional IC remained negative even for the best pooled-IC row.
+- Widening the bullish cap to 80% only preserved the seed-20260505 result; the
+  five-seed mean still failed direction and IC requirements.
+
+Conclusion:
+
+- This objective family is still not stable enough for promotion.
+- Hard-gated validation is useful and should stay.
+- The next useful research direction is to change the sampling/evaluation unit
+  from random pooled windows to date-grouped batches, because the target
+  business problem is cross-sectional ranking by date. Batch-level rank loss on
+  randomly mixed dates is not matching the validation objective tightly enough.

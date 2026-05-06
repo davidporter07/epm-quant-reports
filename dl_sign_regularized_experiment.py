@@ -92,8 +92,26 @@ def _pairwise_rank_loss(pred: torch.Tensor, target: torch.Tensor, temperature: f
     return torch.nn.functional.softplus(-margin).mean()
 
 
-def _metrics(pred: np.ndarray, actual: np.ndarray) -> dict:
+def _daily_metrics(pred: np.ndarray, actual: np.ndarray, dates_ns: np.ndarray) -> dict:
+    rows = pd.DataFrame({"pred": pred, "actual": actual, "date": dates_ns})
+    ic_vals = []
+    dir_vals = []
+    for _, g in rows.groupby("date", sort=False):
+        if len(g) < 2:
+            continue
+        dir_vals.append(float(np.mean(np.sign(g["actual"]) == np.sign(g["pred"]))))
+        if g["pred"].std(ddof=0) > 1e-12 and g["actual"].std(ddof=0) > 1e-12:
+            ic_vals.append(float(g["pred"].rank().corr(g["actual"].rank())))
     return {
+        "Daily_IC_Mean": float(np.mean(ic_vals)) if ic_vals else float("nan"),
+        "Daily_IC_Positive_Rate": float(np.mean(np.asarray(ic_vals) >= 0.0)) if ic_vals else float("nan"),
+        "Daily_Directional_Accuracy": float(np.mean(dir_vals)) if dir_vals else float("nan"),
+        "Daily_Count": int(len(dir_vals)),
+    }
+
+
+def _metrics(pred: np.ndarray, actual: np.ndarray, dates_ns: np.ndarray | None = None) -> dict:
+    out = {
         "MAE": float(np.mean(np.abs(actual - pred))),
         "RMSE": float(np.sqrt(np.mean((actual - pred) ** 2))),
         "Directional_Accuracy": float(np.mean(np.sign(actual) == np.sign(pred))),
@@ -109,22 +127,28 @@ def _metrics(pred: np.ndarray, actual: np.ndarray) -> dict:
         "pred_std": float(np.std(pred)),
         "N": int(len(actual)),
     }
+    if dates_ns is not None:
+        out.update(_daily_metrics(pred, actual, dates_ns))
+    return out
 
 
 def _evaluate(model: nn.Module, loader: DataLoader) -> tuple[dict, np.ndarray, np.ndarray]:
     model.eval()
     preds = []
     actuals = []
+    dates = []
     losses = []
     with torch.no_grad():
-        for xb, yb, _, _ in loader:
+        for xb, yb, _, date_ns in loader:
             mu, log_sigma = model(xb)
             losses.append(float(gaussian_nll(mu, log_sigma, yb).item()))
             preds.append(mu.cpu().numpy().ravel())
             actuals.append(yb.cpu().numpy().ravel())
+            dates.append(np.asarray(date_ns).ravel())
     pred = np.concatenate(preds)
     actual = np.concatenate(actuals)
-    metrics = _metrics(pred, actual)
+    date_arr = np.concatenate(dates)
+    metrics = _metrics(pred, actual, date_arr)
     metrics["NLL"] = float(np.mean(losses))
     return metrics, pred, actual
 
@@ -144,14 +168,39 @@ def _balanced_sampler(ds: PanelSequenceDataset) -> WeightedRandomSampler:
     )
 
 
-def _selection_score(metrics: dict, bullish_min: float, bullish_max: float) -> float:
+def _selection_score(
+    metrics: dict,
+    bullish_min: float,
+    bullish_max: float,
+    ic_min: float,
+    direction_min: float,
+    hard_gate: bool,
+) -> float:
     bullish = float(metrics["pct_bullish_pred"])
-    in_bounds = bullish_min <= bullish <= bullish_max
-    balance_penalty = 0.0 if in_bounds else min(abs(bullish - bullish_min), abs(bullish - bullish_max))
+    ic = float(metrics["IC_Spearman"])
+    if not np.isfinite(ic):
+        ic = -1.0
+    daily_ic = float(metrics.get("Daily_IC_Mean", float("nan")))
+    if not np.isfinite(daily_ic):
+        daily_ic = ic
+
+    balance_violation = 0.0
+    if bullish < bullish_min:
+        balance_violation = bullish_min - bullish
+    elif bullish > bullish_max:
+        balance_violation = bullish - bullish_max
+    ic_violation = max(0.0, float(ic_min) - ic)
+    direction_violation = max(0.0, float(direction_min) - float(metrics["Directional_Accuracy"]))
+    hard_penalty = 0.0
+    if hard_gate:
+        hard_penalty = 10.0 * balance_violation + 5.0 * ic_violation + 2.0 * direction_violation
+
     return (
         float(metrics["Directional_Accuracy"])
-        + 0.50 * float(metrics["IC_Spearman"])
-        - 0.50 * balance_penalty
+        + 0.50 * ic
+        + 0.25 * daily_ic
+        - 0.50 * balance_violation
+        - hard_penalty
         - 0.05 * float(metrics["MAE"])
     )
 
@@ -164,6 +213,7 @@ def _train_one(
     batch_size: int,
     val_days: int,
     lr: float,
+    nll_weight: float,
     corr_weight: float,
     balance_weight: float,
     rank_weight: float,
@@ -172,6 +222,9 @@ def _train_one(
     balanced_sampler: bool,
     bullish_min: float,
     bullish_max: float,
+    ic_min: float,
+    direction_min: float,
+    hard_gate: bool,
 ) -> dict:
     _set_seed(seed)
     panel = _ensure_panel_schema(read_panel(panel_path))
@@ -203,6 +256,7 @@ def _train_one(
         f"signreg_seed{seed}_cw{str(corr_weight).replace('.', 'p')}"
         f"_bw{str(balance_weight).replace('.', 'p')}"
         f"_rw{str(rank_weight).replace('.', 'p')}"
+        f"_nw{str(nll_weight).replace('.', 'p')}"
     )
     if balanced_sampler:
         variant = f"{variant}_bs"
@@ -217,7 +271,7 @@ def _train_one(
         for xb, yb, _, _ in train_loader:
             opt.zero_grad(set_to_none=True)
             mu, log_sigma = model(xb)
-            loss = gaussian_nll(mu, log_sigma, yb)
+            loss = float(nll_weight) * gaussian_nll(mu, log_sigma, yb)
             if corr_weight > 0:
                 loss = loss + float(corr_weight) * _pearson_corr_loss(mu, yb)
             if balance_weight > 0:
@@ -231,13 +285,14 @@ def _train_one(
 
         scheduler.step()
         metrics, _, _ = _evaluate(model, val_loader)
-        score = _selection_score(metrics, bullish_min, bullish_max)
+        score = _selection_score(metrics, bullish_min, bullish_max, ic_min, direction_min, hard_gate)
         print(
             f"seed={seed} cw={corr_weight} bw={balance_weight} epoch={epoch} "
-            f"rw={rank_weight} "
+            f"rw={rank_weight} nw={nll_weight} "
             f"train={np.mean(train_losses):.6f} val_nll={metrics['NLL']:.6f} "
             f"dir={metrics['Directional_Accuracy']:.4f} ic={metrics['IC_Spearman']:.4f} "
-            f"bull={metrics['pct_bullish_pred']:.4f} score={score:.4f}"
+            f"daily_ic={metrics['Daily_IC_Mean']:.4f} bull={metrics['pct_bullish_pred']:.4f} "
+            f"score={score:.4f}"
         )
         if score > best["score"]:
             best = {
@@ -260,7 +315,11 @@ def _train_one(
             "corr_weight": corr_weight,
             "balance_weight": balance_weight,
             "rank_weight": rank_weight,
+            "nll_weight": nll_weight,
             "balanced_sampler": balanced_sampler,
+            "hard_gate": hard_gate,
+            "ic_min": ic_min,
+            "direction_min": direction_min,
             "selection_score": best["score"],
         },
         model_path,
@@ -285,7 +344,11 @@ def _train_one(
         "corr_weight": corr_weight,
         "balance_weight": balance_weight,
         "rank_weight": rank_weight,
+        "nll_weight": nll_weight,
         "balanced_sampler": balanced_sampler,
+        "hard_gate": hard_gate,
+        "ic_min": ic_min,
+        "direction_min": direction_min,
         "balance_temperature": balance_temperature,
         "rank_temperature": rank_temperature,
         "selection_score": float(best["score"]),
@@ -300,7 +363,17 @@ def _train_one(
 
 def _aggregate(rows: list[dict]) -> dict:
     df = pd.DataFrame([{**row, **row["metrics"]} for row in rows])
-    metrics = ["MAE", "RMSE", "Directional_Accuracy", "Correlation", "IC_Spearman", "pct_bullish_pred"]
+    metrics = [
+        "MAE",
+        "RMSE",
+        "Directional_Accuracy",
+        "Correlation",
+        "IC_Spearman",
+        "Daily_IC_Mean",
+        "Daily_IC_Positive_Rate",
+        "Daily_Directional_Accuracy",
+        "pct_bullish_pred",
+    ]
     out = {}
     for metric in metrics:
         vals = pd.to_numeric(df[metric], errors="coerce").dropna()
@@ -321,6 +394,7 @@ def main() -> None:
     ap.add_argument("--corr-weights", default="0,0.05,0.1")
     ap.add_argument("--balance-weights", default="0,0.1,0.5")
     ap.add_argument("--rank-weights", default="0")
+    ap.add_argument("--nll-weights", default="1.0")
     ap.add_argument("--balance-temperature", type=float, default=0.02)
     ap.add_argument("--rank-temperature", type=float, default=0.02)
     ap.add_argument("--balanced-sampler", action="store_true")
@@ -330,6 +404,9 @@ def main() -> None:
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--bullish-min", type=float, default=0.35)
     ap.add_argument("--bullish-max", type=float, default=0.75)
+    ap.add_argument("--ic-min", type=float, default=0.0)
+    ap.add_argument("--direction-min", type=float, default=0.5085)
+    ap.add_argument("--hard-gate", action="store_true")
     ap.add_argument("--output", type=Path, default=OUT_PATH)
     ap.add_argument("--csv-output", type=Path, default=CSV_PATH)
     args = ap.parse_args()
@@ -340,29 +417,34 @@ def main() -> None:
         for corr_weight in _parse_floats(args.corr_weights):
             for balance_weight in _parse_floats(args.balance_weights):
                 for rank_weight in _parse_floats(args.rank_weights):
-                    print(
-                        f"\n=== sign regularized seed={seed} corr={corr_weight} "
-                        f"balance={balance_weight} rank={rank_weight} ==="
-                    )
-                    results.append(
-                        _train_one(
-                            panel_path=args.panel,
-                            extra_features=extra_features,
-                            seed=seed,
-                            epochs=int(args.epochs),
-                            batch_size=int(args.batch_size),
-                            val_days=int(args.val_days),
-                            lr=float(args.lr),
-                            corr_weight=float(corr_weight),
-                            balance_weight=float(balance_weight),
-                            rank_weight=float(rank_weight),
-                            balance_temperature=float(args.balance_temperature),
-                            rank_temperature=float(args.rank_temperature),
-                            balanced_sampler=bool(args.balanced_sampler),
-                            bullish_min=float(args.bullish_min),
-                            bullish_max=float(args.bullish_max),
+                    for nll_weight in _parse_floats(args.nll_weights):
+                        print(
+                            f"\n=== sign regularized seed={seed} corr={corr_weight} "
+                            f"balance={balance_weight} rank={rank_weight} nll={nll_weight} ==="
                         )
-                    )
+                        results.append(
+                            _train_one(
+                                panel_path=args.panel,
+                                extra_features=extra_features,
+                                seed=seed,
+                                epochs=int(args.epochs),
+                                batch_size=int(args.batch_size),
+                                val_days=int(args.val_days),
+                                lr=float(args.lr),
+                                nll_weight=float(nll_weight),
+                                corr_weight=float(corr_weight),
+                                balance_weight=float(balance_weight),
+                                rank_weight=float(rank_weight),
+                                balance_temperature=float(args.balance_temperature),
+                                rank_temperature=float(args.rank_temperature),
+                                balanced_sampler=bool(args.balanced_sampler),
+                                bullish_min=float(args.bullish_min),
+                                bullish_max=float(args.bullish_max),
+                                ic_min=float(args.ic_min),
+                                direction_min=float(args.direction_min),
+                                hard_gate=bool(args.hard_gate),
+                            )
+                        )
 
     flat_rows = [{**row, **row["metrics"]} for row in results]
     aggregate = _aggregate(results)
@@ -378,6 +460,12 @@ def main() -> None:
                 "batch_size": int(args.batch_size),
                 "val_days": int(args.val_days),
                 "lr": float(args.lr),
+                "nll_weights": _parse_floats(args.nll_weights),
+                "hard_gate": bool(args.hard_gate),
+                "ic_min": float(args.ic_min),
+                "direction_min": float(args.direction_min),
+                "bullish_min": float(args.bullish_min),
+                "bullish_max": float(args.bullish_max),
                 "results": results,
                 "aggregate": aggregate,
             },
@@ -387,10 +475,22 @@ def main() -> None:
 
     print("\nTop results:")
     top = pd.DataFrame(flat_rows).sort_values(
-        ["Directional_Accuracy", "IC_Spearman", "pct_bullish_pred"],
+        ["IC_Spearman", "Directional_Accuracy", "pct_bullish_pred"],
         ascending=[False, False, True],
     )
-    print(top[["variant", "MAE", "RMSE", "Directional_Accuracy", "IC_Spearman", "pct_bullish_pred"]].head(15))
+    print(
+        top[
+            [
+                "variant",
+                "MAE",
+                "RMSE",
+                "Directional_Accuracy",
+                "IC_Spearman",
+                "Daily_IC_Mean",
+                "pct_bullish_pred",
+            ]
+        ].head(15)
+    )
     print(f"\nSaved -> {args.output}")
 
 
