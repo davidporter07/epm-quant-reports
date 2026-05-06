@@ -15,3 +15,5 @@
   AV daily limit exhausted at ticker 26/267 — stopping download. Re-run tomorrow.
   AV rate limit: We have detected your API key as 4687M8W3Q9XWLYU4 and our standard API rate limi
   AV daily limit exhausted at ticker 25/242 — stopping download. Re-run tomorrow.
+  AV rate limit: We have detected your API key as [REDACTED] and our standard API rate limit is 2
+  AV daily limit exhausted at ticker 25/218 — stopping download. Re-run tomorrow.

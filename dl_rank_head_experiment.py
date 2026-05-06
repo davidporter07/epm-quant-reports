@@ -151,6 +151,52 @@ def _center_by_date(pred: np.ndarray, dates_ns: np.ndarray) -> np.ndarray:
     return centered.to_numpy(dtype=np.float32)
 
 
+def _selection_metrics(
+    pred: np.ndarray,
+    actual: np.ndarray,
+    dates_ns: np.ndarray,
+    top_frac: float = 0.20,
+) -> dict:
+    rows = pd.DataFrame({"pred": pred, "actual": actual, "date": dates_ns})
+    top_returns = []
+    bottom_returns = []
+    spreads = []
+    for _, g in rows.groupby("date", sort=False):
+        if len(g) < 4:
+            continue
+        n_select = max(1, int(np.floor(len(g) * float(top_frac))))
+        ordered = g.sort_values("pred", ascending=False)
+        top_ret = float(ordered.head(n_select)["actual"].mean())
+        bottom_ret = float(ordered.tail(n_select)["actual"].mean())
+        top_returns.append(top_ret)
+        bottom_returns.append(bottom_ret)
+        spreads.append(top_ret - bottom_ret)
+
+    if not spreads:
+        return {
+            "Selection_Top_Return_Mean": float("nan"),
+            "Selection_Bottom_Return_Mean": float("nan"),
+            "Selection_Long_Short_Spread_Mean": float("nan"),
+            "Selection_Spread_Positive_Rate": float("nan"),
+            "Selection_Long_Hit_Rate": float("nan"),
+            "Selection_Short_Hit_Rate": float("nan"),
+            "Selection_Count": 0,
+        }
+
+    top_arr = np.asarray(top_returns, dtype=np.float64)
+    bottom_arr = np.asarray(bottom_returns, dtype=np.float64)
+    spread_arr = np.asarray(spreads, dtype=np.float64)
+    return {
+        "Selection_Top_Return_Mean": float(np.mean(top_arr)),
+        "Selection_Bottom_Return_Mean": float(np.mean(bottom_arr)),
+        "Selection_Long_Short_Spread_Mean": float(np.mean(spread_arr)),
+        "Selection_Spread_Positive_Rate": float(np.mean(spread_arr > 0.0)),
+        "Selection_Long_Hit_Rate": float(np.mean(top_arr > 0.0)),
+        "Selection_Short_Hit_Rate": float(np.mean(bottom_arr < 0.0)),
+        "Selection_Count": int(len(spread_arr)),
+    }
+
+
 def _evaluate_rank_model(
     model: nn.Module,
     loader: DataLoader,
@@ -184,6 +230,9 @@ def _evaluate_rank_model(
     raw_metrics = _metrics(raw_pred, actual, date_arr)
     rank_metrics = _metrics(rank_pred, actual, date_arr)
     rank_centered_metrics = _metrics(rank_centered, actual, date_arr)
+    raw_metrics.update(_selection_metrics(raw_pred, actual, date_arr))
+    rank_metrics.update(_selection_metrics(rank_pred, actual, date_arr))
+    rank_centered_metrics.update(_selection_metrics(rank_centered, actual, date_arr))
     raw_metrics["NLL"] = float(np.mean(losses))
     return raw_metrics, rank_metrics, rank_centered_metrics
 
@@ -388,6 +437,7 @@ def _train_one(
             f"center_dir={rank_centered_metrics['Directional_Accuracy']:.4f} "
             f"rank_ic={rank_metrics['IC_Spearman']:.4f} "
             f"center_daily_ic={rank_centered_metrics['Daily_IC_Mean']:.4f} "
+            f"center_spread={rank_centered_metrics['Selection_Long_Short_Spread_Mean']:.4f} "
             f"center_bull={rank_centered_metrics['pct_bullish_pred']:.4f}"
         )
         if score > float(best["score"]):
@@ -473,6 +523,12 @@ def _aggregate(rows: list[dict], key: str) -> dict:
         "Daily_IC_Positive_Rate",
         "Daily_Directional_Accuracy",
         "pct_bullish_pred",
+        "Selection_Top_Return_Mean",
+        "Selection_Bottom_Return_Mean",
+        "Selection_Long_Short_Spread_Mean",
+        "Selection_Spread_Positive_Rate",
+        "Selection_Long_Hit_Rate",
+        "Selection_Short_Hit_Rate",
     ]
     out = {}
     for metric in metrics:
@@ -627,7 +683,11 @@ def main() -> None:
         )
 
     top = pd.DataFrame(flat_rows).sort_values(
-        ["rank_centered_IC_Spearman", "rank_centered_Directional_Accuracy", "rank_centered_pct_bullish_pred"],
+        [
+            "rank_centered_Selection_Long_Short_Spread_Mean",
+            "rank_centered_Daily_IC_Mean",
+            "rank_centered_IC_Spearman",
+        ],
         ascending=[False, False, True],
     )
     print("\nTop rank-head results:")
@@ -642,6 +702,8 @@ def main() -> None:
                 "rank_centered_Directional_Accuracy",
                 "rank_centered_IC_Spearman",
                 "rank_centered_Daily_IC_Mean",
+                "rank_centered_Selection_Long_Short_Spread_Mean",
+                "rank_centered_Selection_Spread_Positive_Rate",
                 "rank_centered_pct_bullish_pred",
             ]
         ].head(15)
