@@ -197,6 +197,58 @@ def _selection_metrics(
     }
 
 
+def _rank_selection_score(
+    metrics: dict,
+    bullish_min: float,
+    bullish_max: float,
+    ic_min: float,
+    daily_ic_min: float,
+    spread_min: float,
+    spread_positive_rate_min: float,
+    hard_gate: bool,
+) -> float:
+    ic = float(metrics.get("IC_Spearman", float("nan")))
+    daily_ic = float(metrics.get("Daily_IC_Mean", float("nan")))
+    spread = float(metrics.get("Selection_Long_Short_Spread_Mean", float("nan")))
+    spread_pos = float(metrics.get("Selection_Spread_Positive_Rate", float("nan")))
+    bullish = float(metrics.get("pct_bullish_pred", float("nan")))
+    if not np.isfinite(ic):
+        ic = -1.0
+    if not np.isfinite(daily_ic):
+        daily_ic = ic
+    if not np.isfinite(spread):
+        spread = -1.0
+    if not np.isfinite(spread_pos):
+        spread_pos = 0.0
+    if not np.isfinite(bullish):
+        bullish = 1.0
+
+    balance_violation = 0.0
+    if bullish < bullish_min:
+        balance_violation = bullish_min - bullish
+    elif bullish > bullish_max:
+        balance_violation = bullish - bullish_max
+
+    hard_penalty = 0.0
+    if hard_gate:
+        hard_penalty = (
+            12.0 * max(0.0, float(spread_min) - spread)
+            + 4.0 * max(0.0, float(spread_positive_rate_min) - spread_pos)
+            + 4.0 * max(0.0, float(daily_ic_min) - daily_ic)
+            + 2.0 * max(0.0, float(ic_min) - ic)
+            + 4.0 * balance_violation
+        )
+
+    return (
+        2.0 * spread
+        + 0.75 * daily_ic
+        + 0.35 * ic
+        + 0.20 * spread_pos
+        - 0.50 * balance_violation
+        - hard_penalty
+    )
+
+
 def _evaluate_rank_model(
     model: nn.Module,
     loader: DataLoader,
@@ -266,6 +318,9 @@ def _train_one(
     bullish_max: float,
     ic_min: float,
     daily_ic_min: float,
+    spread_min: float,
+    spread_positive_rate_min: float,
+    selection_score_mode: str,
     direction_min: float,
     hard_gate: bool,
     daily_ic_weight: float,
@@ -420,16 +475,30 @@ def _train_one(
         if scheduler_name == "cosine" and scheduler is not None:
             scheduler.step()
         raw_metrics, rank_metrics, rank_centered_metrics = _evaluate_rank_model(model, val_loader, device, use_amp, pin)
-        score = _selection_score(
-            rank_centered_metrics,
-            bullish_min,
-            bullish_max,
-            ic_min,
-            daily_ic_min,
-            direction_min,
-            hard_gate,
-            daily_ic_weight,
-        )
+        if selection_score_mode == "selection":
+            score = _rank_selection_score(
+                rank_centered_metrics,
+                bullish_min,
+                bullish_max,
+                ic_min,
+                daily_ic_min,
+                spread_min,
+                spread_positive_rate_min,
+                hard_gate,
+            )
+        elif selection_score_mode == "legacy":
+            score = _selection_score(
+                rank_centered_metrics,
+                bullish_min,
+                bullish_max,
+                ic_min,
+                daily_ic_min,
+                direction_min,
+                hard_gate,
+                daily_ic_weight,
+            )
+        else:
+            raise ValueError(f"Unknown selection score mode: {selection_score_mode}")
         print(
             f"seed={seed} epoch={epoch}/{epochs} loss={np.mean(train_losses):.5f} "
             f"raw_dir={raw_metrics['Directional_Accuracy']:.4f} "
@@ -438,6 +507,7 @@ def _train_one(
             f"rank_ic={rank_metrics['IC_Spearman']:.4f} "
             f"center_daily_ic={rank_centered_metrics['Daily_IC_Mean']:.4f} "
             f"center_spread={rank_centered_metrics['Selection_Long_Short_Spread_Mean']:.4f} "
+            f"spread_pos={rank_centered_metrics['Selection_Spread_Positive_Rate']:.4f} "
             f"center_bull={rank_centered_metrics['pct_bullish_pred']:.4f}"
         )
         if score > float(best["score"]):
@@ -473,6 +543,9 @@ def _train_one(
             "date_grouped_batches": date_grouped_batches,
             "min_date_batch_size": min_date_batch_size,
             "dates_per_batch": dates_per_batch,
+            "selection_score_mode": selection_score_mode,
+            "spread_min": spread_min,
+            "spread_positive_rate_min": spread_positive_rate_min,
             "selection_score": best["score"],
         },
         model_path,
@@ -498,6 +571,9 @@ def _train_one(
         "hard_gate": hard_gate,
         "ic_min": ic_min,
         "daily_ic_min": daily_ic_min,
+        "spread_min": spread_min,
+        "spread_positive_rate_min": spread_positive_rate_min,
+        "selection_score_mode": selection_score_mode,
         "direction_min": direction_min,
         "daily_ic_weight": daily_ic_weight,
         "selection_score": float(best["score"]),
@@ -573,6 +649,9 @@ def main() -> None:
     ap.add_argument("--bullish-max", type=float, default=0.75)
     ap.add_argument("--ic-min", type=float, default=0.0)
     ap.add_argument("--daily-ic-min", type=float, default=-0.02)
+    ap.add_argument("--spread-min", type=float, default=0.0)
+    ap.add_argument("--spread-positive-rate-min", type=float, default=0.55)
+    ap.add_argument("--selection-score-mode", choices=["selection", "legacy"], default="selection")
     ap.add_argument("--direction-min", type=float, default=0.5085)
     ap.add_argument("--daily-ic-weight", type=float, default=0.75)
     ap.add_argument("--hard-gate", action="store_true")
@@ -623,6 +702,9 @@ def main() -> None:
                             bullish_max=float(args.bullish_max),
                             ic_min=float(args.ic_min),
                             daily_ic_min=float(args.daily_ic_min),
+                            spread_min=float(args.spread_min),
+                            spread_positive_rate_min=float(args.spread_positive_rate_min),
+                            selection_score_mode=args.selection_score_mode,
                             direction_min=float(args.direction_min),
                             daily_ic_weight=float(args.daily_ic_weight),
                             hard_gate=bool(args.hard_gate),
@@ -671,6 +753,9 @@ def main() -> None:
                 "hard_gate": bool(args.hard_gate),
                 "ic_min": float(args.ic_min),
                 "daily_ic_min": float(args.daily_ic_min),
+                "spread_min": float(args.spread_min),
+                "spread_positive_rate_min": float(args.spread_positive_rate_min),
+                "selection_score_mode": args.selection_score_mode,
                 "direction_min": float(args.direction_min),
                 "daily_ic_weight": float(args.daily_ic_weight),
                 "bullish_min": float(args.bullish_min),
