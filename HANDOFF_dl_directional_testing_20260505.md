@@ -1301,3 +1301,45 @@ Recommended next experiment:
 4. If stability remains poor, revisit dual-head with balanced sampler and
    validation gate, not raw BCE direction loss.
 ```
+
+## Continuation Update: 10-Epoch Balanced Sampler Run
+
+Command:
+
+```powershell
+python dl_sign_regularized_experiment.py --seeds 20260505,20260506,20260507,20260508,20260509 --corr-weights 0 --balance-weights 0.5 --rank-weights 0 --balance-temperature 0.05 --balanced-sampler --epochs 10 --output data\experiment\sign_regularized_balanced_sampler_10epoch.json --csv-output data\experiment\sign_regularized_balanced_sampler_10epoch.csv
+```
+
+Results:
+
+```text
+seed 20260505:
+MAE 0.064269, RMSE 0.083220, Direction 64.17%, IC +0.0213, bullish 87.83%
+
+seed 20260509:
+MAE 0.069212, RMSE 0.088686, Direction 65.96%, IC -0.0201, bullish 92.97%
+
+seed 20260508:
+MAE 0.073788, RMSE 0.093562, Direction 54.80%, IC -0.1012, bullish 71.76%
+
+seed 20260506:
+MAE 0.073121, RMSE 0.091763, Direction 49.22%, IC -0.1783, bullish 74.89%
+
+seed 20260507:
+MAE 0.072126, RMSE 0.092300, Direction 45.76%, IC -0.1630, bullish 55.36%
+```
+
+Interpretation:
+
+- Longer training did not stabilize the candidate.
+- The validation selector still favored early checkpoints for the best seeds.
+- Only seed 20260505 retained positive IC.
+- In-bounds bullish-rate rows had negative IC.
+
+Conclusion:
+
+- Balanced sampling remains the best lever, but this exact single-head setup is
+  not stable enough.
+- Next step should be a research-only balanced-sampler dual-head experiment with
+  validation gating on direction + IC + bullish-rate bounds.
+- Do not promote the 10-epoch single-head candidate.
