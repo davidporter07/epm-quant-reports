@@ -34,6 +34,14 @@ OUT_PATH = Path("data/experiment/sign_regularized_comparison.json")
 CSV_PATH = Path("data/experiment/sign_regularized_comparison.csv")
 
 
+def _resolve_device(raw: str) -> str:
+    if raw == "auto":
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    if raw == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("--device cuda requested, but CUDA is not available.")
+    return raw
+
+
 def _parse_ints(raw: str) -> List[int]:
     return [int(part.strip()) for part in raw.split(",") if part.strip()]
 
@@ -159,7 +167,13 @@ def _metrics(pred: np.ndarray, actual: np.ndarray, dates_ns: np.ndarray | None =
     return out
 
 
-def _evaluate(model: nn.Module, loader: DataLoader) -> tuple[dict, np.ndarray, np.ndarray]:
+def _evaluate(
+    model: nn.Module,
+    loader: DataLoader,
+    device: str,
+    amp: bool,
+    non_blocking: bool,
+) -> tuple[dict, np.ndarray, np.ndarray]:
     model.eval()
     preds = []
     actuals = []
@@ -167,10 +181,14 @@ def _evaluate(model: nn.Module, loader: DataLoader) -> tuple[dict, np.ndarray, n
     losses = []
     with torch.no_grad():
         for xb, yb, _, date_ns in loader:
-            mu, log_sigma = model(xb)
-            losses.append(float(gaussian_nll(mu, log_sigma, yb).item()))
-            preds.append(mu.cpu().numpy().ravel())
-            actuals.append(yb.cpu().numpy().ravel())
+            xb = xb.to(device, non_blocking=non_blocking)
+            yb = yb.to(device, non_blocking=non_blocking)
+            with torch.amp.autocast("cuda", enabled=amp and device.startswith("cuda")):
+                mu, log_sigma = model(xb)
+            loss = gaussian_nll(mu.float(), log_sigma.float(), yb.float())
+            losses.append(float(loss.item()))
+            preds.append(mu.detach().cpu().numpy().ravel())
+            actuals.append(yb.detach().cpu().numpy().ravel())
             dates.append(np.asarray(date_ns).ravel())
     pred = np.concatenate(preds)
     actual = np.concatenate(actuals)
@@ -280,6 +298,15 @@ def _train_one(
     batch_size: int,
     val_days: int,
     lr: float,
+    scheduler_name: str,
+    max_lr: float | None,
+    onecycle_pct_start: float,
+    onecycle_div_factor: float,
+    onecycle_final_div_factor: float,
+    device: str,
+    amp: bool,
+    num_workers: int,
+    pin_memory: bool,
     nll_weight: float,
     corr_weight: float,
     balance_weight: float,
@@ -297,6 +324,9 @@ def _train_one(
     hard_gate: bool,
 ) -> dict:
     _set_seed(seed)
+    device = _resolve_device(device)
+    use_amp = bool(amp and device.startswith("cuda"))
+    pin = bool(pin_memory and device.startswith("cuda"))
     panel = _ensure_panel_schema(read_panel(panel_path))
     panel = panel[pd.to_numeric(panel[TARGET_COL], errors="coerce").notna()].copy()
     cutoff, _ = time_split(panel, val_days)
@@ -309,6 +339,12 @@ def _train_one(
     train_ds = PanelSequenceDataset(train_panel, scaler, feature_cols, cfg.seq_len, seed=seed)
     val_ds = PanelSequenceDataset(val_panel, scaler, feature_cols, cfg.seq_len, seed=seed + 1)
     sampler = _balanced_sampler(train_ds) if balanced_sampler else None
+    loader_kwargs = {
+        "num_workers": int(num_workers),
+        "pin_memory": pin,
+    }
+    if int(num_workers) > 0:
+        loader_kwargs["persistent_workers"] = True
     if balanced_sampler and date_grouped_batches:
         raise ValueError("--balanced-sampler and --date-grouped-batches are mutually exclusive.")
     if date_grouped_batches:
@@ -318,7 +354,7 @@ def _train_one(
             min_batch_size=min_date_batch_size,
             dates_per_batch=dates_per_batch,
         )
-        train_loader = DataLoader(train_ds, batch_sampler=batch_sampler)
+        train_loader = DataLoader(train_ds, batch_sampler=batch_sampler, **loader_kwargs)
         print(
             f"date-grouped batches={len(batch_sampler)} "
             f"date_count={batch_sampler.date_count} "
@@ -332,12 +368,29 @@ def _train_one(
             shuffle=sampler is None,
             sampler=sampler,
             drop_last=True,
+            **loader_kwargs,
         )
-    val_loader = DataLoader(val_ds, batch_size=1024, shuffle=False)
+    val_loader = DataLoader(val_ds, batch_size=1024, shuffle=False, **loader_kwargs)
 
-    model = TCNForecaster(n_features=len(feature_cols), hidden=cfg.hidden, dropout=cfg.dropout).to("cpu")
+    model = TCNForecaster(n_features=len(feature_cols), hidden=cfg.hidden, dropout=cfg.dropout).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs, eta_min=lr * 0.05)
+    if scheduler_name == "onecycle":
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            opt,
+            max_lr=float(max_lr if max_lr is not None else lr),
+            epochs=int(epochs),
+            steps_per_epoch=len(train_loader),
+            pct_start=float(onecycle_pct_start),
+            div_factor=float(onecycle_div_factor),
+            final_div_factor=float(onecycle_final_div_factor),
+        )
+    elif scheduler_name == "cosine":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs, eta_min=lr * 0.05)
+    elif scheduler_name == "none":
+        scheduler = None
+    else:
+        raise ValueError(f"Unknown scheduler: {scheduler_name}")
+    amp_scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
 
     variant = (
         f"signreg_seed{seed}_cw{str(corr_weight).replace('.', 'p')}"
@@ -358,41 +411,54 @@ def _train_one(
         model.train()
         train_losses = []
         for xb, yb, _, date_ns in train_loader:
+            xb = xb.to(device, non_blocking=pin)
+            yb = yb.to(device, non_blocking=pin)
+            date_ns = date_ns.to(device, non_blocking=pin)
             opt.zero_grad(set_to_none=True)
-            mu, log_sigma = model(xb)
-            loss = float(nll_weight) * gaussian_nll(mu, log_sigma, yb)
+            with torch.amp.autocast("cuda", enabled=use_amp):
+                mu, log_sigma = model(xb)
+            mu_loss = mu.float()
+            yb_loss = yb.float()
+            loss = float(nll_weight) * gaussian_nll(mu_loss, log_sigma.float(), yb_loss)
             if corr_weight > 0:
                 corr_loss = (
-                    _grouped_aux_loss(mu, yb, date_ns, "corr", rank_temperature, min_date_batch_size)
+                    _grouped_aux_loss(mu_loss, yb_loss, date_ns, "corr", rank_temperature, min_date_batch_size)
                     if date_grouped_batches
-                    else _pearson_corr_loss(mu, yb)
+                    else _pearson_corr_loss(mu_loss, yb_loss)
                 )
                 loss = loss + float(corr_weight) * corr_loss
             if balance_weight > 0:
                 balance_loss = (
-                    _grouped_aux_loss(mu, yb, date_ns, "balance", balance_temperature, min_date_batch_size)
+                    _grouped_aux_loss(mu_loss, yb_loss, date_ns, "balance", balance_temperature, min_date_batch_size)
                     if date_grouped_batches
-                    else _sign_balance_loss(mu, yb, balance_temperature)
+                    else _sign_balance_loss(mu_loss, yb_loss, balance_temperature)
                 )
                 loss = loss + float(balance_weight) * balance_loss
             if rank_weight > 0:
                 rank_loss = (
-                    _grouped_aux_loss(mu, yb, date_ns, "rank", rank_temperature, min_date_batch_size)
+                    _grouped_aux_loss(mu_loss, yb_loss, date_ns, "rank", rank_temperature, min_date_batch_size)
                     if date_grouped_batches
-                    else _pairwise_rank_loss(mu, yb, rank_temperature)
+                    else _pairwise_rank_loss(mu_loss, yb_loss, rank_temperature)
                 )
                 loss = loss + float(rank_weight) * rank_loss
-            loss.backward()
+            amp_scaler.scale(loss).backward()
+            amp_scaler.unscale_(opt)
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            opt.step()
+            amp_scaler.step(opt)
+            amp_scaler.update()
+            if scheduler_name == "onecycle" and scheduler is not None:
+                scheduler.step()
             train_losses.append(float(loss.item()))
 
-        scheduler.step()
-        metrics, _, _ = _evaluate(model, val_loader)
+        if scheduler_name == "cosine" and scheduler is not None:
+            scheduler.step()
+        metrics, _, _ = _evaluate(model, val_loader, device, use_amp, pin)
         score = _selection_score(metrics, bullish_min, bullish_max, ic_min, direction_min, hard_gate)
+        current_lr = float(opt.param_groups[0]["lr"])
         print(
             f"seed={seed} cw={corr_weight} bw={balance_weight} epoch={epoch} "
             f"rw={rank_weight} nw={nll_weight} "
+            f"lr={current_lr:.6g} "
             f"train={np.mean(train_losses):.6f} val_nll={metrics['NLL']:.6f} "
             f"dir={metrics['Directional_Accuracy']:.4f} ic={metrics['IC_Spearman']:.4f} "
             f"daily_ic={metrics['Daily_IC_Mean']:.4f} bull={metrics['pct_bullish_pred']:.4f} "
@@ -416,6 +482,11 @@ def _train_one(
             "hidden": cfg.hidden,
             "dropout": cfg.dropout,
             "seed": seed,
+            "device": device,
+            "amp": use_amp,
+            "scheduler": scheduler_name,
+            "lr": lr,
+            "max_lr": max_lr,
             "corr_weight": corr_weight,
             "balance_weight": balance_weight,
             "rank_weight": rank_weight,
@@ -444,7 +515,7 @@ def _train_one(
             indent=2,
         )
 
-    metrics, _, _ = _evaluate(model, val_loader)
+    metrics, _, _ = _evaluate(model, val_loader, device, use_amp, pin)
     return {
         "variant": variant,
         "seed": seed,
@@ -452,6 +523,13 @@ def _train_one(
         "balance_weight": balance_weight,
         "rank_weight": rank_weight,
         "nll_weight": nll_weight,
+        "device": device,
+        "amp": use_amp,
+        "scheduler": scheduler_name,
+        "lr": lr,
+        "max_lr": max_lr,
+        "num_workers": int(num_workers),
+        "pin_memory": pin,
         "balanced_sampler": balanced_sampler,
         "date_grouped_batches": date_grouped_batches,
         "min_date_batch_size": min_date_batch_size,
@@ -515,6 +593,16 @@ def main() -> None:
     ap.add_argument("--batch-size", type=int, default=256)
     ap.add_argument("--val-days", type=int, default=252)
     ap.add_argument("--lr", type=float, default=1e-3)
+    ap.add_argument("--scheduler", choices=["cosine", "onecycle", "none"], default="cosine")
+    ap.add_argument("--max-lr", type=float, default=None)
+    ap.add_argument("--onecycle-pct-start", type=float, default=0.45)
+    ap.add_argument("--onecycle-div-factor", type=float, default=10.0)
+    ap.add_argument("--onecycle-final-div-factor", type=float, default=1000.0)
+    ap.add_argument("--device", choices=["auto", "cpu", "cuda"], default="cpu")
+    ap.add_argument("--amp", action="store_true")
+    ap.add_argument("--num-workers", type=int, default=0)
+    ap.add_argument("--pin-memory", action="store_true")
+    ap.add_argument("--cudnn-benchmark", action="store_true")
     ap.add_argument("--bullish-min", type=float, default=0.35)
     ap.add_argument("--bullish-max", type=float, default=0.75)
     ap.add_argument("--ic-min", type=float, default=0.0)
@@ -523,6 +611,8 @@ def main() -> None:
     ap.add_argument("--output", type=Path, default=OUT_PATH)
     ap.add_argument("--csv-output", type=Path, default=CSV_PATH)
     args = ap.parse_args()
+    if args.cudnn_benchmark and torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
 
     extra_features = _parse_features(args.extra_features)
     results = []
@@ -544,6 +634,15 @@ def main() -> None:
                                 batch_size=int(args.batch_size),
                                 val_days=int(args.val_days),
                                 lr=float(args.lr),
+                                scheduler_name=args.scheduler,
+                                max_lr=args.max_lr,
+                                onecycle_pct_start=float(args.onecycle_pct_start),
+                                onecycle_div_factor=float(args.onecycle_div_factor),
+                                onecycle_final_div_factor=float(args.onecycle_final_div_factor),
+                                device=args.device,
+                                amp=bool(args.amp),
+                                num_workers=int(args.num_workers),
+                                pin_memory=bool(args.pin_memory),
                                 nll_weight=float(nll_weight),
                                 corr_weight=float(corr_weight),
                                 balance_weight=float(balance_weight),
@@ -579,6 +678,13 @@ def main() -> None:
                 "dates_per_batch": int(args.dates_per_batch),
                 "val_days": int(args.val_days),
                 "lr": float(args.lr),
+                "scheduler": args.scheduler,
+                "max_lr": args.max_lr,
+                "device": args.device,
+                "amp": bool(args.amp),
+                "num_workers": int(args.num_workers),
+                "pin_memory": bool(args.pin_memory),
+                "cudnn_benchmark": bool(args.cudnn_benchmark),
                 "nll_weights": _parse_floats(args.nll_weights),
                 "hard_gate": bool(args.hard_gate),
                 "ic_min": float(args.ic_min),

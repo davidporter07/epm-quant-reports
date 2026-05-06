@@ -1648,3 +1648,85 @@ Conclusion:
   lower learning rate, longer training, stronger early stopping based on
   Daily_IC_Mean, and possibly target demeaning/standardization within each date
   so the model learns relative returns instead of mixed market-regime drift.
+
+## Continuation Update: PyTorch Training-Speed Controls
+
+Updated:
+
+```text
+dl_sign_regularized_experiment.py
+```
+
+Added research-only PyTorch training controls inspired by the 1Cycle/AMP/DataLoader
+optimization notes:
+
+```text
+--device {auto,cpu,cuda}
+--amp
+--pin-memory
+--num-workers
+--cudnn-benchmark
+--scheduler {cosine,onecycle,none}
+--max-lr
+--onecycle-pct-start
+--onecycle-div-factor
+--onecycle-final-div-factor
+```
+
+Implementation details:
+
+- CUDA is available on this machine:
+
+```text
+NVIDIA GeForce GTX 1650 Ti
+torch 2.5.1+cu121
+```
+
+- AMP is enabled only on CUDA.
+- Loss calculations are forced back to FP32 after the autocast forward pass to
+  avoid FP16 instability in `gaussian_nll` and the rank/correlation losses.
+- The previous `zero_grad(set_to_none=True)`, gradient clipping, AdamW, and
+  `torch.no_grad()` validation patterns were already in place.
+- `OneCycleLR` steps per optimizer batch. `CosineAnnealingLR` remains the
+  default for backward compatibility.
+
+Smoke test:
+
+```powershell
+python dl_sign_regularized_experiment.py --seeds 20260505 --corr-weights 0.05 --balance-weights 0.5 --rank-weights 0.01 --nll-weights 0.5 --date-grouped-batches --dates-per-batch 32 --hard-gate --ic-min 0 --direction-min 0.5085 --epochs 1 --scheduler onecycle --lr 0.001 --max-lr 0.003 --device auto --amp --pin-memory --num-workers 0 --cudnn-benchmark --output data\experiment\onecycle_amp_smoke.json --csv-output data\experiment\onecycle_amp_smoke.csv
+```
+
+Result:
+
+```text
+CUDA/AMP/OneCycle path completed successfully.
+```
+
+Focused 5-seed OneCycle/AMP run:
+
+```powershell
+python dl_sign_regularized_experiment.py --seeds 20260505,20260506,20260507,20260508,20260509 --corr-weights 0.05 --balance-weights 0.5 --rank-weights 0.01 --nll-weights 0.5 --balance-temperature 0.05 --rank-temperature 0.02 --date-grouped-batches --dates-per-batch 64 --hard-gate --ic-min 0 --direction-min 0.5085 --bullish-min 0.35 --bullish-max 0.75 --epochs 8 --scheduler onecycle --lr 0.001 --max-lr 0.001 --onecycle-pct-start 0.45 --onecycle-div-factor 10 --onecycle-final-div-factor 1000 --device auto --amp --pin-memory --num-workers 0 --cudnn-benchmark --output data\experiment\sign_regularized_date_grouped_onecycle_amp_5seed.json --csv-output data\experiment\sign_regularized_date_grouped_onecycle_amp_5seed.csv
+```
+
+Aggregate:
+
+```text
+Mean MAE: 0.073124
+Mean RMSE: 0.092814
+Mean Direction: 50.27%
+Mean IC_Spearman: -0.0630
+Mean Daily_IC_Mean: -0.0792
+Mean Daily_IC_Positive_Rate: 42.19%
+Mean bullish rate: 59.73%
+Strict gate passing rows: 0 / 5
+```
+
+Interpretation:
+
+- The speed/accelerator controls work and should remain available for research
+  sweeps.
+- This specific OneCycle schedule did not improve stability or IC versus the
+  previous date-grouped cosine run.
+- Do not promote any OneCycle/AMP result from this run.
+- Next model-quality step remains date-level target demeaning/standardization
+  and Daily_IC-based selection, not more scheduler-only tuning.
