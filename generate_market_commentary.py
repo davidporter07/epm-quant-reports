@@ -1257,7 +1257,8 @@ def _call_ollama_raw(system: str, user_payload: dict) -> dict:
         "format": "json",
         "options": {
             "temperature": 0,
-            "num_predict": 4096,
+            "num_predict": 2048,
+            "num_ctx":     8192,
         },
     }
     resp = requests.post(
