@@ -100,6 +100,19 @@ def _pairwise_rank_loss(pred: torch.Tensor, target: torch.Tensor, temperature: f
     return torch.nn.functional.softplus(-margin).mean()
 
 
+def _transform_aux_target(target: torch.Tensor, transform: str) -> torch.Tensor:
+    if transform == "raw":
+        return target
+    y = target.float()
+    if transform == "demean":
+        return y - y.mean()
+    if transform == "zscore":
+        centered = y - y.mean()
+        std = centered.std(unbiased=False)
+        return centered / (std + 1e-6)
+    raise ValueError(f"Unknown auxiliary target transform: {transform}")
+
+
 def _grouped_aux_loss(
     pred: torch.Tensor,
     target: torch.Tensor,
@@ -107,6 +120,7 @@ def _grouped_aux_loss(
     loss_name: str,
     temperature: float,
     min_group_size: int,
+    target_transform: str,
 ) -> torch.Tensor:
     pieces = []
     flat_dates = dates_ns.view(-1)
@@ -114,12 +128,13 @@ def _grouped_aux_loss(
         mask = flat_dates == date_ns
         if int(mask.sum().item()) < int(min_group_size):
             continue
+        group_target = _transform_aux_target(target[mask], target_transform)
         if loss_name == "corr":
-            pieces.append(_pearson_corr_loss(pred[mask], target[mask]))
+            pieces.append(_pearson_corr_loss(pred[mask], group_target))
         elif loss_name == "balance":
-            pieces.append(_sign_balance_loss(pred[mask], target[mask], temperature))
+            pieces.append(_sign_balance_loss(pred[mask], group_target, temperature))
         elif loss_name == "rank":
-            pieces.append(_pairwise_rank_loss(pred[mask], target[mask], temperature))
+            pieces.append(_pairwise_rank_loss(pred[mask], group_target, temperature))
         else:
             raise ValueError(f"Unknown grouped loss: {loss_name}")
     if not pieces:
@@ -258,8 +273,10 @@ def _selection_score(
     bullish_min: float,
     bullish_max: float,
     ic_min: float,
+    daily_ic_min: float,
     direction_min: float,
     hard_gate: bool,
+    daily_ic_weight: float,
 ) -> float:
     bullish = float(metrics["pct_bullish_pred"])
     ic = float(metrics["IC_Spearman"])
@@ -275,15 +292,21 @@ def _selection_score(
     elif bullish > bullish_max:
         balance_violation = bullish - bullish_max
     ic_violation = max(0.0, float(ic_min) - ic)
+    daily_ic_violation = max(0.0, float(daily_ic_min) - daily_ic)
     direction_violation = max(0.0, float(direction_min) - float(metrics["Directional_Accuracy"]))
     hard_penalty = 0.0
     if hard_gate:
-        hard_penalty = 10.0 * balance_violation + 5.0 * ic_violation + 2.0 * direction_violation
+        hard_penalty = (
+            10.0 * balance_violation
+            + 5.0 * ic_violation
+            + 5.0 * daily_ic_violation
+            + 2.0 * direction_violation
+        )
 
     return (
         float(metrics["Directional_Accuracy"])
         + 0.50 * ic
-        + 0.25 * daily_ic
+        + float(daily_ic_weight) * daily_ic
         - 0.50 * balance_violation
         - hard_penalty
         - 0.05 * float(metrics["MAE"])
@@ -311,6 +334,7 @@ def _train_one(
     corr_weight: float,
     balance_weight: float,
     rank_weight: float,
+    aux_target_transform: str,
     balance_temperature: float,
     rank_temperature: float,
     balanced_sampler: bool,
@@ -320,8 +344,10 @@ def _train_one(
     bullish_min: float,
     bullish_max: float,
     ic_min: float,
+    daily_ic_min: float,
     direction_min: float,
     hard_gate: bool,
+    daily_ic_weight: float,
 ) -> dict:
     _set_seed(seed)
     device = _resolve_device(device)
@@ -422,24 +448,56 @@ def _train_one(
             loss = float(nll_weight) * gaussian_nll(mu_loss, log_sigma.float(), yb_loss)
             if corr_weight > 0:
                 corr_loss = (
-                    _grouped_aux_loss(mu_loss, yb_loss, date_ns, "corr", rank_temperature, min_date_batch_size)
-                    if date_grouped_batches
-                    else _pearson_corr_loss(mu_loss, yb_loss)
-                )
+                        _grouped_aux_loss(
+                            mu_loss,
+                            yb_loss,
+                            date_ns,
+                            "corr",
+                            rank_temperature,
+                            min_date_batch_size,
+                            aux_target_transform,
+                        )
+                        if date_grouped_batches
+                        else _pearson_corr_loss(mu_loss, _transform_aux_target(yb_loss, aux_target_transform))
+                    )
                 loss = loss + float(corr_weight) * corr_loss
             if balance_weight > 0:
                 balance_loss = (
-                    _grouped_aux_loss(mu_loss, yb_loss, date_ns, "balance", balance_temperature, min_date_batch_size)
-                    if date_grouped_batches
-                    else _sign_balance_loss(mu_loss, yb_loss, balance_temperature)
-                )
+                        _grouped_aux_loss(
+                            mu_loss,
+                            yb_loss,
+                            date_ns,
+                            "balance",
+                            balance_temperature,
+                            min_date_batch_size,
+                            aux_target_transform,
+                        )
+                        if date_grouped_batches
+                        else _sign_balance_loss(
+                            mu_loss,
+                            _transform_aux_target(yb_loss, aux_target_transform),
+                            balance_temperature,
+                        )
+                    )
                 loss = loss + float(balance_weight) * balance_loss
             if rank_weight > 0:
                 rank_loss = (
-                    _grouped_aux_loss(mu_loss, yb_loss, date_ns, "rank", rank_temperature, min_date_batch_size)
-                    if date_grouped_batches
-                    else _pairwise_rank_loss(mu_loss, yb_loss, rank_temperature)
-                )
+                        _grouped_aux_loss(
+                            mu_loss,
+                            yb_loss,
+                            date_ns,
+                            "rank",
+                            rank_temperature,
+                            min_date_batch_size,
+                            aux_target_transform,
+                        )
+                        if date_grouped_batches
+                        else _pairwise_rank_loss(
+                            mu_loss,
+                            _transform_aux_target(yb_loss, aux_target_transform),
+                            rank_temperature,
+                        )
+                    )
                 loss = loss + float(rank_weight) * rank_loss
             amp_scaler.scale(loss).backward()
             amp_scaler.unscale_(opt)
@@ -453,7 +511,16 @@ def _train_one(
         if scheduler_name == "cosine" and scheduler is not None:
             scheduler.step()
         metrics, _, _ = _evaluate(model, val_loader, device, use_amp, pin)
-        score = _selection_score(metrics, bullish_min, bullish_max, ic_min, direction_min, hard_gate)
+        score = _selection_score(
+            metrics,
+            bullish_min,
+            bullish_max,
+            ic_min,
+            daily_ic_min,
+            direction_min,
+            hard_gate,
+            daily_ic_weight,
+        )
         current_lr = float(opt.param_groups[0]["lr"])
         print(
             f"seed={seed} cw={corr_weight} bw={balance_weight} epoch={epoch} "
@@ -491,13 +558,16 @@ def _train_one(
             "balance_weight": balance_weight,
             "rank_weight": rank_weight,
             "nll_weight": nll_weight,
+            "aux_target_transform": aux_target_transform,
             "balanced_sampler": balanced_sampler,
             "date_grouped_batches": date_grouped_batches,
             "min_date_batch_size": min_date_batch_size,
             "dates_per_batch": dates_per_batch,
             "hard_gate": hard_gate,
             "ic_min": ic_min,
+            "daily_ic_min": daily_ic_min,
             "direction_min": direction_min,
+            "daily_ic_weight": daily_ic_weight,
             "selection_score": best["score"],
         },
         model_path,
@@ -523,6 +593,7 @@ def _train_one(
         "balance_weight": balance_weight,
         "rank_weight": rank_weight,
         "nll_weight": nll_weight,
+        "aux_target_transform": aux_target_transform,
         "device": device,
         "amp": use_amp,
         "scheduler": scheduler_name,
@@ -536,7 +607,9 @@ def _train_one(
         "dates_per_batch": dates_per_batch,
         "hard_gate": hard_gate,
         "ic_min": ic_min,
+        "daily_ic_min": daily_ic_min,
         "direction_min": direction_min,
+        "daily_ic_weight": daily_ic_weight,
         "balance_temperature": balance_temperature,
         "rank_temperature": rank_temperature,
         "selection_score": float(best["score"]),
@@ -583,6 +656,7 @@ def main() -> None:
     ap.add_argument("--balance-weights", default="0,0.1,0.5")
     ap.add_argument("--rank-weights", default="0")
     ap.add_argument("--nll-weights", default="1.0")
+    ap.add_argument("--aux-target-transform", choices=["raw", "demean", "zscore"], default="raw")
     ap.add_argument("--balance-temperature", type=float, default=0.02)
     ap.add_argument("--rank-temperature", type=float, default=0.02)
     ap.add_argument("--balanced-sampler", action="store_true")
@@ -606,7 +680,9 @@ def main() -> None:
     ap.add_argument("--bullish-min", type=float, default=0.35)
     ap.add_argument("--bullish-max", type=float, default=0.75)
     ap.add_argument("--ic-min", type=float, default=0.0)
+    ap.add_argument("--daily-ic-min", type=float, default=-1.0)
     ap.add_argument("--direction-min", type=float, default=0.5085)
+    ap.add_argument("--daily-ic-weight", type=float, default=0.25)
     ap.add_argument("--hard-gate", action="store_true")
     ap.add_argument("--output", type=Path, default=OUT_PATH)
     ap.add_argument("--csv-output", type=Path, default=CSV_PATH)
@@ -647,6 +723,7 @@ def main() -> None:
                                 corr_weight=float(corr_weight),
                                 balance_weight=float(balance_weight),
                                 rank_weight=float(rank_weight),
+                                aux_target_transform=args.aux_target_transform,
                                 balance_temperature=float(args.balance_temperature),
                                 rank_temperature=float(args.rank_temperature),
                                 balanced_sampler=bool(args.balanced_sampler),
@@ -656,7 +733,9 @@ def main() -> None:
                                 bullish_min=float(args.bullish_min),
                                 bullish_max=float(args.bullish_max),
                                 ic_min=float(args.ic_min),
+                                daily_ic_min=float(args.daily_ic_min),
                                 direction_min=float(args.direction_min),
+                                daily_ic_weight=float(args.daily_ic_weight),
                                 hard_gate=bool(args.hard_gate),
                             )
                         )
@@ -686,9 +765,12 @@ def main() -> None:
                 "pin_memory": bool(args.pin_memory),
                 "cudnn_benchmark": bool(args.cudnn_benchmark),
                 "nll_weights": _parse_floats(args.nll_weights),
+                "aux_target_transform": args.aux_target_transform,
                 "hard_gate": bool(args.hard_gate),
                 "ic_min": float(args.ic_min),
+                "daily_ic_min": float(args.daily_ic_min),
                 "direction_min": float(args.direction_min),
+                "daily_ic_weight": float(args.daily_ic_weight),
                 "bullish_min": float(args.bullish_min),
                 "bullish_max": float(args.bullish_max),
                 "results": results,

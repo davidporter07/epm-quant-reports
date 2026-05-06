@@ -1730,3 +1730,115 @@ Interpretation:
 - Do not promote any OneCycle/AMP result from this run.
 - Next model-quality step remains date-level target demeaning/standardization
   and Daily_IC-based selection, not more scheduler-only tuning.
+
+## Continuation Update: Date-Level Target Normalization
+
+Updated:
+
+```text
+dl_sign_regularized_experiment.py
+```
+
+Added research-only quality controls:
+
+```text
+--aux-target-transform {raw,demean,zscore}
+--daily-ic-min
+--daily-ic-weight
+```
+
+Implementation detail:
+
+- Raw-return NLL is still trained against the original target.
+- Cross-sectional auxiliary losses can now use transformed targets:
+  - `raw`: original target
+  - `demean`: target minus same-date mean
+  - `zscore`: same-date demeaned and scaled target
+- Date-grouped rank/correlation/balance losses apply this transform within
+  each date group.
+- Hard-gated checkpoint selection can now include `Daily_IC_Mean`.
+
+Smoke test:
+
+```powershell
+python dl_sign_regularized_experiment.py --seeds 20260505 --corr-weights 0.05 --balance-weights 0.5 --rank-weights 0.01 --nll-weights 0.5 --aux-target-transform demean --date-grouped-batches --dates-per-batch 64 --hard-gate --ic-min 0 --daily-ic-min 0 --direction-min 0.5085 --epochs 1 --scheduler cosine --device auto --output data\experiment\target_transform_smoke.json --csv-output data\experiment\target_transform_smoke.csv
+```
+
+Focused three-seed comparisons:
+
+```powershell
+python dl_sign_regularized_experiment.py --seeds 20260505,20260506,20260507 --corr-weights 0.05 --balance-weights 0.5 --rank-weights 0.01 --nll-weights 0.5 --aux-target-transform demean --balance-temperature 0.05 --rank-temperature 0.02 --date-grouped-batches --dates-per-batch 64 --hard-gate --ic-min 0 --daily-ic-min 0 --direction-min 0.5085 --daily-ic-weight 0.75 --bullish-min 0.35 --bullish-max 0.75 --epochs 8 --scheduler cosine --lr 0.001 --device auto --output data\experiment\date_grouped_demean_dailyic_3seed.json --csv-output data\experiment\date_grouped_demean_dailyic_3seed.csv
+
+python dl_sign_regularized_experiment.py --seeds 20260505,20260506,20260507 --corr-weights 0.05 --balance-weights 0.5 --rank-weights 0.01 --nll-weights 0.5 --aux-target-transform zscore --balance-temperature 0.05 --rank-temperature 0.02 --date-grouped-batches --dates-per-batch 64 --hard-gate --ic-min 0 --daily-ic-min 0 --direction-min 0.5085 --daily-ic-weight 0.75 --bullish-min 0.35 --bullish-max 0.75 --epochs 8 --scheduler cosine --lr 0.001 --device auto --output data\experiment\date_grouped_zscore_dailyic_3seed.json --csv-output data\experiment\date_grouped_zscore_dailyic_3seed.csv
+```
+
+Demean aggregate:
+
+```text
+Mean MAE: 0.068238
+Mean RMSE: 0.087530
+Mean Direction: 50.71%
+Mean IC_Spearman: -0.0280
+Mean Daily_IC_Mean: -0.0398
+Mean Daily_IC_Positive_Rate: 43.23%
+Mean bullish rate: 56.14%
+Strict daily gate passing rows: 0 / 3
+```
+
+Z-score aggregate:
+
+```text
+Mean MAE: 0.068234
+Mean RMSE: 0.087429
+Mean Direction: 51.00%
+Mean IC_Spearman: -0.0234
+Mean Daily_IC_Mean: -0.0379
+Mean Daily_IC_Positive_Rate: 43.23%
+Mean bullish rate: 56.51%
+Strict daily gate passing rows: 0 / 3
+```
+
+Lower learning-rate, longer z-score run:
+
+```powershell
+python dl_sign_regularized_experiment.py --seeds 20260505,20260506,20260507,20260508,20260509 --corr-weights 0.05 --balance-weights 0.5 --rank-weights 0.01 --nll-weights 0.5 --aux-target-transform zscore --balance-temperature 0.05 --rank-temperature 0.02 --date-grouped-batches --dates-per-batch 64 --hard-gate --ic-min 0 --daily-ic-min -0.02 --direction-min 0.5085 --daily-ic-weight 0.75 --bullish-min 0.35 --bullish-max 0.75 --epochs 12 --scheduler cosine --lr 0.0005 --device auto --output data\experiment\date_grouped_zscore_low_lr_5seed.json --csv-output data\experiment\date_grouped_zscore_low_lr_5seed.csv
+```
+
+Five-seed aggregate:
+
+```text
+Mean MAE: 0.068097
+Mean RMSE: 0.087377
+Mean Direction: 49.69%
+Mean IC_Spearman: -0.0395
+Mean Daily_IC_Mean: -0.0664
+Mean Daily_IC_Positive_Rate: 40.63%
+Mean bullish rate: 56.34%
+Relaxed daily gate passing rows: 0 / 5
+```
+
+Best row from the lower-LR z-score run:
+
+```text
+seed 20260505:
+MAE 0.065488, RMSE 0.084996, Direction 52.68%, IC +0.0634,
+Daily_IC_Mean -0.0421, bullish 57.59%
+```
+
+Interpretation:
+
+- Date-level target normalization improved pooled IC in some rows and kept
+  bullish rate better bounded.
+- It did not solve Daily IC. Even the best row still had negative
+  `Daily_IC_Mean`.
+- Lower LR and longer training improved price-error metrics but did not produce
+  repeated-seed cross-sectional stability.
+
+Conclusion:
+
+- Keep `--aux-target-transform` and Daily IC gates in the harness.
+- Do not promote any normalized-target candidate yet.
+- The next quality lever should be model output decomposition:
+  train one head for raw return magnitude and a separate date-relative/rank
+  head for cross-sectional signal, then evaluate whether the rank head can
+  drive selection without forcing raw return signs to carry both jobs.
