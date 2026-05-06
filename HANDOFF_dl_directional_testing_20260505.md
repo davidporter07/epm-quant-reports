@@ -1958,3 +1958,50 @@ Interpretation:
 - The next objective should be walk-forward validation with several
   non-overlapping 252-day windows, then only consider promotion if the ensemble
   keeps positive long-short spread and positive Daily_IC_Mean across windows.
+
+## Continuation Update: Walk-Forward Rank-Head Ensemble Validation
+
+Added:
+
+```text
+notes/dl_testing_journal.md
+dl_rank_head_walkforward.py
+```
+
+Purpose:
+
+- Keep a durable, chronological project testing journal in `notes/`.
+- Run non-overlapping walk-forward validation so the rank-head ensemble is not
+  judged from one favorable holdout window.
+
+Five-seed, three-window command:
+
+```powershell
+python dl_rank_head_walkforward.py --windows 3 --val-days 252 --top-n 3 --seeds 20260505,20260506,20260507,20260508,20260509 --epochs 8 --lr 0.0005 --scheduler cosine --device auto --amp --pin-memory --date-grouped-batches --dates-per-batch 64 --aux-target-transform zscore --corr-weight 0.05 --rank-weight 0.005 --nll-weight 0.5 --output data\experiment\rank_head_walkforward_3w_5seed.json --csv-output data\experiment\rank_head_walkforward_3w_5seed.csv
+```
+
+Walk-forward top-3 rank ensemble results:
+
+```text
+2025-04-03..2026-04-06:
+IC +0.088653, Daily_IC +0.106585, Spread +0.078004,
+Spread positive rate 75.00%, Bullish 45.65%, Direction 49.22%
+
+2024-04-02..2025-04-02:
+IC +0.099221, Daily_IC +0.136491, Spread +0.052151,
+Spread positive rate 62.18%, Bullish 59.15%, Direction 50.00%
+
+2023-03-30..2024-04-01:
+IC +0.191058, Daily_IC +0.166058, Spread +0.044445,
+Spread positive rate 60.62%, Bullish 59.96%, Direction 57.51%
+```
+
+Interpretation:
+
+- This is the strongest evidence so far.
+- The rank-head top-3 ensemble kept positive spread and positive Daily IC across
+  all three non-overlapping windows.
+- This qualifies the rank-head ensemble for shadow-mode production candidate
+  work.
+- It should not replace the existing production DL forecast yet. The next step
+  is daily shadow forecasts and live outcome comparison.
