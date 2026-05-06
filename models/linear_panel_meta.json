@@ -25,8 +25,8 @@
     "composite_score",
     "quant_score"
   ],
-  "rmse": 0.030734284385550988,
-  "trained_at": "2026-05-06T09:00:55",
+  "rmse": 0.030734284151116238,
+  "trained_at": "2026-05-06T16:13:39",
   "observations": 10395,
   "backtest_rows": 350
 }
