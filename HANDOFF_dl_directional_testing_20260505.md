@@ -1842,3 +1842,119 @@ Conclusion:
   train one head for raw return magnitude and a separate date-relative/rank
   head for cross-sectional signal, then evaluate whether the rank head can
   drive selection without forcing raw return signs to carry both jobs.
+
+## Continuation Update: Rank-Head Selection Objective and Ensemble Testing
+
+Updated:
+
+```text
+dl_rank_head_experiment.py
+dl_rank_head_ensemble_eval.py
+```
+
+Rationale:
+
+- Prior tests showed raw sign accuracy is not the cleanest signal.
+- The rank head is better judged as a date-relative selection model:
+  top-ranked names should outperform bottom-ranked names on the same date.
+- Checkpoint selection was changed from the legacy sign/IC score to a
+  selection objective using:
+  - centered long-short spread
+  - spread positive rate
+  - Daily_IC_Mean
+  - pooled IC
+  - bounded bullish rate
+
+Key implementation details:
+
+- Rank-head checkpoints now save their matching scaler JSON so they are
+  reloadable outside the original training process.
+- `dl_rank_head_ensemble_eval.py` reloads saved rank-head checkpoints,
+  centers each model's rank score by date, averages the centered rank scores,
+  and reports the same IC/selection metrics.
+- Production `deep_learning_model.py` was not modified.
+
+Best single-setting validation so far:
+
+```powershell
+python dl_rank_head_experiment.py --seeds 20260505,20260506,20260507,20260508,20260509 --epochs 8 --lr 0.0005 --scheduler cosine --device auto --amp --pin-memory --date-grouped-batches --dates-per-batch 64 --aux-target-transform zscore --nll-weights 0.5 --corr-weights 0.05 --rank-weights 0.005 --daily-ic-min -0.02 --spread-min 0.0 --spread-positive-rate-min 0.55 --hard-gate --selection-score-mode selection --output data\experiment\rank_head_selection_objective_scaler_5seed.json --csv-output data\experiment\rank_head_selection_objective_scaler_5seed.csv
+```
+
+Five-seed centered rank aggregate:
+
+```text
+Mean IC_Spearman: +0.0488
+Mean Daily_IC_Mean: +0.0935
+Mean long-short spread: +0.0512
+Minimum long-short spread: +0.0120
+Mean spread positive rate: 67.66%
+Mean bullish rate: 44.33%
+Mean directional accuracy: 46.61%
+```
+
+Top-member ensemble checks from that run:
+
+```powershell
+python dl_rank_head_ensemble_eval.py --results data\experiment\rank_head_selection_objective_scaler_5seed.json --device auto --amp --top-n 3 --output data\experiment\rank_head_selection_objective_ensemble_top3.json --csv-output data\experiment\rank_head_selection_objective_ensemble_members_top3.csv
+```
+
+Top-3 ensemble:
+
+```text
+IC_Spearman: +0.088653
+Daily_IC_Mean: +0.106585
+Long-short spread: +0.078004
+Spread positive rate: 75.00%
+Bullish rate: 45.65%
+Directional accuracy: 49.22%
+```
+
+Top-2 ensemble:
+
+```text
+IC_Spearman: +0.121458
+Daily_IC_Mean: +0.121094
+Long-short spread: +0.073797
+Spread positive rate: 72.66%
+Bullish rate: 50.33%
+Directional accuracy: 52.79%
+```
+
+Interpretation:
+
+- The ensemble path is the strongest result so far for selection/ranking.
+- Top-3 gives the best long-short spread and hit rate.
+- Top-2 gives stronger pooled IC and directional accuracy but less model
+  diversity.
+- This supports an ensemble rank signal as the next production candidate,
+  not a single-seed raw sign forecaster.
+
+Robustness checks:
+
+Short holdout (`--val-days 126`):
+
+```text
+Result: rejected as a production gate.
+Reason: validation sample count was too small/discrete for this panel and
+sequence length. Top-3 ensemble long-short spread was -0.020117 despite
+positive IC, so it is not a reliable promotion window.
+```
+
+Long holdout (`--val-days 504`):
+
+```text
+Top-3 ensemble IC_Spearman: +0.025612
+Top-3 ensemble Daily_IC_Mean: +0.023158
+Top-3 ensemble long-short spread: +0.039360
+Top-3 ensemble spread positive rate: 56.84%
+Top-3 ensemble bullish rate: 50.06%
+```
+
+Interpretation:
+
+- The 504-day holdout is positive but materially weaker than the 252-day
+  holdout.
+- This is not enough to call the rank-head ensemble production-ready yet.
+- The next objective should be walk-forward validation with several
+  non-overlapping 252-day windows, then only consider promotion if the ensemble
+  keeps positive long-short spread and positive Daily_IC_Mean across windows.

@@ -396,6 +396,7 @@ def _train_one(
     if date_grouped_batches:
         variant = f"{variant}_dgb"
     model_path = EXPERIMENT_DIR / f"dl_{variant}.pt"
+    scaler_path = EXPERIMENT_DIR / f"dl_{variant}_scaler.json"
     EXPERIMENT_DIR.mkdir(parents=True, exist_ok=True)
 
     best = {
@@ -550,6 +551,19 @@ def _train_one(
         },
         model_path,
     )
+    with scaler_path.open("w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "feature_cols": feature_cols,
+                "scaler": scaler,
+                "seq_len": cfg.seq_len,
+                "hidden": cfg.hidden,
+                "dropout": cfg.dropout,
+                "model_type": "RankHeadTCN",
+            },
+            f,
+            indent=2,
+        )
     return {
         "variant": variant,
         "seed": seed,
@@ -581,6 +595,7 @@ def _train_one(
         "extra_features": extra_features,
         "feature_count": len(feature_cols),
         "model_path": str(model_path),
+        "scaler_path": str(scaler_path),
         "raw_metrics": raw_metrics,
         "rank_metrics": rank_metrics,
         "rank_centered_metrics": rank_centered_metrics,
