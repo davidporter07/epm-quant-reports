@@ -6,13 +6,13 @@ import argparse
 import json
 import random
 from pathlib import Path
-from typing import List
+from typing import Iterator, List
 
 import numpy as np
 import pandas as pd
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader, Sampler, WeightedRandomSampler
 
 from deep_learning_model import (
     FEATURE_COLS_DEFAULT,
@@ -92,6 +92,33 @@ def _pairwise_rank_loss(pred: torch.Tensor, target: torch.Tensor, temperature: f
     return torch.nn.functional.softplus(-margin).mean()
 
 
+def _grouped_aux_loss(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    dates_ns: torch.Tensor,
+    loss_name: str,
+    temperature: float,
+    min_group_size: int,
+) -> torch.Tensor:
+    pieces = []
+    flat_dates = dates_ns.view(-1)
+    for date_ns in torch.unique(flat_dates):
+        mask = flat_dates == date_ns
+        if int(mask.sum().item()) < int(min_group_size):
+            continue
+        if loss_name == "corr":
+            pieces.append(_pearson_corr_loss(pred[mask], target[mask]))
+        elif loss_name == "balance":
+            pieces.append(_sign_balance_loss(pred[mask], target[mask], temperature))
+        elif loss_name == "rank":
+            pieces.append(_pairwise_rank_loss(pred[mask], target[mask], temperature))
+        else:
+            raise ValueError(f"Unknown grouped loss: {loss_name}")
+    if not pieces:
+        return pred.sum() * 0.0
+    return torch.stack(pieces).mean()
+
+
 def _daily_metrics(pred: np.ndarray, actual: np.ndarray, dates_ns: np.ndarray) -> dict:
     rows = pd.DataFrame({"pred": pred, "actual": actual, "date": dates_ns})
     ic_vals = []
@@ -168,6 +195,46 @@ def _balanced_sampler(ds: PanelSequenceDataset) -> WeightedRandomSampler:
     )
 
 
+class DateGroupedBatchSampler(Sampler[List[int]]):
+    """Yield batches containing samples from the same prediction date."""
+
+    def __init__(
+        self,
+        ds: PanelSequenceDataset,
+        seed: int,
+        min_batch_size: int = 2,
+        dates_per_batch: int = 1,
+    ):
+        groups: dict[int, list[int]] = {}
+        for sample_idx, (tkr_idx, end_i) in enumerate(ds._samples):
+            date_ns = int(ds._dates_ns[int(tkr_idx)][int(end_i)])
+            groups.setdefault(date_ns, []).append(int(sample_idx))
+        self._date_batches = [idxs for idxs in groups.values() if len(idxs) >= int(min_batch_size)]
+        if not self._date_batches:
+            raise RuntimeError("No date-grouped batches available. Lower --min-date-batch-size or check panel coverage.")
+        self._seed = int(seed)
+        self._dates_per_batch = max(1, int(dates_per_batch))
+        self._epoch = 0
+
+    def __iter__(self) -> Iterator[List[int]]:
+        rng = np.random.default_rng(self._seed + self._epoch)
+        self._epoch += 1
+        order = rng.permutation(len(self._date_batches))
+        for start in range(0, len(order), self._dates_per_batch):
+            batch = []
+            for batch_i in order[start : start + self._dates_per_batch]:
+                batch.extend(self._date_batches[int(batch_i)])
+            rng.shuffle(batch)
+            yield batch
+
+    def __len__(self) -> int:
+        return int(np.ceil(len(self._date_batches) / self._dates_per_batch))
+
+    @property
+    def date_count(self) -> int:
+        return len(self._date_batches)
+
+
 def _selection_score(
     metrics: dict,
     bullish_min: float,
@@ -220,6 +287,9 @@ def _train_one(
     balance_temperature: float,
     rank_temperature: float,
     balanced_sampler: bool,
+    date_grouped_batches: bool,
+    min_date_batch_size: int,
+    dates_per_batch: int,
     bullish_min: float,
     bullish_max: float,
     ic_min: float,
@@ -239,13 +309,30 @@ def _train_one(
     train_ds = PanelSequenceDataset(train_panel, scaler, feature_cols, cfg.seq_len, seed=seed)
     val_ds = PanelSequenceDataset(val_panel, scaler, feature_cols, cfg.seq_len, seed=seed + 1)
     sampler = _balanced_sampler(train_ds) if balanced_sampler else None
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=batch_size,
-        shuffle=sampler is None,
-        sampler=sampler,
-        drop_last=True,
-    )
+    if balanced_sampler and date_grouped_batches:
+        raise ValueError("--balanced-sampler and --date-grouped-batches are mutually exclusive.")
+    if date_grouped_batches:
+        batch_sampler = DateGroupedBatchSampler(
+            train_ds,
+            seed=seed,
+            min_batch_size=min_date_batch_size,
+            dates_per_batch=dates_per_batch,
+        )
+        train_loader = DataLoader(train_ds, batch_sampler=batch_sampler)
+        print(
+            f"date-grouped batches={len(batch_sampler)} "
+            f"date_count={batch_sampler.date_count} "
+            f"dates_per_batch={int(dates_per_batch)} "
+            f"min_date_batch_size={int(min_date_batch_size)}"
+        )
+    else:
+        train_loader = DataLoader(
+            train_ds,
+            batch_size=batch_size,
+            shuffle=sampler is None,
+            sampler=sampler,
+            drop_last=True,
+        )
     val_loader = DataLoader(val_ds, batch_size=1024, shuffle=False)
 
     model = TCNForecaster(n_features=len(feature_cols), hidden=cfg.hidden, dropout=cfg.dropout).to("cpu")
@@ -260,6 +347,8 @@ def _train_one(
     )
     if balanced_sampler:
         variant = f"{variant}_bs"
+    if date_grouped_batches:
+        variant = f"{variant}_dgb"
     model_path = EXPERIMENT_DIR / f"dl_{variant}.pt"
     scaler_path = EXPERIMENT_DIR / f"dl_{variant}_scaler.json"
     EXPERIMENT_DIR.mkdir(parents=True, exist_ok=True)
@@ -268,16 +357,31 @@ def _train_one(
     for epoch in range(1, epochs + 1):
         model.train()
         train_losses = []
-        for xb, yb, _, _ in train_loader:
+        for xb, yb, _, date_ns in train_loader:
             opt.zero_grad(set_to_none=True)
             mu, log_sigma = model(xb)
             loss = float(nll_weight) * gaussian_nll(mu, log_sigma, yb)
             if corr_weight > 0:
-                loss = loss + float(corr_weight) * _pearson_corr_loss(mu, yb)
+                corr_loss = (
+                    _grouped_aux_loss(mu, yb, date_ns, "corr", rank_temperature, min_date_batch_size)
+                    if date_grouped_batches
+                    else _pearson_corr_loss(mu, yb)
+                )
+                loss = loss + float(corr_weight) * corr_loss
             if balance_weight > 0:
-                loss = loss + float(balance_weight) * _sign_balance_loss(mu, yb, balance_temperature)
+                balance_loss = (
+                    _grouped_aux_loss(mu, yb, date_ns, "balance", balance_temperature, min_date_batch_size)
+                    if date_grouped_batches
+                    else _sign_balance_loss(mu, yb, balance_temperature)
+                )
+                loss = loss + float(balance_weight) * balance_loss
             if rank_weight > 0:
-                loss = loss + float(rank_weight) * _pairwise_rank_loss(mu, yb, rank_temperature)
+                rank_loss = (
+                    _grouped_aux_loss(mu, yb, date_ns, "rank", rank_temperature, min_date_batch_size)
+                    if date_grouped_batches
+                    else _pairwise_rank_loss(mu, yb, rank_temperature)
+                )
+                loss = loss + float(rank_weight) * rank_loss
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()
@@ -317,6 +421,9 @@ def _train_one(
             "rank_weight": rank_weight,
             "nll_weight": nll_weight,
             "balanced_sampler": balanced_sampler,
+            "date_grouped_batches": date_grouped_batches,
+            "min_date_batch_size": min_date_batch_size,
+            "dates_per_batch": dates_per_batch,
             "hard_gate": hard_gate,
             "ic_min": ic_min,
             "direction_min": direction_min,
@@ -346,6 +453,9 @@ def _train_one(
         "rank_weight": rank_weight,
         "nll_weight": nll_weight,
         "balanced_sampler": balanced_sampler,
+        "date_grouped_batches": date_grouped_batches,
+        "min_date_batch_size": min_date_batch_size,
+        "dates_per_batch": dates_per_batch,
         "hard_gate": hard_gate,
         "ic_min": ic_min,
         "direction_min": direction_min,
@@ -398,6 +508,9 @@ def main() -> None:
     ap.add_argument("--balance-temperature", type=float, default=0.02)
     ap.add_argument("--rank-temperature", type=float, default=0.02)
     ap.add_argument("--balanced-sampler", action="store_true")
+    ap.add_argument("--date-grouped-batches", action="store_true")
+    ap.add_argument("--min-date-batch-size", type=int, default=2)
+    ap.add_argument("--dates-per-batch", type=int, default=1)
     ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--batch-size", type=int, default=256)
     ap.add_argument("--val-days", type=int, default=252)
@@ -438,6 +551,9 @@ def main() -> None:
                                 balance_temperature=float(args.balance_temperature),
                                 rank_temperature=float(args.rank_temperature),
                                 balanced_sampler=bool(args.balanced_sampler),
+                                date_grouped_batches=bool(args.date_grouped_batches),
+                                min_date_batch_size=int(args.min_date_batch_size),
+                                dates_per_batch=int(args.dates_per_batch),
                                 bullish_min=float(args.bullish_min),
                                 bullish_max=float(args.bullish_max),
                                 ic_min=float(args.ic_min),
@@ -458,6 +574,9 @@ def main() -> None:
                 "extra_features": extra_features,
                 "epochs": int(args.epochs),
                 "batch_size": int(args.batch_size),
+                "date_grouped_batches": bool(args.date_grouped_batches),
+                "min_date_batch_size": int(args.min_date_batch_size),
+                "dates_per_batch": int(args.dates_per_batch),
                 "val_days": int(args.val_days),
                 "lr": float(args.lr),
                 "nll_weights": _parse_floats(args.nll_weights),

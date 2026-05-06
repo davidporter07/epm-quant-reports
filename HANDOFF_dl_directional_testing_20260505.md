@@ -1545,3 +1545,106 @@ Conclusion:
   from random pooled windows to date-grouped batches, because the target
   business problem is cross-sectional ranking by date. Batch-level rank loss on
   randomly mixed dates is not matching the validation objective tightly enough.
+
+## Continuation Update: Date-Grouped Cross-Sectional Rank Training
+
+Updated:
+
+```text
+dl_sign_regularized_experiment.py
+```
+
+Added research-only date-grouped training controls:
+
+```text
+--date-grouped-batches
+--min-date-batch-size
+--dates-per-batch
+```
+
+Implementation detail:
+
+- Training batches can now preserve date groups so rank/correlation/balance
+  losses are computed within each prediction date.
+- `--dates-per-batch` packs multiple date groups into one optimizer batch for
+  speed while keeping auxiliary losses grouped by date internally.
+- `--balanced-sampler` and `--date-grouped-batches` are mutually exclusive.
+
+Smoke test:
+
+```powershell
+python dl_sign_regularized_experiment.py --seeds 20260505 --corr-weights 0.05 --balance-weights 0.5 --rank-weights 0.01 --nll-weights 1.0 --date-grouped-batches --dates-per-batch 32 --hard-gate --ic-min 0 --direction-min 0.5085 --epochs 1 --output data\experiment\date_grouped_smoke.json --csv-output data\experiment\date_grouped_smoke.csv
+```
+
+Result:
+
+```text
+date_count: 1175
+optimizer batches per epoch with dates_per_batch=32: 37
+```
+
+Focused date-grouped grid:
+
+```powershell
+python dl_sign_regularized_experiment.py --seeds 20260505,20260506,20260507 --corr-weights 0.05 --balance-weights 0.1,0.5 --rank-weights 0.01,0.05 --nll-weights 1.0,0.5 --balance-temperature 0.05 --rank-temperature 0.02 --date-grouped-batches --dates-per-batch 32 --hard-gate --ic-min 0 --direction-min 0.5085 --bullish-min 0.35 --bullish-max 0.75 --epochs 5 --batch-size 256 --val-days 252 --lr 0.001 --output data\experiment\sign_regularized_date_grouped_rank_ic.json --csv-output data\experiment\sign_regularized_date_grouped_rank_ic.csv
+```
+
+Aggregate:
+
+```text
+Mean MAE: 0.068795
+Mean RMSE: 0.088063
+Mean Direction: 49.78%
+Mean IC_Spearman: -0.0636
+Mean Daily_IC_Mean: -0.0783
+Mean Daily_IC_Positive_Rate: 42.25%
+Mean bullish rate: 60.40%
+Strict gate passing rows: 2 / 24
+```
+
+Best strict-gate row:
+
+```text
+seed 20260505, corr 0.05, balance 0.5, rank 0.01, nll 0.5:
+MAE 0.068350, RMSE 0.087126, Direction 51.79%, IC +0.0479,
+Daily_IC_Mean -0.0254, bullish 61.38%
+```
+
+Five-seed repeat of that best setup:
+
+```powershell
+python dl_sign_regularized_experiment.py --seeds 20260505,20260506,20260507,20260508,20260509 --corr-weights 0.05 --balance-weights 0.5 --rank-weights 0.01 --nll-weights 0.5 --balance-temperature 0.05 --rank-temperature 0.02 --date-grouped-batches --dates-per-batch 32 --hard-gate --ic-min 0 --direction-min 0.5085 --bullish-min 0.35 --bullish-max 0.75 --epochs 5 --batch-size 256 --val-days 252 --lr 0.001 --output data\experiment\sign_regularized_date_grouped_best_5seed.json --csv-output data\experiment\sign_regularized_date_grouped_best_5seed.csv
+```
+
+Five-seed aggregate:
+
+```text
+Mean MAE: 0.071762
+Mean RMSE: 0.090984
+Mean Direction: 49.33%
+Mean IC_Spearman: -0.0806
+Mean Daily_IC_Mean: -0.0935
+Mean Daily_IC_Positive_Rate: 41.56%
+Mean bullish rate: 62.37%
+Strict gate passing rows: 1 / 5
+```
+
+Interpretation:
+
+- Date-grouped rank training is directionally more aligned with the business
+  objective and produced the cleanest single checkpoint so far:
+  bounded bullish rate, positive pooled IC, and direction above production.
+- It still failed seed stability. Only seed `20260505` passed the strict gate
+  in the five-seed repeat.
+- Daily IC stayed negative even in the best row, which means the pooled IC gain
+  is not yet a robust per-date cross-sectional ranking signal.
+
+Conclusion:
+
+- Keep the date-grouped training infrastructure; it is the correct shape for
+  future cross-sectional objectives.
+- Do not promote this candidate.
+- Next useful work should focus on stabilizing date-grouped training:
+  lower learning rate, longer training, stronger early stopping based on
+  Daily_IC_Mean, and possibly target demeaning/standardization within each date
+  so the model learns relative returns instead of mixed market-regime drift.
