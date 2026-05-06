@@ -1343,3 +1343,107 @@ Conclusion:
 - Next step should be a research-only balanced-sampler dual-head experiment with
   validation gating on direction + IC + bullish-rate bounds.
 - Do not promote the 10-epoch single-head candidate.
+
+## Continuation Update: Balanced-Sampler Dual-Head Gate Run
+
+Updated:
+
+```text
+dl_dual_head_experiment.py
+```
+
+Added research-only controls:
+
+```text
+--seeds
+--lr
+--balanced-sampler
+--from-scratch
+--selection-metric {loss,gate}
+--bullish-min / --bullish-max
+--default-extra-features
+--output / --csv-output
+```
+
+The dual-head experiment now reports both return-head and direction-head
+direction accuracy, bullish rates, actual bullish rate, IC, and prediction
+distribution. Gate selection prioritizes return-head direction, head direction,
+IC, MAE, and a bullish-rate bound.
+
+First run, balanced sampler plus balanced BCE:
+
+```powershell
+python dl_dual_head_experiment.py --panel data\experiment\directional_feature_panel_fmp.parquet --default-extra-features --weights 0.1,0.25 --thresholds 0.01 --epochs 5 --batch-size 256 --val-days 252 --balanced --balanced-sampler --from-scratch --seeds 20260505,20260506,20260507 --lr 0.001 --selection-metric gate --output data\experiment\dual_head_balanced_sampler_comparison.json --csv-output data\experiment\dual_head_balanced_sampler_comparison.csv
+```
+
+Loose gate result:
+
+```text
+Mean MAE: 0.067120
+Mean RMSE: 0.085576
+Mean return direction: 60.94%
+Mean head direction: 37.46%
+Mean IC_Spearman: -0.0627
+Mean return bullish rate: 89.36%
+Mean head bullish rate: 3.46%
+```
+
+Interpretation:
+
+- Return direction looked good but was still bullish-heavy.
+- Direction head collapsed mostly bearish.
+- This is not stable directional learning.
+
+Strict gate rerun with out-of-bound bullish rates heavily penalized:
+
+```text
+Mean MAE: 0.069957
+Mean RMSE: 0.088732
+Mean return direction: 48.70%
+Mean head direction: 38.71%
+Mean IC_Spearman: -0.0759
+Mean return bullish rate: 60.38%
+Mean head bullish rate: 13.08%
+```
+
+Interpretation:
+
+- Strict gating fixed return-head bullish collapse.
+- It exposed the underlying weakness: direction and IC were not good enough.
+
+Sampler-only rerun without balanced BCE `pos_weight`:
+
+```powershell
+python dl_dual_head_experiment.py --panel data\experiment\directional_feature_panel_fmp.parquet --default-extra-features --weights 0.1,0.25 --thresholds 0.01 --epochs 5 --batch-size 256 --val-days 252 --balanced-sampler --from-scratch --seeds 20260505,20260506,20260507 --lr 0.001 --selection-metric gate --output data\experiment\dual_head_sampler_only_strict_gate.json --csv-output data\experiment\dual_head_sampler_only_strict_gate.csv
+```
+
+Result:
+
+```text
+Mean MAE: 0.069570
+Mean RMSE: 0.088332
+Mean return direction: 50.84%
+Mean head direction: 54.54%
+Mean IC_Spearman: -0.0896
+Mean return bullish rate: 63.30%
+Mean head bullish rate: 84.19%
+```
+
+Interpretation:
+
+- Removing `pos_weight` improved the direction head versus the all-bearish
+  failure mode.
+- It did not improve the return head enough, and IC stayed negative.
+- The direction head shifted toward bullish-heavy predictions.
+
+Conclusion:
+
+- Balanced-sampler dual-head with the current BCE setup is not a promotion
+  path.
+- The gate is useful and should remain in the research script.
+- The next objective should stop trying to rely on BCE direction classification
+  alone. Better options are:
+  - train the return head with an explicit cross-sectional/ranking objective,
+  - select by non-negative IC and bounded bullish rate as hard constraints,
+  - or test a small multi-task objective where the direction head influences
+    representation learning but final sign/rank comes from the return head.
