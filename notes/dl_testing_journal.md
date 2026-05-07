@@ -589,3 +589,56 @@ Interpretation:
 - Next quality step: keep this candidate in shadow mode, score it when forward
   returns mature, and compare it against the older live shadow candidate before
   promoting any rank-head signal into production commentary.
+
+## 2026-05-07 - Current Candidate Ensemble Breadth Robustness
+
+Objective:
+
+- Test whether the current immutable candidate depends too heavily on the
+  selected top-3 ensemble size.
+- A production candidate should keep positive rank and selection behavior when
+  evaluated as a single best model and as a wider ensemble.
+
+Commands:
+
+```powershell
+python dl_rank_head_ensemble_eval.py --results data\experiment\rank_head_current_immutable_5seed.json --device cpu --top-n 1 --output data\experiment\rank_head_current_immutable_ensemble_top1.json --csv-output data\experiment\rank_head_current_immutable_ensemble_members_top1.csv
+python dl_rank_head_ensemble_eval.py --results data\experiment\rank_head_current_immutable_5seed.json --device cpu --top-n 5 --output data\experiment\rank_head_current_immutable_ensemble_top5.json --csv-output data\experiment\rank_head_current_immutable_ensemble_members_top5.csv
+```
+
+Rank-centered results:
+
+```text
+Top-1:
+IC_Spearman: +0.094572
+Daily_IC_Mean: +0.110474
+Long-short spread: +0.042900
+Spread positive rate: 68.39%
+Directional accuracy: 50.11%
+Bullish prediction rate: 47.89%
+
+Top-3:
+IC_Spearman: +0.090393
+Daily_IC_Mean: +0.174685
+Long-short spread: +0.047033
+Spread positive rate: 65.29%
+Directional accuracy: 49.37%
+Bullish prediction rate: 39.75%
+
+Top-5:
+IC_Spearman: +0.048657
+Daily_IC_Mean: +0.144152
+Long-short spread: +0.050710
+Spread positive rate: 62.18%
+Directional accuracy: 48.63%
+Bullish prediction rate: 45.67%
+```
+
+Interpretation:
+
+- The candidate is not a fragile top-3-only result. All three ensemble breadths
+  keep positive rank IC and positive long/short selection spread.
+- Top-5 has the strongest spread but weaker overall IC; top-3 remains the best
+  balance of daily IC, spread, and prediction-rate discipline.
+- Keep top-3 as the shadow default. Promotion should still wait for matured
+  live shadow scores and at least one more clean refresh/backtest cycle.
