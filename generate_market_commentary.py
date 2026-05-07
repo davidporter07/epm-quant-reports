@@ -1052,6 +1052,9 @@ NUMBER FIDELITY (non-negotiable):
 - S&P 500: use market_levels["S&P 500"]["pct_change"] for the percent; ["level"] for the price.
 - Apply the same rule for Nasdaq 100, DXY, 10-Yr Yield, Gold, WTI Crude against market_levels / bonds / commodities_top6 / currencies_top5.
 - Direction words (rose/fell/gained/slid) MUST agree with the SIGN of pct_change. A pct_change of -0.04% is "essentially flat" or "barely changed" — NOT "lower" or "fell".
+- SIGN PRESERVATION (most-violated rule): If pct_change is negative, the cited percent must be negative AND the verb must be "fell"/"slid"/"declined". If pct_change is positive, the cited percent must be positive AND the verb must be "rose"/"gained"/"climbed". Magnitude alone is wrong — sign and verb must both match.
+  BAD: snapshot WTI Crude pct_change=-0.79 → "WTI rose 0.79% on supply concerns" (sign flipped, verb wrong)
+  GOOD: snapshot WTI Crude pct_change=-0.79 → "WTI fell 0.79% to $94.99 on softer Asian demand"
 - If a number is missing from the payload, OMIT it entirely. Do NOT estimate, round, or invent.
 - Tickers in recent_earnings_actuals have ALREADY released earnings this week — never write "later this week" or "upcoming earnings" for them. If you mention one, cite the reported EPS and surprise % from the payload.
 
@@ -1281,7 +1284,7 @@ def _call_ollama_raw(system: str, user_payload: dict) -> dict:
     return json.loads(content)
 
 
-def call_ollama(payload: dict) -> dict:
+def call_ollama(payload: dict, snapshot: dict) -> dict:
     """Two-shot generation: narrative sections then outlook/portfolio."""
 
     # Trim news to 4 items per bucket to keep payload small
@@ -1340,12 +1343,15 @@ def call_ollama(payload: dict) -> dict:
             part1 = scrub_banned_phrases(part1)
             banned = find_banned_phrases(part1)
             leaks = find_leaked_placeholders(part1)
-            if not banned and not leaks:
+            numeric = _check_numeric_consistency(part1, snapshot)
+            if not banned and not leaks and not numeric:
                 break
             if banned:
                 print(f"  [RETRY] Attempt {attempt + 1} still contained banned phrases after scrub: {banned}. Retrying...")
             if leaks:
                 print(f"  [RETRY] Attempt {attempt + 1} contained leaked placeholders: {leaks}. Retrying...")
+            if numeric:
+                print(f"  [RETRY] Attempt {attempt + 1} had numeric consistency violations: {numeric}. Retrying...")
         except Exception as exc:
             print(f"  [WARN] Narrative call failed (attempt {attempt + 1}): {exc}")
             part1 = {}
@@ -2062,7 +2068,7 @@ def main() -> int:
     known_tickers: set[str] = set()
     llm_ok = False
     try:
-        commentary, known_tickers = call_ollama(payload)
+        commentary, known_tickers = call_ollama(payload, snapshot)
         commentary = scrub_banned_phrases(commentary)
         if validate_commentary(commentary, known_tickers=known_tickers, snapshot=snapshot):
             banned = find_banned_phrases(commentary)
