@@ -205,8 +205,11 @@ def build_commentary_email_blocks(commentary):
         pct   = d.get('pct_change', '')
         arrow = _arrow(pct)
         color = _pct_color(pct)
-        sign  = '+' if isinstance(pct, (int, float)) and pct >= 0 else ''
-        pct_str = f'{sign}{pct}%' if pct != '' else ''
+        if isinstance(pct, (int, float)):
+            _pct_norm = pct + 0.0  # normalize -0.0 to 0.0 for sign formatting
+            pct_str = f'{_pct_norm:+.2f}%'
+        else:
+            pct_str = ''
         _is_yield = 'Yield' in label or 'Spread' in label
         _is_dxy   = 'DXY' in label
         try:

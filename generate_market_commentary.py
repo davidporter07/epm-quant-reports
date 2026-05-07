@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1038,6 +1039,7 @@ ONE-SHOT CALIBRATION — geopolitical tone (follow this pattern exactly):
   BAD: "Mounting costs of the Iran war strain U.S. finances as the conflict widens."
   GOOD: "Markets are pricing a higher risk premium after reports of expanded strikes near Iranian facilities; diplomatic talks remain unresolved."
   Rule: mirror the payload's exact language — do not upgrade 'strikes' to 'war', do not assert fiscal or political consequences as fact, do not name a conflict as an ongoing war unless the payload explicitly uses that word.
+Do NOT cite foreign central banks (BoE, ECB, BoJ, PBoC, RBA, BoC, SNB) or foreign sovereign yields (Gilts, Bunds, JGBs) as drivers of US asset moves unless a US-asset headline in the payload explicitly names that institution. Foreign monetary policy may move foreign assets in the international section; for US equities, US bonds, and US dollar commentary, drivers must come from the US payload.
 Return ONLY valid JSON  no markdown fences, no explanation."""
 
 # Call 1: Market narrative sections
@@ -1059,6 +1061,12 @@ pre_market_bullets: Array of 5 strings:
   [2] Economic calendar: if there are events today in upcoming_economic_events, cite the most important one (name the event and its importance). If there are no events today, OMIT this bullet entirely and produce only 4 items total.
   [3] Fed/rates: cite 10-yr yield level and direction with a specific driver.
   [4] Top commodity or currency move with level and driver.
+
+FLAT-DAY CALIBRATION: when |pct_change| < 0.10 for an index, write "essentially flat at [level]" instead of citing only a percent. Example:
+  BAD: "S&P 500 unchanged% at 7,365.12"   (template substitution failure)
+  BAD: "S&P 500 +0.04% — markets unchanged" (contradictory)
+  GOOD: "S&P 500 closed essentially flat at 7,365.12 (+0.04%)"
+  GOOD: "Markets closed mixed — S&P 500 essentially flat (+0.04%), Nasdaq 100 -0.12%; [catalyst]"
 
 equities_commentary: 5-8 sentences. Lead with S&P 500 direction and level. Sector leadership. Connect to macro driver from news. Global market context. Risk ahead.
 
@@ -1329,9 +1337,13 @@ def call_ollama(payload: dict) -> dict:
                     part1[canonical] = part1.pop(alias)
             part1 = scrub_banned_phrases(part1)
             banned = find_banned_phrases(part1)
-            if not banned:
+            leaks = find_leaked_placeholders(part1)
+            if not banned and not leaks:
                 break
-            print(f"  [RETRY] Attempt {attempt + 1} still contained banned phrases after scrub: {banned}. Retrying...")
+            if banned:
+                print(f"  [RETRY] Attempt {attempt + 1} still contained banned phrases after scrub: {banned}. Retrying...")
+            if leaks:
+                print(f"  [RETRY] Attempt {attempt + 1} contained leaked placeholders: {leaks}. Retrying...")
         except Exception as exc:
             print(f"  [WARN] Narrative call failed (attempt {attempt + 1}): {exc}")
             part1 = {}
@@ -1355,9 +1367,13 @@ def call_ollama(payload: dict) -> dict:
             print(f"    Keys returned: {list(part2.keys())}")
             part2 = scrub_banned_phrases(part2)
             banned = find_banned_phrases(part2)
-            if not banned:
+            leaks = find_leaked_placeholders(part2)
+            if not banned and not leaks:
                 break
-            print(f"  [RETRY] Attempt {attempt + 1} still contained banned phrases after scrub: {banned}. Retrying...")
+            if banned:
+                print(f"  [RETRY] Attempt {attempt + 1} still contained banned phrases after scrub: {banned}. Retrying...")
+            if leaks:
+                print(f"  [RETRY] Attempt {attempt + 1} contained leaked placeholders: {leaks}. Retrying...")
         except Exception as exc:
             print(f"  [WARN] Outlook call failed (attempt {attempt + 1}): {exc}")
             part2 = {}
@@ -1386,9 +1402,13 @@ def call_ollama(payload: dict) -> dict:
             print(f"    Keys returned: {list(part3.keys())}")
             part3 = scrub_banned_phrases(part3)
             banned = find_banned_phrases(part3)
-            if not banned:
+            leaks = find_leaked_placeholders(part3)
+            if not banned and not leaks:
                 break
-            print(f"  [RETRY] Attempt {attempt + 1} still contained banned phrases after scrub: {banned}. Retrying...")
+            if banned:
+                print(f"  [RETRY] Attempt {attempt + 1} still contained banned phrases after scrub: {banned}. Retrying...")
+            if leaks:
+                print(f"  [RETRY] Attempt {attempt + 1} contained leaked placeholders: {leaks}. Retrying...")
         except Exception as exc:
             print(f"  [WARN] Recap call failed (attempt {attempt + 1}): {exc}")
             part3 = {}
@@ -1424,9 +1444,13 @@ def call_ollama(payload: dict) -> dict:
             print(f"    Keys returned: {list(part4.keys())}")
             part4 = scrub_banned_phrases(part4)
             banned = find_banned_phrases(part4)
-            if not banned:
+            leaks = find_leaked_placeholders(part4)
+            if not banned and not leaks:
                 break
-            print(f"  [RETRY] Attempt {attempt + 1} synthesis still had banned phrases: {banned}. Retrying...")
+            if banned:
+                print(f"  [RETRY] Attempt {attempt + 1} synthesis still had banned phrases: {banned}. Retrying...")
+            if leaks:
+                print(f"  [RETRY] Attempt {attempt + 1} contained leaked placeholders: {leaks}. Retrying...")
         except Exception as exc:
             print(f"  [WARN] Synthesis call failed (attempt {attempt + 1}): {exc}")
             part4 = {}
@@ -1467,6 +1491,25 @@ def find_banned_phrases(data: dict) -> list[str]:
         for phrase in BANNED_PHRASES:
             if phrase in text and phrase not in found:
                 found.append(phrase)
+    return found
+
+
+_PLACEHOLDER_PATTERNS = [
+    re.compile(r"\{[a-z_][a-z0-9_]*\}"),           # {spx_pct}, {ust10_level}
+    re.compile(r"\[[a-z_][a-z0-9_/ +-]*\]"),        # [value], [higher/lower], [implication]
+]
+
+
+def find_leaked_placeholders(data: dict) -> list[str]:
+    """Detect prompt-template placeholders that leaked through into LLM output."""
+    found = []
+    for key in NARRATIVE_KEYS:
+        val = data.get(key, "")
+        text = " ".join(val) if isinstance(val, list) else str(val)
+        for pat in _PLACEHOLDER_PATTERNS:
+            for m in pat.findall(text):
+                if m not in found:
+                    found.append(m)
     return found
 
 
