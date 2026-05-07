@@ -496,3 +496,96 @@ Interpretation:
 - This restores the shadow-mode candidate path, but it still should remain
   shadow-only until live scoring or a current-date retrained immutable candidate
   confirms behavior.
+
+## 2026-05-07 - Current Immutable Rank-Head Candidate
+
+Objective:
+
+- Train a current-date rank-head candidate using immutable artifact storage.
+- Verify the same artifacts can drive live shadow forecasts and historical
+  shadow scoring without reusing overwritten checkpoints.
+
+Code change:
+
+- `dl_rank_head_experiment.py` now accepts `--artifact-dir`.
+- The default behavior remains unchanged when the flag is omitted.
+
+Training command:
+
+```powershell
+python dl_rank_head_experiment.py --seeds 20260505,20260506,20260507,20260508,20260509 --epochs 8 --lr 0.0005 --scheduler cosine --device auto --amp --pin-memory --date-grouped-batches --dates-per-batch 64 --aux-target-transform zscore --nll-weights 0.5 --corr-weights 0.05 --rank-weights 0.005 --daily-ic-min -0.02 --spread-min 0.0 --spread-positive-rate-min 0.55 --hard-gate --selection-score-mode selection --output data\experiment\rank_head_current_immutable_5seed.json --csv-output data\experiment\rank_head_current_immutable_5seed.csv --artifact-dir models\experiment\rank_head_current\rank_head_current_immutable_5seed
+```
+
+Top-3 ensemble evaluation:
+
+```powershell
+python dl_rank_head_ensemble_eval.py --results data\experiment\rank_head_current_immutable_5seed.json --device cpu --top-n 3 --output data\experiment\rank_head_current_immutable_ensemble_top3.json --csv-output data\experiment\rank_head_current_immutable_ensemble_members_top3.csv
+```
+
+Selected members:
+
+```text
+rankhead_seed20260508_cw0p05_rw0p005_nw0p5_dgb
+rankhead_seed20260507_cw0p05_rw0p005_nw0p5_dgb
+rankhead_seed20260505_cw0p05_rw0p005_nw0p5_dgb
+```
+
+Rank-centered ensemble metrics:
+
+```text
+IC_Spearman: +0.090393
+Daily_IC_Mean: +0.174685
+Long-short spread: +0.047033
+Spread positive rate: 65.29%
+Directional accuracy: 49.37%
+Bullish prediction rate: 39.75%
+```
+
+Live shadow forecast command:
+
+```powershell
+python dl_rank_head_shadow_forecast.py --results data\experiment\rank_head_current_immutable_5seed.json --device cpu --top-n 3 --output data\rank_head_current_immutable_shadow_forecasts.csv --log-path data\rank_head_current_immutable_shadow_log.parquet
+```
+
+Live shadow forecast for `2026-05-06`:
+
+```text
+Long candidate: META
+Short candidate: MSFT
+Rows total/scored/pending: 7/0/7
+Status: no_scoreable_rows
+```
+
+Historical shadow backtest commands:
+
+```powershell
+python dl_rank_head_shadow_backtest.py --results data\experiment\rank_head_current_immutable_5seed.json --device cpu --top-n 3 --val-days 252 --output data\experiment\rank_head_current_immutable_shadow_backtest_252d.parquet --csv-output data\experiment\rank_head_current_immutable_shadow_backtest_252d.csv
+python dl_rank_head_shadow_score.py --log-path data\experiment\rank_head_current_immutable_shadow_backtest_252d.parquet --output data\experiment\rank_head_current_immutable_shadow_backtest_252d_scores.json --detail-output data\experiment\rank_head_current_immutable_shadow_backtest_252d_scores.csv
+```
+
+Historical shadow score:
+
+```text
+Rows scored: 1,351
+AsOfDate range: 2025-07-01 -> 2026-04-07
+IC_Spearman: +0.090393
+Daily_IC_Mean: +0.174685
+Long-short spread: +0.047033
+Spread positive rate: 65.29%
+Long candidate mean return: +0.054870
+Short candidate mean return: +0.007837
+Long hit rate: 59.59%
+Short hit rate: 51.30%
+```
+
+Interpretation:
+
+- The current immutable candidate preserves the positive long/short selection
+  evidence seen in walk-forward testing.
+- The historical shadow scorer matches the ensemble evaluator, confirming that
+  the shadow-mode scoring path is aligned with the validation path.
+- The current live forecast is pending because the forward-return target for
+  `2026-05-06` is not yet available.
+- Next quality step: keep this candidate in shadow mode, score it when forward
+  returns mature, and compare it against the older live shadow candidate before
+  promoting any rank-head signal into production commentary.

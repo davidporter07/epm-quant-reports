@@ -675,6 +675,12 @@ def main() -> None:
     ap.add_argument("--hard-gate", action="store_true")
     ap.add_argument("--output", type=Path, default=OUT_PATH)
     ap.add_argument("--csv-output", type=Path, default=CSV_PATH)
+    ap.add_argument(
+        "--artifact-dir",
+        type=Path,
+        default=None,
+        help="Optional immutable directory for saved rank-head checkpoints and scalers.",
+    )
     args = ap.parse_args()
 
     if args.cudnn_benchmark and torch.cuda.is_available():
@@ -726,6 +732,7 @@ def main() -> None:
                             direction_min=float(args.direction_min),
                             daily_ic_weight=float(args.daily_ic_weight),
                             hard_gate=bool(args.hard_gate),
+                            artifact_dir=args.artifact_dir,
                         )
                     )
 
@@ -778,6 +785,7 @@ def main() -> None:
                 "daily_ic_weight": float(args.daily_ic_weight),
                 "bullish_min": float(args.bullish_min),
                 "bullish_max": float(args.bullish_max),
+                "artifact_dir": str(args.artifact_dir) if args.artifact_dir is not None else str(EXPERIMENT_DIR),
                 "results": results,
                 "aggregate": aggregate,
             },
