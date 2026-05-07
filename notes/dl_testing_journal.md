@@ -280,3 +280,48 @@ Interpretation:
 - Next quality step: add a scorer for `data/rank_head_shadow_log.parquet`
   once enough live rows accumulate, and optionally run daily shadow generation
   from `post_run.py` behind an explicit flag.
+
+## 2026-05-06: Shadow Log Scorer
+
+Purpose:
+
+- Add the measurement layer for shadow-mode rank-head forecasts.
+- Separate scoreable rows from pending rows so current forecasts can be logged
+  immediately and scored only when their 21-trading-day outcomes mature.
+
+Added:
+
+```text
+dl_rank_head_shadow_score.py
+```
+
+Command:
+
+```powershell
+python dl_rank_head_shadow_score.py
+```
+
+Current result:
+
+```text
+Rows total: 7
+Rows scored: 0
+Rows pending: 7
+Status: no_scoreable_rows
+Pending AsOfDate values: 2026-05-06
+```
+
+Artifacts written locally under ignored `data/` paths:
+
+```text
+data/rank_head_shadow_scores.json
+data/rank_head_shadow_scores.csv
+```
+
+Interpretation:
+
+- The scorer is ready, but the current shadow run cannot be evaluated yet
+  because `Target_Forward_21D` is not known for `2026-05-06`.
+- Once enough future market data exists, rerun the scorer to compute pooled IC,
+  Daily IC, selection spread, candidate long/short hit rates, and pending-row
+  counts from the same shadow log.
