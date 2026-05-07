@@ -200,3 +200,83 @@ Interpretation:
 - Next quality step: refresh or rebuild the directional research feature panel
   so rank-head shadow forecasts can use the latest available market date,
   then rerun the shadow forecast and begin live outcome tracking.
+
+## 2026-05-06: Current-Date Shadow Panel Refresh
+
+Purpose:
+
+- Repair the stale research candidate feature columns found during the first
+  shadow-mode forecast run.
+- Preserve the shared Quant Cup price cache instead of overwriting it with a
+  MAG7-only forced refresh.
+
+Added:
+
+```text
+refresh_quant_cup_price_cache.py
+```
+
+Price-cache command:
+
+```powershell
+python refresh_quant_cup_price_cache.py --tickers AAPL,MSFT,AMZN,NVDA,GOOG,META,TSLA --end 2026-05-07
+```
+
+Result:
+
+```text
+Close  updated rows=5117 max_date=2026-05-06
+Open   updated rows=5117 max_date=2026-05-06
+High   updated rows=5117 max_date=2026-05-06
+Low    updated rows=5117 max_date=2026-05-06
+Volume updated rows=5117 max_date=2026-05-06
+```
+
+Panel rebuild:
+
+```powershell
+python build_directional_feature_panel.py --merge-base --include-earnings --earnings-source fmp --end 2026-05-07 --output data\experiment\directional_feature_panel_fmp.parquet --csv-output data\experiment\directional_feature_panel_fmp_sample.csv
+```
+
+Verification:
+
+```text
+Panel max date: 2026-05-06
+Required rank-head extra feature coverage through 2026-05-06:
+atr_percentile: 100%
+gap_5d_count: 100%
+earnings_surprise_last: 100%
+days_since_earnings: 100%
+earnings_surprise_x_gap_count: 100%
+post_earnings_negative_drift_window: 100%
+```
+
+Current-date shadow run:
+
+```powershell
+python dl_rank_head_shadow_forecast.py --device cpu --top-n 3
+```
+
+Current shadow snapshot:
+
+```text
+RunDate: 2026-05-06
+AsOfDate: 2026-05-06
+
+Rank 1: NVDA long_candidate
+Rank 2: GOOG neutral
+Rank 3: AAPL neutral
+Rank 4: TSLA neutral
+Rank 5: AMZN neutral
+Rank 6: META neutral
+Rank 7: MSFT short_candidate
+```
+
+Interpretation:
+
+- Shadow-mode rank-head infrastructure now produces a current-date signal.
+- The signal remains shadow-only and should be evaluated against realized
+  forward returns before any promotion.
+- Next quality step: add a scorer for `data/rank_head_shadow_log.parquet`
+  once enough live rows accumulate, and optionally run daily shadow generation
+  from `post_run.py` behind an explicit flag.
