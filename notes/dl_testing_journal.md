@@ -642,3 +642,56 @@ Interpretation:
   balance of daily IC, spread, and prediction-rate discipline.
 - Keep top-3 as the shadow default. Promotion should still wait for matured
   live shadow scores and at least one more clean refresh/backtest cycle.
+
+## 2026-05-07 - Current Candidate Temporal Segment Check
+
+Objective:
+
+- Check whether the current top-3 rank-head candidate's validation edge is
+  concentrated in one subperiod.
+- Use production-like historical shadow logs and the same shadow scorer.
+
+Commands:
+
+```powershell
+python dl_rank_head_shadow_backtest.py --results data\experiment\rank_head_current_immutable_5seed.json --device cpu --top-n 3 --start-date 2025-07-01 --end-date 2025-12-31 --output data\experiment\rank_head_current_immutable_shadow_backtest_h1.parquet --csv-output data\experiment\rank_head_current_immutable_shadow_backtest_h1.csv
+python dl_rank_head_shadow_score.py --log-path data\experiment\rank_head_current_immutable_shadow_backtest_h1.parquet --output data\experiment\rank_head_current_immutable_shadow_backtest_h1_scores.json --detail-output data\experiment\rank_head_current_immutable_shadow_backtest_h1_scores.csv
+
+python dl_rank_head_shadow_backtest.py --results data\experiment\rank_head_current_immutable_5seed.json --device cpu --top-n 3 --start-date 2026-01-01 --end-date 2026-04-07 --output data\experiment\rank_head_current_immutable_shadow_backtest_h2.parquet --csv-output data\experiment\rank_head_current_immutable_shadow_backtest_h2.csv
+python dl_rank_head_shadow_score.py --log-path data\experiment\rank_head_current_immutable_shadow_backtest_h2.parquet --output data\experiment\rank_head_current_immutable_shadow_backtest_h2_scores.json --detail-output data\experiment\rank_head_current_immutable_shadow_backtest_h2_scores.csv
+```
+
+Segment results:
+
+```text
+Segment 1:
+Rows scored: 483
+AsOfDate range: 2025-09-24 -> 2025-12-31
+IC_Spearman: +0.191969
+Daily_IC_Mean: +0.196170
+Long-short spread: +0.037177
+Spread positive rate: 66.67%
+Long candidate mean return: +0.008372
+Short candidate mean return: -0.028806
+
+Segment 2:
+Rows scored: 42
+AsOfDate range: 2026-03-30 -> 2026-04-07
+IC_Spearman: +0.695000
+Daily_IC_Mean: +0.761905
+Long-short spread: +0.205832
+Spread positive rate: 100.00%
+Long candidate mean return: +0.287408
+Short candidate mean return: +0.081575
+```
+
+Interpretation:
+
+- The candidate remains positive in both available temporal segments.
+- Segment 1 is the more useful stability check because it has 69 daily
+  selection observations and a clean positive spread.
+- Segment 2 is directionally favorable but too small to treat as strong
+  independent evidence; it has only 6 daily selection observations.
+- Production status remains shadow-only. The candidate now passes
+  walk-forward, ensemble breadth, and segmented historical shadow checks, but
+  it still needs matured live shadow scoring before promotion.

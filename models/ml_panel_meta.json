@@ -26,8 +26,8 @@
     "quant_score"
   ],
   "selected_algorithm": "GradientBoosting",
-  "validation_rmse": 0.038226646094127154,
-  "trained_at": "2026-05-07T14:14:46",
+  "validation_rmse": 0.03824104760564101,
+  "trained_at": "2026-05-07T15:43:51",
   "rows": 10395,
   "backtest_rows": 21
 }
