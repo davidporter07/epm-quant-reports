@@ -1188,6 +1188,8 @@ LLM_KEY_ALIASES: dict[str, str] = {
     "currency_commentary":  "currencies_commentary",
     # Fallback: model occasionally returns last narrative section as 'other'
     "other":             "economics_commentary",
+    # Consistent qwen2.5:14b typo: "outlight" instead of "outlook"
+    "market_outlight_rationale": "market_outlook_rationale",
 }
 
 # Financially accurate replacements applied after generation.
@@ -1327,7 +1329,7 @@ def call_ollama(payload: dict) -> dict:
 
     print("  [LLM Call 1/3] Generating market narrative sections...")
     part1 = {}
-    for attempt in range(2):
+    for attempt in range(4):
         try:
             part1 = _call_ollama_raw(SYSTEM_PROMPT_NARRATIVE, narrative_payload)
             print(f"    Keys returned: {list(part1.keys())}")
@@ -1361,7 +1363,7 @@ def call_ollama(payload: dict) -> dict:
 
     print("  [LLM Call 2/3] Generating market outlook and portfolio intelligence...")
     part2 = {}
-    for attempt in range(2):
+    for attempt in range(4):
         try:
             part2 = _call_ollama_raw(SYSTEM_PROMPT_OUTLOOK, outlook_payload)
             print(f"    Keys returned: {list(part2.keys())}")
@@ -1396,7 +1398,7 @@ def call_ollama(payload: dict) -> dict:
 
     print("  [LLM Call 3/3] Generating session recap and watch-today section...")
     part3 = {}
-    for attempt in range(2):
+    for attempt in range(4):
         try:
             part3 = _call_ollama_raw(SYSTEM_PROMPT_RECAP, recap_payload)
             print(f"    Keys returned: {list(part3.keys())}")
@@ -1438,7 +1440,7 @@ def call_ollama(payload: dict) -> dict:
 
     print("  [LLM Call 4/4] Generating cross-asset synthesis...")
     part4 = {}
-    for attempt in range(2):
+    for attempt in range(4):
         try:
             part4 = _call_ollama_raw(SYSTEM_PROMPT_SYNTHESIS, synthesis_payload)
             print(f"    Keys returned: {list(part4.keys())}")
