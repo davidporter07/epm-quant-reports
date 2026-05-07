@@ -136,3 +136,67 @@ dl_rank_head_walkforward.py
 data/experiment/rank_head_walkforward_3w_5seed.json
 data/experiment/rank_head_walkforward_3w_5seed.csv
 ```
+
+## 2026-05-06: Shadow-Mode Rank-Head Forecast Runner
+
+Purpose:
+
+- Start the shadow-mode production candidate path without replacing the
+  existing production DL forecast.
+- Generate a daily rank-head ensemble selection log that can be compared
+  against future realized returns before promotion.
+
+Added:
+
+```text
+dl_rank_head_shadow_forecast.py
+```
+
+Smoke/default command:
+
+```powershell
+python dl_rank_head_shadow_forecast.py --device cpu --top-n 3
+```
+
+Resulting shadow snapshot:
+
+```text
+RunDate: 2026-05-06
+AsOfDate used by latest fully valid rank-head window: 2025-12-30
+
+Rank 1: TSLA long_candidate
+Rank 2: AAPL neutral
+Rank 3: GOOG neutral
+Rank 4: AMZN neutral
+Rank 5: MSFT neutral
+Rank 6: NVDA neutral
+Rank 7: META short_candidate
+```
+
+Artifacts written locally under ignored `data/` paths:
+
+```text
+data/rank_head_shadow_forecasts.csv
+data/rank_head_shadow_log.parquet
+```
+
+Important finding:
+
+- `data/experiment/directional_feature_panel_fmp.parquet` has base rows
+  through `2026-05-05`.
+- The six rank-head extra features required by the saved model
+  (`atr_percentile`, `gap_5d_count`, `earnings_surprise_last`,
+  `days_since_earnings`, `earnings_surprise_x_gap_count`,
+  `post_earnings_negative_drift_window`) are non-null only through
+  `2025-12-30`.
+- The shadow runner therefore falls back to each ticker's latest fully finite
+  sequence window instead of fabricating values.
+
+Interpretation:
+
+- Shadow infrastructure is working.
+- The first shadow log is not yet a true current-date live signal because the
+  research candidate feature cache is stale.
+- Next quality step: refresh or rebuild the directional research feature panel
+  so rank-head shadow forecasts can use the latest available market date,
+  then rerun the shadow forecast and begin live outcome tracking.
