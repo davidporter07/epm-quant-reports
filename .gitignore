@@ -24,6 +24,8 @@ push_log.txt
 *.log
 
 # Generated data outputs — exclude entire data/ directory
+.env
+
 data/
 
 # Feature store data
