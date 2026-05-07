@@ -1078,8 +1078,8 @@ currencies_commentary: 4-5 sentences. DXY direction and level. Rate differential
 
 economics_commentary: 4-5 sentences. Most important recent data release from payload (actual vs consensus). Macro cycle context (soft landing, slowdown, re-acceleration). Fed implications.
 
-STRUCTURE EXAMPLE — shows format only; replace {placeholders} with EXACT values from the payload (do NOT reuse placeholder syntax in your output):
-{"pre_market_bullets":["Markets closed {higher/lower} — S&P 500 {spx_pct}%, Nasdaq 100 {ndx_pct}%; [specific catalyst from recent_headlines].","[International index] {rose/fell} {pct}% as [specific macro driver from payload].","Key data today: [event from upcoming_economic_events] ({importance}) — consensus [value] vs prior [value]; [implication].","10-yr yield {rose/fell} {bps} bps to {ust10_level}%, [specific driver]; real yields [direction].","[Top commodity or currency] {rose/fell} {pct}% to {level} on [specific driver from payload]."],...}
+ONE-SHOT EXAMPLE — concrete reference for prose style ONLY. Use payload-specific numbers, tickers, events, and drivers; do NOT copy any of these specifics:
+{"pre_market_bullets":["Markets closed mixed — S&P 500 -0.12%, Nasdaq 100 +0.08%; megacap tech offset weakness in regional banks after Q1 deposit guidance.","Hang Seng rose 0.9% as PBoC drained liquidity at a slower pace, easing Q2 tightening fears.","Key data today: ISM Services PMI (high importance) — consensus 52.0 vs prior 51.4; a beat would reinforce the soft-landing thesis and pressure long-end yields.","10-yr yield rose 4 bps to 4.36%, breakevens widened on stronger jobless claims; real yields edged up.","WTI rose 1.2% to $77.40 on OPEC+ extending production cuts through Q3."],"equities_commentary":"...","fixed_income_commentary":"...","commodities_commentary":"...","currencies_commentary":"...","economics_commentary":"..."}
 
 Output schema (replace "..." with your generated content for all 6 keys):
 {"pre_market_bullets":["...","...","...","...","..."],"equities_commentary":"...","fixed_income_commentary":"...","commodities_commentary":"...","currencies_commentary":"...","economics_commentary":"..."}"""
