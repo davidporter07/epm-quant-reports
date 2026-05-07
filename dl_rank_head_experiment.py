@@ -324,6 +324,7 @@ def _train_one(
     direction_min: float,
     hard_gate: bool,
     daily_ic_weight: float,
+    artifact_dir: Path | None = None,
 ) -> dict:
     _set_seed(seed)
     device = _resolve_device(device)
@@ -395,9 +396,10 @@ def _train_one(
     )
     if date_grouped_batches:
         variant = f"{variant}_dgb"
-    model_path = EXPERIMENT_DIR / f"dl_{variant}.pt"
-    scaler_path = EXPERIMENT_DIR / f"dl_{variant}_scaler.json"
-    EXPERIMENT_DIR.mkdir(parents=True, exist_ok=True)
+    save_dir = Path(artifact_dir) if artifact_dir is not None else EXPERIMENT_DIR
+    model_path = save_dir / f"dl_{variant}.pt"
+    scaler_path = save_dir / f"dl_{variant}_scaler.json"
+    save_dir.mkdir(parents=True, exist_ok=True)
 
     best = {
         "score": -float("inf"),
@@ -594,6 +596,7 @@ def _train_one(
         "panel_path": str(panel_path),
         "extra_features": extra_features,
         "feature_count": len(feature_cols),
+        "artifact_dir": str(save_dir),
         "model_path": str(model_path),
         "scaler_path": str(scaler_path),
         "raw_metrics": raw_metrics,

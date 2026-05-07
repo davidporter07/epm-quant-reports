@@ -408,3 +408,91 @@ Interpretation:
 - Before promotion, the next engineering fix is to make rank-head/walk-forward
   checkpoint paths immutable by run/window id, then rerun the walk-forward
   experiment and preserve the exact artifacts that produced each metric.
+
+## 2026-05-07: Immutable Walk-Forward Checkpoints
+
+Purpose:
+
+- Fix the artifact reproducibility problem found by the historical shadow
+  backtest.
+- Prevent later rank-head runs/windows from overwriting checkpoints that
+  produced earlier validation metrics.
+
+Updated:
+
+```text
+dl_rank_head_experiment.py
+dl_rank_head_walkforward.py
+```
+
+Implementation:
+
+- `_train_one(...)` now accepts an optional `artifact_dir`.
+- Plain rank-head experiment runs keep their existing default location.
+- Walk-forward runs now save each window's models/scalers under:
+
+```text
+models/experiment/rank_head_walkforward/<output-stem>/<window>/
+```
+
+Rerun command:
+
+```powershell
+python dl_rank_head_walkforward.py --windows 3 --val-days 252 --top-n 3 --seeds 20260505,20260506,20260507,20260508,20260509 --epochs 8 --lr 0.0005 --scheduler cosine --device auto --amp --pin-memory --date-grouped-batches --dates-per-batch 64 --aux-target-transform zscore --corr-weight 0.05 --rank-weight 0.005 --nll-weight 0.5 --output data\experiment\rank_head_walkforward_immutable_3w_5seed.json --csv-output data\experiment\rank_head_walkforward_immutable_3w_5seed.csv
+```
+
+Immutable walk-forward result:
+
+```text
+Window 1: 2025-04-04..2026-04-07
+IC_Spearman: +0.090408
+Daily_IC_Mean: +0.176268
+Long-short spread: +0.047445
+Spread positive rate: 65.29%
+Bullish rate: 39.75%
+Directional accuracy: 49.37%
+
+Window 2: 2024-04-03..2025-04-03
+IC_Spearman: +0.108409
+Daily_IC_Mean: +0.121503
+Long-short spread: +0.049987
+Spread positive rate: 61.66%
+Bullish rate: 54.32%
+Directional accuracy: 52.46%
+
+Window 3: 2023-03-31..2024-04-02
+IC_Spearman: +0.182456
+Daily_IC_Mean: +0.169319
+Long-short spread: +0.043678
+Spread positive rate: 61.14%
+Bullish rate: 59.44%
+Directional accuracy: 57.59%
+```
+
+Aggregate:
+
+```text
+Mean IC_Spearman: +0.127091
+Mean Daily_IC_Mean: +0.155696
+Mean long-short spread: +0.047037
+Minimum long-short spread: +0.043678
+Mean spread positive rate: 62.70%
+```
+
+Verification:
+
+- The JSON result rows now point to window-specific checkpoint paths, for
+  example:
+
+```text
+models\experiment\rank_head_walkforward\rank_head_walkforward_immutable_3w_5seed\w1_20260407\dl_rankhead_seed20260508_cw0p05_rw0p005_nw0p5_dgb.pt
+```
+
+Interpretation:
+
+- The rank-head top-3 ensemble again passes the core walk-forward quality gate.
+- The evidence is now reproducible because each metric points to preserved,
+  window-specific artifacts.
+- This restores the shadow-mode candidate path, but it still should remain
+  shadow-only until live scoring or a current-date retrained immutable candidate
+  confirms behavior.

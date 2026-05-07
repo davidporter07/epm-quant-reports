@@ -192,6 +192,7 @@ def main() -> None:
         print(f"\n=== walk-forward {window_name}: train < {cutoff.date()} validate {cutoff.date()}..{end_date.date()} ===")
 
         results = []
+        artifact_dir = Path("models/experiment/rank_head_walkforward") / args.output.stem / window_name
         for seed in _parse_ints(args.seeds):
             results.append(
                 _train_one(
@@ -229,6 +230,7 @@ def main() -> None:
                     direction_min=0.5085,
                     hard_gate=True,
                     daily_ic_weight=0.75,
+                    artifact_dir=artifact_dir,
                 )
             )
 
