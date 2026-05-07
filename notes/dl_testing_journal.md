@@ -325,3 +325,86 @@ Interpretation:
 - Once enough future market data exists, rerun the scorer to compute pooled IC,
   Daily IC, selection spread, candidate long/short hit rates, and pending-row
   counts from the same shadow log.
+
+## 2026-05-06: Historical Shadow Backtest Harness
+
+Purpose:
+
+- Test the production-like shadow workflow on historical rows with known
+  21-trading-day forward outcomes instead of waiting for live rows to mature.
+- Emit historical rows in the same shape as the live shadow log so
+  `dl_rank_head_shadow_score.py` can score them directly.
+
+Added:
+
+```text
+dl_rank_head_shadow_backtest.py
+```
+
+Also updated:
+
+```text
+dl_rank_head_shadow_score.py
+```
+
+The scorer now uses an existing `RealizedForwardReturn` column when present in
+a historical shadow log, and falls back to joining `Target_Forward_21D` from the
+panel for live logs.
+
+Current-panel command:
+
+```powershell
+python dl_rank_head_shadow_backtest.py --device cpu --top-n 3 --val-days 252 --output data\experiment\rank_head_shadow_backtest_252d.parquet --csv-output data\experiment\rank_head_shadow_backtest_252d.csv
+
+python dl_rank_head_shadow_score.py --log-path data\experiment\rank_head_shadow_backtest_252d.parquet --output data\experiment\rank_head_shadow_backtest_252d_scores.json --detail-output data\experiment\rank_head_shadow_backtest_252d_scores.csv
+```
+
+Current-panel result:
+
+```text
+Rows: 1,351
+AsOfDate range: 2025-07-01 -> 2026-04-07
+Rows scored: 1,351
+Rows pending: 0
+IC_Spearman: -0.090123
+Daily_IC_Mean: -0.137861
+Selection_Long_Short_Spread_Mean: -0.026865
+Selection_Spread_Positive_Rate: 29.53%
+LongCandidateMeanReturn: +0.004296
+ShortCandidateMeanReturn: +0.031161
+```
+
+Cross-check:
+
+```powershell
+python dl_rank_head_ensemble_eval.py --results data\experiment\rank_head_selection_objective_scaler_5seed.json --device cpu --top-n 3 --output data\experiment\rank_head_selection_objective_ensemble_top3_currentpanel_check.json --csv-output data\experiment\rank_head_selection_objective_ensemble_members_top3_currentpanel_check.csv
+```
+
+The existing ensemble evaluator matched the new shadow backtest result on the
+refreshed current panel:
+
+```text
+IC_Spearman: -0.090123
+Daily_IC_Mean: -0.137861
+Selection_Long_Short_Spread_Mean: -0.026865
+Selection_Spread_Positive_Rate: 29.53%
+```
+
+Artifact-management finding:
+
+- The earlier walk-forward JSON still records positive historical metrics.
+- However, the checkpoint filenames under `models/experiment/` are reused by
+  later rank-head runs/windows.
+- Re-evaluating the saved generic checkpoint paths now does not reproduce the
+  earlier positive window metrics.
+- This means the historical metrics are useful as recorded evidence, but the
+  model artifacts are not sufficiently immutable for promotion-quality
+  reproducibility.
+
+Interpretation:
+
+- The shadow backtest/scorer workflow is working.
+- The current reusable top-3 checkpoint artifacts are not production-ready.
+- Before promotion, the next engineering fix is to make rank-head/walk-forward
+  checkpoint paths immutable by run/window id, then rerun the walk-forward
+  experiment and preserve the exact artifacts that produced each metric.

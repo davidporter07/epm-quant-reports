@@ -49,6 +49,12 @@ def _load_realized_targets(panel_path: Path) -> pd.DataFrame:
 
 def join_shadow_outcomes(log_path: Path, panel_path: Path) -> pd.DataFrame:
     log = _load_shadow_log(log_path)
+    if "RealizedForwardReturn" in log.columns:
+        joined = log.copy()
+        joined["RealizedForwardReturn"] = pd.to_numeric(joined["RealizedForwardReturn"], errors="coerce")
+        joined["ScoreStatus"] = np.where(joined["RealizedForwardReturn"].notna(), "scored", "pending")
+        return joined
+
     realized = _load_realized_targets(panel_path)
     joined = log.merge(realized, on=["AsOfDate", "Ticker"], how="left")
     joined["RealizedForwardReturn"] = joined[TARGET_COL]
