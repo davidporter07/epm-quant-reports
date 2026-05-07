@@ -200,7 +200,7 @@ quant_cup/
 - `D:\fund_monitor\quant_cup\tournament.py` — runner + ranker
 - `D:\fund_monitor\quant_cup\earnings_av.py` — AV earnings cache
 - `D:\fund_monitor\quant_cup\models\` — all 8 signal functions
-- `D:\fund_monitor\HANDOFF_dl_model_strategies.md` — this file
+- `D:\fund_monitor\notes\handoffs\HANDOFF_dl_model_strategies.md` — this file
 
 ## Context: The EPM DL Model
 

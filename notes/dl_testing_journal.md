@@ -1,9 +1,9 @@
 # DL Testing Journal
 
 This journal is the durable project record for deep-learning forecast testing.
-The longer `HANDOFF_dl_directional_testing_20260505.md` remains the detailed
-handoff; this file is the running chronology of test decisions, commands,
-results, and promotion status.
+The longer `notes/handoffs/HANDOFF_dl_directional_testing_20260505.md` remains
+the detailed handoff; this file is the running chronology of test decisions,
+commands, results, and promotion status.
 
 ## 2026-05-06: Rank-Head Selection Direction
 

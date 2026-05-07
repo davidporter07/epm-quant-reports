@@ -153,7 +153,7 @@ Source A (seed doc) numbers only.
 
 - `D:\fund_monitor\deep_analysis.py` — seed doc builder (all enrichment + agent fixes)
 - `D:\fund_monitor\deep_analysis_worker.py` — pipeline runner + LLM post-processing prompt
-- `D:\fund_monitor\HANDOFF_mirofish_test.md` — full MiroFish architecture reference
+- `D:\fund_monitor\notes\handoffs\HANDOFF_mirofish_test.md` — full MiroFish architecture reference
 
 ## Server Access
 
