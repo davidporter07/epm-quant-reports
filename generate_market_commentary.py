@@ -1343,6 +1343,9 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
             part1 = scrub_banned_phrases(part1)
             banned = find_banned_phrases(part1)
             leaks = find_leaked_placeholders(part1)
+            sign_fixes = _correct_sign_mismatches(part1, snapshot)
+            if sign_fixes:
+                print(f"  [CORRECT] Auto-corrected {sign_fixes} sign mismatch(es) in Call 1 output.")
             numeric = _check_numeric_consistency(part1, snapshot)
             if not banned and not leaks and not numeric:
                 break
@@ -1620,6 +1623,129 @@ def _check_numeric_consistency(data: dict, snapshot: dict) -> list[str]:
     return violations
 
 
+# Verbs that imply direction. If the cited percent has the wrong sign, flip
+# the verb in the same clause so the rewritten prose stays grammatical.
+_VERB_FLIP_TO_DOWN = {
+    "rose": "fell",
+    "gained": "slid",
+    "climbed": "declined",
+    "advanced": "retreated",
+    "rallied": "sold off",
+    "surged": "tumbled",
+    "soared": "plunged",
+    "jumped": "dropped",
+}
+_VERB_FLIP_TO_UP = {v: k for k, v in _VERB_FLIP_TO_DOWN.items()}
+
+
+def _rewrite_first_pct_sign(text: str, truth_pct: float) -> tuple[str, bool]:
+    """Rewrite the first percent figure in `text` to match `truth_pct`'s sign.
+    Also flips a nearby preceding directional verb when present.
+    Idempotent: if signs already agree, returns text unchanged.
+    Returns (new_text, changed).
+    """
+    if not isinstance(text, str) or not text:
+        return text, False
+    pct_re = re.compile(r"([-+]?)(\d+(?:\.\d+)?)\s*%")
+    m = pct_re.search(text)
+    if not m:
+        return text, False
+    sign_str, mag_str = m.group(1), m.group(2)
+    cited = float((sign_str or "") + mag_str)
+    if (cited >= 0) == (truth_pct >= 0):
+        return text, False  # already aligned
+
+    # Look for a nearby preceding directional verb to flip.
+    flip_map = _VERB_FLIP_TO_DOWN if truth_pct < 0 else _VERB_FLIP_TO_UP
+    verb_re = re.compile(
+        r"\b(" + "|".join(re.escape(v) for v in flip_map.keys()) + r")\b",
+        re.IGNORECASE,
+    )
+    window_start = max(0, m.start() - 120)
+    window = text[window_start:m.start()]
+    verb_match = None
+    matches = list(verb_re.finditer(window))
+    if matches:
+        verb_match = matches[-1]
+
+    # If a directional verb will be flipped, the verb itself conveys sign —
+    # use bare magnitude. Otherwise emit explicit signed percent.
+    if verb_match is not None:
+        new_pct = f"{abs(truth_pct):.2f}%"
+    else:
+        new_sign = "-" if truth_pct < 0 else "+"
+        new_pct = f"{new_sign}{abs(truth_pct):.2f}%"
+    new_text = text[:m.start()] + new_pct + text[m.end():]
+
+    if verb_match is not None:
+        verb_text = verb_match.group(1)
+        flipped = flip_map[verb_text.lower()]
+        if verb_text[0].isupper():
+            flipped = flipped[0].upper() + flipped[1:]
+        abs_start = window_start + verb_match.start()
+        abs_end = window_start + verb_match.end()
+        new_text = new_text[:abs_start] + flipped + new_text[abs_end:]
+    return new_text, True
+
+
+def _correct_sign_mismatches(data: dict, snapshot: dict) -> int:
+    """Rewrite sign-flipped percents in narrative fields to match snapshot.
+    Mutates data in place. Returns number of corrections applied.
+    Idempotent — safe to call multiple times.
+    """
+    if not snapshot:
+        return 0
+    fixes = 0
+
+    section_checks = [
+        ("equities_commentary",    "S&P 500"),
+        ("commodities_commentary", "WTI Crude"),
+        ("currencies_commentary",  "U.S. Dollar (DXY)"),
+    ]
+    for narrative_key, snap_key in section_checks:
+        truth_pct = (snapshot.get(snap_key) or {}).get("pct_change")
+        if truth_pct is None or abs(truth_pct) < 0.1:
+            continue
+        prose = data.get(narrative_key)
+        if not isinstance(prose, str):
+            continue
+        new_prose, changed = _rewrite_first_pct_sign(prose, truth_pct)
+        if changed:
+            data[narrative_key] = new_prose
+            fixes += 1
+
+    asset_kw = {
+        "s&p":    "S&P 500",
+        "nasdaq": "Nasdaq 100",
+        "wti":    "WTI Crude",
+        "crude":  "WTI Crude",
+        "gold":   "Gold",
+        "dxy":    "U.S. Dollar (DXY)",
+    }
+    bullets = data.get("pre_market_bullets")
+    if isinstance(bullets, list):
+        new_bullets = []
+        for bullet in bullets:
+            if not isinstance(bullet, str):
+                new_bullets.append(bullet)
+                continue
+            btext_lower = bullet.lower()
+            corrected = bullet
+            for kw, snap_key in asset_kw.items():
+                if kw in btext_lower:
+                    truth_pct = (snapshot.get(snap_key) or {}).get("pct_change")
+                    if truth_pct is None or abs(truth_pct) < 0.1:
+                        break
+                    corrected, changed = _rewrite_first_pct_sign(corrected, truth_pct)
+                    if changed:
+                        fixes += 1
+                    break
+            new_bullets.append(corrected)
+        data["pre_market_bullets"] = new_bullets
+
+    return fixes
+
+
 def _atomic_write_json(path: Path, data: dict) -> None:
     """Write JSON atomically via a temp file + os.replace to avoid partial writes."""
     tmp = path.with_suffix(".json.tmp")
@@ -1742,6 +1868,9 @@ def validate_commentary(data: dict, known_tickers: set = None, snapshot: dict = 
             return False
     # Numeric consistency gate — compare LLM prose directions/magnitudes to market snapshot
     if snapshot is not None:
+        sign_fixes = _correct_sign_mismatches(data, snapshot)
+        if sign_fixes:
+            print(f"[CORRECT] Auto-corrected {sign_fixes} sign mismatch(es) in merged commentary.")
         violations = _check_numeric_consistency(data, snapshot)
         if violations:
             print(f"[VALIDATE] Numeric consistency violations vs market_snapshot: {violations}")
