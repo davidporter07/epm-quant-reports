@@ -328,15 +328,22 @@ try:
         cwd=_here, capture_output=True, text=True
     )
     if result.returncode == 0:
-        # Stash any unstaged local changes so pull --rebase can run cleanly,
-        # then restore them afterwards.
-        subprocess.run(["git", "stash", "--include-untracked", "-m", "pipeline-auto-stash"], cwd=_here)
+        # Stash only tracked-file changes so pull --rebase can run cleanly.
+        # Avoid --include-untracked: on Windows, Python's logging holds email_log.txt
+        # open, and git's unlink attempt on untracked files triggers an interactive prompt.
+        _stash_result = subprocess.run(
+            ["git", "stash", "-m", "pipeline-auto-stash"],
+            cwd=_here, capture_output=True, text=True
+        )
+        _stashed = (_stash_result.returncode == 0
+                    and "No local changes to save" not in _stash_result.stdout)
         try:
             subprocess.run(["git", "pull", "--rebase", "origin", "main"], cwd=_here, check=True)
             subprocess.run(["git", "push", "origin", "main"], cwd=_here, check=True)
             print(" DL model checkpoint committed and pushed to git")
         finally:
-            subprocess.run(["git", "stash", "pop"], cwd=_here)
+            if _stashed:
+                subprocess.run(["git", "stash", "pop"], cwd=_here)
     elif "nothing to commit" in result.stdout.lower() or "nothing to commit" in result.stderr.lower():
         print(" DL model checkpoint unchanged  no git commit needed")
     else:
