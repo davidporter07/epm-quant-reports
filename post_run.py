@@ -91,7 +91,7 @@ def _scp_dir(local: Path, remote: str, key_args: list[str]) -> int:
 def sync_to_server():
     print("\n[SYNC] Pushing output to server...")
     dest = f"{SERVER_USER}@{SERVER_HOST}"
-    key_args = ["-i", SSH_KEY, "-o", "StrictHostKeyChecking=no", "-O"]
+    key_args = ["-i", SSH_KEY, "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=20", "-O"]
     errors = 0
 
     # Push directories
