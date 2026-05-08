@@ -1298,6 +1298,47 @@ ONE-SHOT EXAMPLE:
 JSON template:
 {"cross_asset_synthesis":"..."}"""
 
+ETF_WHITELIST: frozenset = frozenset({
+    "XLF","XLE","XLY","XLI","XLP","XLU","XLB","XLK","XLC","XLV","XLRE",
+    "IWM","IJH","FLOT","BIL","SHY","IEF","TLT","GLD","GDX","SLV",
+    "USO","BNO","UUP","UDN","FXI","EEM","EFA","SPY","QQQ","DIA",
+    "SQQQ","SDS","SH","PSQ","UVXY","VIXY",
+})
+
+# Call 5: Scenario framework — "Too Hot / In Line / Too Cold" for today's key event
+SYSTEM_PROMPT_SCENARIOS = WRITING_RULES + """
+
+You are building a Sevens-Report-style scenario framework for today's most important economic release.
+
+Return JSON with EXACTLY these 2 keys:
+
+scenarios: Array of EXACTLY 3 scenario objects in this order:
+  1. "Hot" — the hawkish surprise (stronger data / higher inflation / tighter labor). Yields rise, dollar up, equities under pressure, gold falls.
+  2. "In Line" — outcome roughly matches consensus. Limited cross-asset reaction.
+  3. "Cold" — the dovish surprise (weaker data / lower inflation / softer labor). Yields fall, dollar down, equities rally, gold rises.
+
+Each scenario object has EXACTLY these 6 keys:
+  label:      Short label with outcome range, e.g. "Hot (<195K)" or "Cold (>215K)"
+  thesis:     1 sentence. The macro narrative if this scenario plays out.
+  rates:      Expected 10-yr yield move with direction and approximate bp range.
+  equities:   Expected S&P 500 move with approximate % range and one sector note.
+  commodities: Gold and/or oil reaction in 1 short sentence.
+  tickers:    Array of 3-5 ETF tickers from ONLY this list (choose the best fit for this scenario):
+              XLF XLE XLY XLI XLP XLU XLB XLK XLC XLV XLRE IWM IJH FLOT BIL SHY IEF TLT GLD GDX SLV USO UUP UDN SPY QQQ
+
+levels_to_watch: Array of EXACTLY 3 level objects. Pick the 3 most relevant assets given today's primary event.
+  asset:        Asset name — one of: S&P 500, 10-Yr Yield, Gold, WTI Crude, VIX, U.S. Dollar (DXY)
+  level:        Specific numeric price/rate level as a float (e.g. 4.5 for yield, 5500 for S&P)
+  significance: 1 sentence explaining why this level matters right now.
+
+Hot scenario tickers should favor defensives/cash/short-duration: XLP, XLU, FLOT, BIL, SHY, UUP, SH.
+Cold scenario tickers should favor risk-on/duration: TLT, GLD, QQQ, XLK, IWM, XLY, UDN.
+In-Line scenario tickers should be balanced: mix of cyclicals and core benchmarks (SPY, XLF, XLI, XLE).
+
+JSON template:
+{"scenarios":[{"label":"Hot (...)","thesis":"...","rates":"...","equities":"...","commodities":"...","tickers":["...","...","..."]},{"label":"In Line (...)","thesis":"...","rates":"...","equities":"...","commodities":"...","tickers":["...","...","..."]},{"label":"Cold (...)","thesis":"...","rates":"...","equities":"...","commodities":"...","tickers":["...","...","..."]}],"levels_to_watch":[{"asset":"...","level":0.0,"significance":"..."},{"asset":"...","level":0.0,"significance":"..."},{"asset":"...","level":0.0,"significance":"..."}]}"""
+
+
 BANNED_PHRASES = [
     "geopolitical tensions", "geopolitical risks", "global uncertainties",
     "global instability", "amid uncertainty", "amid concerns", "amid heightened",
@@ -1610,7 +1651,58 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
             print(f"  [WARN] Synthesis call failed (attempt {attempt + 1}): {exc}")
             part4 = {}
 
-    merged = {**part1, **part2, **part3, **part4}
+    # ── Call 5: Scenario framework (conditional — only when a high-importance event exists today) ──
+    part5: dict = {}
+    _today_date = payload.get("date") or datetime.today().strftime("%Y-%m-%d")
+    _today_events = [
+        e for e in econ
+        if str(e.get("date", ""))[:10] == _today_date and e.get("importance") == "high"
+    ]
+    _primary_event = _today_events[0] if _today_events else (econ[0] if econ else None)
+    if _primary_event:
+        _ev_name = _primary_event.get("event", "")
+        _ev_cons = _primary_event.get("consensus")
+        _ev_prev = _primary_event.get("previous")
+        scenarios_payload = {
+            "primary_event":    _ev_name,
+            "consensus":        _ev_cons,
+            "previous":         _ev_prev,
+            "market_snapshot":  {k: v for k, v in list(levels.items())[:8]},
+            "bonds":            bonds,
+            "upcoming_events":  econ[:3],
+        }
+        print("  [LLM Call 5/5] Generating scenario framework...")
+        for attempt in range(3):
+            try:
+                part5 = _call_ollama_raw(SYSTEM_PROMPT_SCENARIOS, scenarios_payload)
+                print(f"    Keys returned: {list(part5.keys())}")
+                _scens = part5.get("scenarios") or []
+                _lvls  = part5.get("levels_to_watch") or []
+                # Validate tickers against whitelist; strip any bad ones
+                _any_bad = False
+                for _sc in _scens:
+                    _raw_tickers = [str(t).upper() for t in (_sc.get("tickers") or [])]
+                    _clean = [t for t in _raw_tickers if t in ETF_WHITELIST]
+                    if len(_clean) < len(_raw_tickers):
+                        _any_bad = True
+                        _sc["tickers"] = _clean
+                if _any_bad:
+                    print(f"  [VALIDATE] Stripped non-whitelist ticker(s) from scenarios.")
+                # Accept if structure is good
+                if len(_scens) == 3 and len(_lvls) >= 2:
+                    # Annotate with the event metadata
+                    part5["scenario_event"]     = _ev_name
+                    part5["scenario_consensus"] = str(_ev_cons) if _ev_cons is not None else None
+                    break
+                print(f"  [RETRY] Attempt {attempt+1}: got {len(_scens)} scenarios, {len(_lvls)} levels. Retrying...")
+                part5 = {}
+            except Exception as exc:
+                print(f"  [WARN] Scenarios call failed (attempt {attempt + 1}): {exc}")
+                part5 = {}
+    else:
+        print("  [LLM Call 5/5] Skipped — no high-importance events today.")
+
+    merged = {**part1, **part2, **part3, **part4, **part5}
 
     # Remap any remaining aliases (part1 loop already remapped its keys; this catches part2/3 stragglers)
     for alias, canonical in LLM_KEY_ALIASES.items():
@@ -1628,6 +1720,8 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
         "portfolio_spotlight_winners", "portfolio_spotlight_watch",
         "session_recap", "watch_today", "international_section",
         "cross_asset_synthesis",
+        # Phase 4: scenario framework
+        "scenarios", "levels_to_watch", "scenario_event", "scenario_consensus",
     }
     unexpected = set(merged) - _ALLOWED_LLM_KEYS
     if unexpected:
@@ -2404,6 +2498,7 @@ def main() -> int:
         "portfolio_spotlight_winners", "portfolio_spotlight_watch",
         "session_recap", "watch_today", "international_section",
         "narrative_generated_at", "narrative_source_date", "narrative_source",
+        "scenarios", "levels_to_watch", "scenario_event", "scenario_consensus",
     ]:
         existing.pop(_k, None)
 

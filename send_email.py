@@ -405,6 +405,127 @@ def _build_premarket_block(c: dict) -> tuple[str, list]:
     return html_out, txt_lines
 
 
+def _build_scenarios_block(c: dict) -> tuple[str, list]:
+    """Build the Today's Scenarios block: Too Hot / In Line / Too Cold.
+    Returns (html_string, text_lines). Returns empty if scenarios data absent.
+    """
+    scenarios    = c.get('scenarios') or []
+    levels_watch = c.get('levels_to_watch') or []
+    event_name   = c.get('scenario_event', '')
+    consensus    = c.get('scenario_consensus', '')
+    if not scenarios or len(scenarios) < 3:
+        return '', []
+
+    _LABEL_COLORS = {0: '#dc2626', 1: '#2563eb', 2: '#16a34a'}   # Hot=red, In-Line=blue, Cold=green
+    _LABEL_BG    = {0: '#fef2f2', 1: '#eff6ff', 2: '#f0fdf4'}
+    _LABEL_BORDER = {0: '#fca5a5', 1: '#93c5fd', 2: '#86efac'}
+
+    scenario_html = ''
+    txt_lines: list[str] = []
+
+    header = event_name
+    if consensus:
+        header += f' — Consensus: {consensus}'
+
+    for i, sc in enumerate(scenarios[:3]):
+        label      = html_lib.escape(str(sc.get('label', '')))
+        thesis     = html_lib.escape(str(sc.get('thesis', '')))
+        rates      = html_lib.escape(str(sc.get('rates', '')))
+        equities   = html_lib.escape(str(sc.get('equities', '')))
+        commodities = html_lib.escape(str(sc.get('commodities', '')))
+        tickers    = [str(t).upper() for t in (sc.get('tickers') or [])]
+
+        ticker_chips = ''
+        for t in tickers[:5]:
+            ticker_chips += (
+                f'<span style="display:inline-block;margin:2px 3px 2px 0;'
+                f'padding:2px 7px;background:#e5e7eb;border-radius:10px;'
+                f'font-size:11px;font-weight:700;color:#374151;">{html_lib.escape(t)}</span>'
+            )
+
+        clr    = _LABEL_COLORS.get(i, '#6b7280')
+        bg     = _LABEL_BG.get(i, '#f9fafb')
+        border = _LABEL_BORDER.get(i, '#d1d5db')
+
+        scenario_html += (
+            f'<div style="margin-bottom:10px;padding:10px 12px;border:1px solid {border};'
+            f'border-left:4px solid {clr};background:{bg};border-radius:6px;">'
+            f'<p style="margin:0 0 4px 0;font-size:13px;font-weight:700;color:{clr};">{label}</p>'
+            f'<p style="margin:0 0 6px 0;font-size:12px;color:#374151;line-height:1.5;">{thesis}</p>'
+            f'<table style="border-collapse:collapse;width:100%;margin-bottom:6px;">'
+            f'<tr><td style="padding:2px 8px 2px 0;font-size:11px;color:#6b7280;width:80px;">Rates</td>'
+            f'<td style="padding:2px 0;font-size:11px;color:#111827;">{rates}</td></tr>'
+            f'<tr><td style="padding:2px 8px 2px 0;font-size:11px;color:#6b7280;">Equities</td>'
+            f'<td style="padding:2px 0;font-size:11px;color:#111827;">{equities}</td></tr>'
+            f'<tr><td style="padding:2px 8px 2px 0;font-size:11px;color:#6b7280;">Commodities</td>'
+            f'<td style="padding:2px 0;font-size:11px;color:#111827;">{commodities}</td></tr>'
+            f'</table>'
+            f'{ticker_chips}'
+            f'</div>'
+        )
+        txt_lines.append(f'{sc.get("label","")}: {sc.get("thesis","")}')
+        txt_lines.append(f'  Rates: {sc.get("rates","")}')
+        txt_lines.append(f'  Equities: {sc.get("equities","")}')
+        txt_lines.append(f'  ETFs: {", ".join(tickers)}')
+        txt_lines.append('')
+
+    # Levels to watch
+    levels_html = ''
+    if levels_watch:
+        lvl_rows = ''
+        for lv in levels_watch[:3]:
+            asset = html_lib.escape(str(lv.get('asset', '')))
+            level = lv.get('level', '')
+            sig   = html_lib.escape(str(lv.get('significance', '')))
+            try:
+                level_fmt = f'{float(level):,.2f}'
+            except Exception:
+                level_fmt = str(level)
+            lvl_rows += (
+                f'<tr>'
+                f'<td style="padding:4px 10px 4px 0;font-size:12px;font-weight:600;color:#111827;white-space:nowrap;">{asset}</td>'
+                f'<td style="padding:4px 10px 4px 0;font-size:12px;color:#1d4ed8;font-weight:700;white-space:nowrap;">{html_lib.escape(level_fmt)}</td>'
+                f'<td style="padding:4px 0;font-size:11px;color:#374151;">{sig}</td>'
+                f'</tr>'
+            )
+            txt_lines.append(f'  {lv.get("asset","")} @ {level_fmt}: {lv.get("significance","")}')
+        levels_html = (
+            f'<p style="margin:10px 0 5px 0;font-size:10px;font-weight:700;text-transform:uppercase;'
+            f'color:#6b7280;letter-spacing:0.06em;">Levels to Watch</p>'
+            f'<table style="border-collapse:collapse;width:100%;">{lvl_rows}</table>'
+        )
+
+    if not scenario_html:
+        return '', []
+
+    event_header_html = ''
+    if header:
+        event_header_html = (
+            f'<p style="margin:0 0 10px 0;font-size:12px;color:#374151;">'
+            f'<b>Primary event:</b> {html_lib.escape(header)}</p>'
+        )
+
+    html_out = (
+        '<div style="margin:16px 0;">'
+        f'<p style="margin:0 0 8px 0;font-size:11px;font-weight:700;text-transform:uppercase;'
+        f'letter-spacing:0.08em;color:#6b7280;border-bottom:1px solid #e5e7eb;padding-bottom:5px;">'
+        f'Today&#39;s Scenarios</p>'
+        f'{event_header_html}'
+        f'{scenario_html}'
+        f'{levels_html}'
+        f'</div>'
+    )
+
+    all_txt = ['TODAY\'S SCENARIOS', '']
+    if header:
+        all_txt += [f'Event: {header}', '']
+    all_txt += txt_lines
+    if levels_watch:
+        all_txt = all_txt[:all_txt.index('')*3 or -1] + ['Levels to Watch:'] + all_txt[-len(levels_watch)*2:]
+
+    return html_out, all_txt
+
+
 def build_commentary_email_blocks(commentary):
     c = commentary or {}
     prev_day = (date.today() - __import__('datetime').timedelta(days=1)).strftime('%A, %B %d')
@@ -450,6 +571,9 @@ def build_commentary_email_blocks(commentary):
 
     # ── Pre-Market Look block ────────────────────────────────────────────────
     premarket_html, premarket_txt = _build_premarket_block(c)
+
+    # ── Scenarios block ──────────────────────────────────────────────────────
+    scenarios_html, scenarios_txt = _build_scenarios_block(c)
 
     # ── What Happened Yesterday ─────────────────────────────────────────────
     recap_items  = c.get('session_recap', [])
@@ -580,6 +704,9 @@ def build_commentary_email_blocks(commentary):
     if synthesis_html:
         hp.append(synthesis_html)
 
+    if scenarios_html:
+        hp.append(scenarios_html)
+
     if snapshot_html:
         hp.append(snapshot_html)
 
@@ -612,6 +739,8 @@ def build_commentary_email_blocks(commentary):
         tp += [f'WHAT TO WATCH — {today_str.upper()}', ''] + watch_text + ['']
     if analysis_text:
         tp += ['MARKET ANALYSIS', ''] + analysis_text + ['']
+    if scenarios_txt:
+        tp += scenarios_txt
     if snap_lines:
         tp += ['MARKET SNAPSHOT', ''] + snap_lines + ['']
     if cross_asset_txt:
