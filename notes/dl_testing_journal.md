@@ -695,3 +695,36 @@ Interpretation:
 - Production status remains shadow-only. The candidate now passes
   walk-forward, ensemble breadth, and segmented historical shadow checks, but
   it still needs matured live shadow scoring before promotion.
+
+## 2026-05-07 - Live Shadow Forecast Recheck After Forecasting Page Fix
+
+Objective:
+
+- Recheck the current immutable rank-head candidate's live shadow forecast after
+  fixing the forecasting page leaderboard.
+- Confirm whether any live shadow rows have matured enough to score.
+
+Commands:
+
+```powershell
+python dl_rank_head_shadow_score.py --log-path data\rank_head_current_immutable_shadow_log.parquet --output data\rank_head_current_immutable_shadow_scores.json --detail-output data\rank_head_current_immutable_shadow_scores.csv
+python dl_rank_head_shadow_forecast.py --results data\experiment\rank_head_current_immutable_5seed.json --device cpu --top-n 3 --output data\rank_head_current_immutable_shadow_forecasts.csv --log-path data\rank_head_current_immutable_shadow_log.parquet
+```
+
+Live shadow status:
+
+```text
+Rows total/scored/pending: 7/0/7
+Pending AsOfDate: 2026-05-06
+Long candidate: META
+Short candidate: MSFT
+Log uniqueness: 7 rows, 7 unique AsOfDate/Ticker pairs
+```
+
+Interpretation:
+
+- The live shadow forecast is running and deduplicated.
+- The signal is still pending because the forward-return target for
+  `2026-05-06` has not matured in the panel yet.
+- Keep this as the active shadow candidate and score it again after the next
+  data refresh/maturation cycle.
