@@ -882,3 +882,85 @@ Interpretation:
   expand cycle count, compare challengers to the current immutable champion,
   and promote only when a blind loop beats the champion across several
   historical regimes.
+
+## 2026-05-07 - Expanded Historical Blind Loop Gate
+
+Objective:
+
+- Expand the historical blind loop from the 3-cycle prototype to a 12-cycle
+  gate.
+- Test whether the adaptive retraining loop is genuinely improving prediction
+  quality across a broader historical path rather than only on the most recent
+  favorable window.
+
+Commands:
+
+```powershell
+python dl_rank_head_historical_blind_loop.py --cycles 12 --step-days 21 --epochs 3 --seeds 20260505 --val-days 126 --top-n 1 --paper-long-n 2 --paper-short-n 2 --device cpu --date-grouped-batches --dates-per-batch 64 --output data\experiment\historical_blind_rank_head\rank_head_blind_loop_12c_3e_shadow_log.parquet --csv-output data\experiment\historical_blind_rank_head\rank_head_blind_loop_12c_3e_shadow_log.csv --summary-output data\experiment\historical_blind_rank_head\rank_head_blind_loop_12c_3e_summary.json --output-stem rank_head_blind_loop_12c_3e
+python dl_rank_head_paper_trade.py --log-path data\experiment\historical_blind_rank_head\rank_head_blind_loop_12c_3e_shadow_log.parquet --long-n 1 --short-n 1 --ledger-output data\experiment\historical_blind_rank_head\rank_head_blind_loop_12c_3e_top1_bottom1.csv --summary-output data\experiment\historical_blind_rank_head\rank_head_blind_loop_12c_3e_top1_bottom1.json
+python dl_rank_head_paper_trade.py --log-path data\experiment\historical_blind_rank_head\rank_head_blind_loop_12c_3e_shadow_log.parquet --long-n 3 --short-n 3 --ledger-output data\experiment\historical_blind_rank_head\rank_head_blind_loop_12c_3e_top3_bottom3.csv --summary-output data\experiment\historical_blind_rank_head\rank_head_blind_loop_12c_3e_top3_bottom3.json
+```
+
+12-cycle / 3-epoch result:
+
+```text
+Decision range: 2025-04-28 -> 2026-03-30
+Top-1 / Bottom-1 mean spread: +0.012196
+Top-1 / Bottom-1 spread hit rate: 41.67%
+
+Top-2 / Bottom-2 mean spread: -0.016637
+Top-2 / Bottom-2 spread hit rate: 50.00%
+
+Top-3 / Bottom-3 mean spread: -0.015314
+Top-3 / Bottom-3 spread hit rate: 33.33%
+```
+
+The 3-epoch adaptive challenger failed the expanded gate. It over-selected
+TSLA early in the window and did not preserve the positive top-2/bottom-2
+paper-trading behavior seen in the smaller prototype.
+
+Follow-up command:
+
+```powershell
+python dl_rank_head_historical_blind_loop.py --cycles 12 --step-days 21 --epochs 8 --seeds 20260505 --val-days 126 --top-n 1 --paper-long-n 2 --paper-short-n 2 --device cpu --date-grouped-batches --dates-per-batch 64 --output data\experiment\historical_blind_rank_head\rank_head_blind_loop_12c_8e_shadow_log.parquet --csv-output data\experiment\historical_blind_rank_head\rank_head_blind_loop_12c_8e_shadow_log.csv --summary-output data\experiment\historical_blind_rank_head\rank_head_blind_loop_12c_8e_summary.json --output-stem rank_head_blind_loop_12c_8e
+python dl_rank_head_paper_trade.py --log-path data\experiment\historical_blind_rank_head\rank_head_blind_loop_12c_8e_shadow_log.parquet --long-n 1 --short-n 1 --ledger-output data\experiment\historical_blind_rank_head\rank_head_blind_loop_12c_8e_top1_bottom1.csv --summary-output data\experiment\historical_blind_rank_head\rank_head_blind_loop_12c_8e_top1_bottom1.json
+python dl_rank_head_paper_trade.py --log-path data\experiment\historical_blind_rank_head\rank_head_blind_loop_12c_8e_shadow_log.parquet --long-n 3 --short-n 3 --ledger-output data\experiment\historical_blind_rank_head\rank_head_blind_loop_12c_8e_top3_bottom3.csv --summary-output data\experiment\historical_blind_rank_head\rank_head_blind_loop_12c_8e_top3_bottom3.json
+```
+
+12-cycle / 8-epoch result:
+
+```text
+Top-1 / Bottom-1:
+Mean long return: +0.053725
+Mean short return: +0.017477
+Mean long-short return: +0.036248
+Spread hit rate: 58.33%
+Max drawdown: -24.79%
+
+Top-2 / Bottom-2:
+Mean long return: +0.035377
+Mean short return: +0.038234
+Mean long-short return: -0.002857
+Spread hit rate: 58.33%
+Max drawdown: -11.54%
+
+Top-3 / Bottom-3:
+Mean long return: +0.027490
+Mean short return: +0.045347
+Mean long-short return: -0.017857
+Spread hit rate: 41.67%
+Max drawdown: -19.45%
+```
+
+Interpretation:
+
+- More training helped materially: top-1/bottom-1 became a positive
+  high-conviction signal.
+- The adaptive loop still fails the diversified top-2/bottom-2 gate, so it is
+  not production-ready as a basket allocator.
+- The short side is still weak in broad baskets; the model is better at finding
+  one strong long than building a stable long/short book.
+- Next improvement target: add a promotion gate that rejects adaptive
+  challengers unless both high-conviction top-1 and diversified top-2 are
+  positive across the 12-cycle blind loop, then test multi-seed ensembles or
+  ticker exposure constraints to reduce single-name concentration.
