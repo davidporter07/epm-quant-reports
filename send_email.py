@@ -231,6 +231,180 @@ def _asset_table_html(title: str, data_dict: dict) -> tuple[str, list]:
     return html_out, text_lines
 
 
+def _build_premarket_block(c: dict) -> tuple[str, list]:
+    """Build the Pre-Market Look block: futures, earnings, Fed speakers, key data.
+    Returns (html_string, text_lines). Returns empty strings if nothing to show.
+    """
+    today_iso = date.today().isoformat()
+
+    # ── Futures ─────────────────────────────────────────────────────────────
+    futures_raw = c.get('futures_table') or {}
+    fut_rows = ''
+    fut_txt  = []
+    for name, d in futures_raw.items():
+        if not isinstance(d, dict):
+            continue
+        try:
+            lv  = float(d.get('level', 0))
+            pct = float(d.get('pct_change', 0))
+            lv_fmt  = f'{lv:,.0f}'
+            pct_str = f'{pct:+.2f}%'
+            clr = '#16a34a' if pct >= 0 else '#dc2626'
+            short = name.replace(' Futures', '')
+            fut_rows += (
+                f'<tr>'
+                f'<td style="padding:3px 12px 3px 0;color:#374151;font-size:12px;">{html_lib.escape(short)}</td>'
+                f'<td style="padding:3px 12px 3px 0;color:#111827;font-size:12px;font-weight:600;">{lv_fmt}</td>'
+                f'<td style="padding:3px 0;color:{clr};font-size:12px;font-weight:600;">{html_lib.escape(pct_str)}</td>'
+                f'</tr>'
+            )
+            fut_txt.append(f'  {short}: {lv_fmt}  {pct_str}')
+        except Exception:
+            continue
+
+    # ── Today's Earnings ────────────────────────────────────────────────────
+    earnings_today = [
+        e for e in (c.get('today_earnings') or [])
+        if str(e.get('date', ''))[:10] == today_iso and e.get('symbol')
+    ]
+    earn_parts = []
+    earn_txt   = []
+    for e in earnings_today[:8]:
+        sym  = html_lib.escape(str(e.get('symbol', '')))
+        hour = str(e.get('hour') or '').upper() or '?'
+        est  = e.get('eps_estimate')
+        est_str = f'${est:.2f}E' if est is not None else 'E/N/A'
+        earn_parts.append(
+            f'<span style="margin-right:12px;white-space:nowrap;">'
+            f'<b>{sym}</b> <span style="color:#6b7280;font-size:11px;">{hour}</span>'
+            f' <span style="color:#374151;">{html_lib.escape(est_str)}</span></span>'
+        )
+        earn_txt.append(f'{e.get("symbol","")} {hour} {est_str}')
+
+    # ── Fed Speakers ────────────────────────────────────────────────────────
+    fed_items = c.get('fed_speakers') or []
+    fed_parts = []
+    fed_txt   = []
+    for sp in fed_items[:4]:
+        name_txt  = html_lib.escape(str(sp.get('speaker', '')))
+        time_et   = html_lib.escape(str(sp.get('time_et', '')))
+        topic     = html_lib.escape(str(sp.get('topic', ''))[:80])
+        line = f'<b>{name_txt}</b>'
+        if time_et:
+            line += f' <span style="color:#6b7280;font-size:11px;">{time_et} ET</span>'
+        if topic:
+            line += f' — <span style="color:#374151;">{topic}</span>'
+        fed_parts.append(f'<span style="display:block;margin:2px 0;">{line}</span>')
+        fed_txt.append(f'{sp.get("speaker","")} {time_et}: {sp.get("topic","")}')
+
+    # ── Today's Key Economic Events ─────────────────────────────────────────
+    econ_today = []
+    try:
+        _cal_path = ROOT / 'data' / 'economic_calendar.json'
+        if _cal_path.exists():
+            with open(_cal_path, 'r', encoding='utf-8') as _cf:
+                _cal = json.load(_cf)
+            for ev in (_cal.get('events') or []):
+                if str(ev.get('date', ''))[:10] == today_iso and ev.get('importance') in ('high', 'medium'):
+                    econ_today.append(ev)
+    except Exception:
+        pass
+
+    econ_parts = []
+    econ_txt   = []
+    for ev in econ_today[:5]:
+        evname = html_lib.escape(str(ev.get('event', '')))
+        cons   = ev.get('consensus')
+        prev   = ev.get('previous')
+        imp    = str(ev.get('importance', '')).lower()
+        imp_color = '#dc2626' if imp == 'high' else '#ea580c'
+        suffix = ''
+        suf_txt = ''
+        if cons is not None:
+            suffix   += f' &nbsp;<span style="color:#374151;">Cons: <b>{html_lib.escape(str(cons))}</b></span>'
+            suf_txt  += f'  Cons: {cons}'
+        if prev is not None:
+            suffix  += f' &nbsp;<span style="color:#6b7280;">Prev: {html_lib.escape(str(prev))}</span>'
+            suf_txt += f'  Prev: {prev}'
+        econ_parts.append(
+            f'<span style="display:block;margin:2px 0;">'
+            f'<span style="color:{imp_color};font-size:10px;font-weight:700;text-transform:uppercase;'
+            f'margin-right:5px;">{html_lib.escape(imp)}</span>'
+            f'{evname}{suffix}</span>'
+        )
+        econ_txt.append(f'[{imp.upper()}] {ev.get("event","")} {suf_txt}')
+
+    # ── Bail if nothing to show ──────────────────────────────────────────────
+    has_content = fut_rows or earn_parts or fed_parts or econ_parts
+    if not has_content:
+        return '', []
+
+    # ── Assemble HTML ────────────────────────────────────────────────────────
+    inner = ''
+    if fut_rows:
+        inner += (
+            '<div style="display:inline-block;vertical-align:top;margin-right:24px;">'
+            f'<p style="margin:0 0 5px 0;font-size:10px;font-weight:700;text-transform:uppercase;'
+            f'color:#6b7280;letter-spacing:0.06em;">Futures</p>'
+            f'<table style="border-collapse:collapse;">{fut_rows}</table>'
+            '</div>'
+        )
+
+    right_col = ''
+    if earn_parts:
+        right_col += (
+            f'<p style="margin:0 0 3px 0;font-size:10px;font-weight:700;text-transform:uppercase;'
+            f'color:#6b7280;letter-spacing:0.06em;">Today\'s Earnings</p>'
+            f'<p style="margin:0 0 8px 0;font-size:12px;line-height:1.6;">{"".join(earn_parts)}</p>'
+        )
+    if fed_parts:
+        right_col += (
+            f'<p style="margin:0 0 3px 0;font-size:10px;font-weight:700;text-transform:uppercase;'
+            f'color:#6b7280;letter-spacing:0.06em;">Fed Speak</p>'
+            f'<p style="margin:0 0 8px 0;font-size:12px;line-height:1.7;">{"".join(fed_parts)}</p>'
+        )
+    elif not fed_parts:
+        right_col += (
+            f'<p style="margin:0 0 8px 0;font-size:11px;color:#9ca3af;">No scheduled Fed speakers today.</p>'
+        )
+    if econ_parts:
+        right_col += (
+            f'<p style="margin:0 0 3px 0;font-size:10px;font-weight:700;text-transform:uppercase;'
+            f'color:#6b7280;letter-spacing:0.06em;">Key Data Today</p>'
+            f'<p style="margin:0;font-size:12px;line-height:1.7;">{"".join(econ_parts)}</p>'
+        )
+
+    if right_col:
+        inner += (
+            f'<div style="display:inline-block;vertical-align:top;max-width:340px;">'
+            f'{right_col}'
+            f'</div>'
+        )
+
+    html_out = (
+        '<div style="margin:0 0 16px 0;padding:12px 14px;background:#f0f4ff;'
+        'border:1px solid #c7d7f5;border-radius:10px;">'
+        f'<p style="margin:0 0 10px 0;font-size:11px;font-weight:700;text-transform:uppercase;'
+        f'letter-spacing:0.08em;color:#1e3a8a;">Pre-Market Look</p>'
+        f'{inner}'
+        f'</div>'
+    )
+
+    txt_lines = ['PRE-MARKET LOOK', '']
+    if fut_txt:
+        txt_lines += ['Futures:'] + fut_txt + ['']
+    if earn_txt:
+        txt_lines += ["Today's Earnings:  " + '  |  '.join(earn_txt), '']
+    if fed_txt:
+        txt_lines += ['Fed Speak:'] + [f'  {t}' for t in fed_txt] + ['']
+    elif not fed_txt:
+        txt_lines += ['Fed Speak: No scheduled Fed speakers today.', '']
+    if econ_txt:
+        txt_lines += ['Key Data Today:'] + [f'  {t}' for t in econ_txt] + ['']
+
+    return html_out, txt_lines
+
+
 def build_commentary_email_blocks(commentary):
     c = commentary or {}
     prev_day = (date.today() - __import__('datetime').timedelta(days=1)).strftime('%A, %B %d')
@@ -273,6 +447,9 @@ def build_commentary_email_blocks(commentary):
     _fx_html,     _fx_txt     = _asset_table_html('Currencies & Crypto',   c.get('currencies_table') or {})
     cross_asset_html = _bonds_html + _global_html + _cmdty_html + _fx_html
     cross_asset_txt  = _bonds_txt  + _global_txt  + _cmdty_txt  + _fx_txt
+
+    # ── Pre-Market Look block ────────────────────────────────────────────────
+    premarket_html, premarket_txt = _build_premarket_block(c)
 
     # ── What Happened Yesterday ─────────────────────────────────────────────
     recap_items  = c.get('session_recap', [])
@@ -385,6 +562,9 @@ def build_commentary_email_blocks(commentary):
         'background:#f8fbff;font-family:\'Helvetica Neue\',Arial,sans-serif;line-height:1.6;">',
     ]
 
+    if premarket_html:
+        hp.append(premarket_html)
+
     if recap_html:
         hp.append(_section_header(f'What Happened {prev_day}'))
         hp.append(recap_html)
@@ -424,6 +604,8 @@ def build_commentary_email_blocks(commentary):
 
     # ── Assemble plain text ─────────────────────────────────────────────────
     tp = ['EPM Markets Recap', '']
+    if premarket_txt:
+        tp += premarket_txt
     if recap_text:
         tp += [f'WHAT HAPPENED {prev_day.upper()}', ''] + recap_text + ['']
     if watch_text:

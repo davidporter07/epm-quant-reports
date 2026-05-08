@@ -221,6 +221,23 @@ def fetch_currencies_table(prev_data: dict | None = None) -> dict[str, dict]:
     return result
 
 
+FUTURES_TICKERS: dict[str, str] = {
+    "S&P 500 Futures":      "ES=F",
+    "Nasdaq 100 Futures":   "NQ=F",
+    "Dow Futures":          "YM=F",
+    "Russell 2000 Futures": "RTY=F",
+}
+
+
+def fetch_futures_table(prev_data: dict | None = None) -> dict[str, dict]:
+    result: dict[str, dict] = {}
+    for name, ticker in FUTURES_TICKERS.items():
+        q = _fetch_quote(ticker, prev_close=_prev_level(prev_data, name))
+        if q:
+            result[name] = q
+    return result
+
+
 def _fetch_treasury_gov_yields() -> dict[str, dict]:
     """Fetch official US Treasury yield curve data from home.treasury.gov.
     Returns a bonds_table-compatible dict with 2Y, 10Y, 30Y yields and the 10s-2s spread.
@@ -677,6 +694,82 @@ def fetch_world_news() -> list[dict]:
     return result
 
 
+def fetch_fed_speakers() -> list[dict]:
+    """Return today's Fed speaker events by scraping the Federal Reserve event calendar.
+    Falls back to data/fed_speakers_2026.json if the scrape fails or returns nothing.
+    Output: list of {"speaker": str, "time_et": str, "venue": str, "topic": str}
+    """
+    today_str = datetime.today().strftime("%Y-%m-%d")
+    today_dt  = datetime.today().date()
+
+    def _from_fallback() -> list[dict]:
+        path = DATA_DIR / "fed_speakers_2026.json"
+        if not path.exists():
+            return []
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return [e for e in (data if isinstance(data, list) else [])
+                    if str(e.get("date", ""))[:10] == today_str]
+        except Exception:
+            return []
+
+    try:
+        import urllib.request as _ur
+        from bs4 import BeautifulSoup
+        req = _ur.Request(
+            "https://www.federalreserve.gov/newsevents/calendar.htm",
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        with _ur.urlopen(req, timeout=14) as _resp:
+            html_bytes = _resp.read()
+        soup = BeautifulSoup(html_bytes.decode("utf-8", errors="replace"), "html.parser")
+
+        speakers: list[dict] = []
+        # The Fed calendar renders events grouped by date. Each group has a date header
+        # (h5 or h4 with a parseable date string) followed by event rows.
+        current_date: str | None = None
+        for tag in soup.find_all(True):
+            # Date header — e.g. <h5 class="...">May 7, 2026</h5>
+            if tag.name in ("h4", "h5"):
+                txt = tag.get_text(strip=True)
+                try:
+                    from datetime import datetime as _dtp
+                    parsed = _dtp.strptime(txt.strip(), "%B %d, %Y")
+                    current_date = parsed.strftime("%Y-%m-%d")
+                except Exception:
+                    pass
+                continue
+            # Event rows: look for divs with "eventlist__event" or similar markers
+            if tag.name == "div" and current_date == today_str:
+                cls = " ".join(tag.get("class") or [])
+                if "eventlist__event" not in cls and "row" not in cls:
+                    continue
+                time_tag    = tag.select_one(".eventlist__time, .col-xs-12.col-md-3")
+                heading_tag = tag.select_one(".eventlist__heading, h4, h5, .col-xs-12.col-md-9")
+                desc_tag    = tag.select_one(".eventlist__description, p")
+                time_et  = time_tag.get_text(strip=True)    if time_tag    else ""
+                heading  = heading_tag.get_text(strip=True) if heading_tag else ""
+                topic    = desc_tag.get_text(strip=True)    if desc_tag    else ""
+                if heading and len(heading) > 3:
+                    speakers.append({
+                        "speaker":  heading,
+                        "time_et":  time_et,
+                        "venue":    "",
+                        "topic":    topic[:200],
+                    })
+
+        if speakers:
+            print(f"[FED] Scraped {len(speakers)} Fed event(s) for today.")
+            return speakers
+    except Exception as _exc:
+        print(f"[FED] Fed calendar scrape failed ({_exc}); using fallback.")
+
+    result = _from_fallback()
+    if not result:
+        print("[FED] No Fed speakers scheduled today (fallback empty).")
+    return result
+
+
 def fetch_economic_calendar() -> list[dict]:
     """Fetch upcoming macro events. Primary: FRED releases. Fallback: NASDAQ.
     Saves results to data/economic_calendar.json for the website to read."""
@@ -859,6 +952,52 @@ def fetch_economic_calendar() -> list[dict]:
                 merged_fomc.append(dict(ev))
         events = sorted(non_fomc + merged_fomc, key=lambda x: x["date"])
         print(f"[CAL] Fetched {len(events)} economic events from FRED releases.")
+        # Enrich FRED events with Finnhub consensus/previous (FRED never returns these)
+        try:
+            from epm_secrets import FINNHUB_KEY as _fhk_enrich
+            _fh_enr = requests.get(
+                "https://finnhub.io/api/v1/calendar/economic",
+                params={"from": today.strftime("%Y-%m-%d"),
+                        "to": (today + timedelta(days=7)).strftime("%Y-%m-%d"),
+                        "token": _fhk_enrich},
+                timeout=12,
+            )
+            _fh_enr.raise_for_status()
+            _fh_ev_list = _fh_enr.json().get("economicCalendar", [])
+            # Index Finnhub events by date + lowercased event name
+            _fh_idx: dict[str, dict[str, dict]] = {}
+            for _fhe in _fh_ev_list:
+                _fhd = str(_fhe.get("time", ""))[:10]
+                _fhn = str(_fhe.get("event", "")).lower().strip()
+                _fh_idx.setdefault(_fhd, {})[_fhn] = {
+                    "consensus": _fhe.get("estimate"),
+                    "previous":  _fhe.get("prev"),
+                }
+            _enriched_count = 0
+            for _ev in events:
+                if _ev.get("consensus") is not None:
+                    continue
+                _evd  = _ev["date"]
+                _evn  = _ev["event"].lower().strip()
+                _day  = _fh_idx.get(_evd, {})
+                # Direct name match first
+                if _evn in _day:
+                    _ev["consensus"] = _day[_evn]["consensus"]
+                    _ev["previous"]  = _day[_evn]["previous"]
+                    _enriched_count += 1
+                    continue
+                # Partial match: ≥2 shared words
+                _ev_words = set(_evn.split())
+                for _fn, _fd in _day.items():
+                    if len(_ev_words & set(_fn.split())) >= 2:
+                        _ev["consensus"] = _fd["consensus"]
+                        _ev["previous"]  = _fd["previous"]
+                        _enriched_count += 1
+                        break
+            if _enriched_count:
+                print(f"[CAL] Finnhub enriched {_enriched_count} event(s) with consensus/previous.")
+        except Exception:
+            pass  # enrichment is best-effort; FRED events still ship without it
     except Exception as exc:
         print(f"[WARN] FRED economic calendar failed: {exc} — trying NASDAQ fallback")
         try:
@@ -2037,6 +2176,9 @@ def main() -> int:
     tech_levels      = fetch_technical_levels()
     print(f"  [OK] Technical levels: {len(tech_levels)} assets")
 
+    futures_tbl      = fetch_futures_table(prev_data=_prev.get("futures_table"))
+    print(f"  [OK] Futures: {len(futures_tbl)} contracts")
+
     print("[DATA] Loading portfolio data...")
     df = load_portfolio_df()
     winners, watch     = build_portfolio_spotlight(df) if not df.empty else ([], [])
@@ -2048,6 +2190,9 @@ def main() -> int:
 
     print("[CAL] Fetching economic calendar...")
     econ_calendar = fetch_economic_calendar()
+
+    print("[FED] Checking Fed speaker schedule...")
+    fed_speakers = fetch_fed_speakers()
 
     print("[ENRICH] Loading enrichment data...")
     enrichment: dict = {}
@@ -2173,6 +2318,12 @@ def main() -> int:
          "eps_estimate": e.get("eps_estimate"), "hour": e.get("hour")}
         for e in (earnings_cal if isinstance(earnings_cal, list) else [])[:10]
     ]
+    # Today's earnings — only entries for report_date, with non-null eps_estimate,
+    # limited to known large-caps by filtering out empty tickers
+    _today_earnings = [
+        e for e in _top_earnings
+        if str(e.get("date", ""))[:10] == today and e.get("symbol")
+    ]
 
     payload = {
         "date":                      today,
@@ -2215,6 +2366,9 @@ def main() -> int:
     existing["commodities_table"]  = commodities_tbl
     existing["currencies_table"]   = currencies_tbl
     existing["bonds_table"]        = bonds_tbl
+    existing["futures_table"]      = futures_tbl
+    existing["fed_speakers"]       = fed_speakers
+    existing["today_earnings"]     = _today_earnings
     existing["technical_levels"]   = tech_levels
     existing["report_date"]        = today
     # Enrichment fields — available to email renderer even if LLM skipped.
