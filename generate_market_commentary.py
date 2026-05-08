@@ -1055,6 +1055,8 @@ NUMBER FIDELITY (non-negotiable):
 - SIGN PRESERVATION (most-violated rule): If pct_change is negative, the cited percent must be negative AND the verb must be "fell"/"slid"/"declined". If pct_change is positive, the cited percent must be positive AND the verb must be "rose"/"gained"/"climbed". Magnitude alone is wrong — sign and verb must both match.
   BAD: snapshot WTI Crude pct_change=-0.79 → "WTI rose 0.79% on supply concerns" (sign flipped, verb wrong)
   GOOD: snapshot WTI Crude pct_change=-0.79 → "WTI fell 0.79% to $94.99 on softer Asian demand"
+- MAGNITUDE FIDELITY: Always cite the percent figure from pct_change, never the raw dollar delta. A $2.20 move on $4720 gold is +0.05%, not +2.2%. If you find yourself writing a number like "2.2002" or any figure that looks like a dollar amount rather than a percent, stop and use the pct_change from the payload instead.
+- CAUSAL CONSISTENCY: The driver you cite must logically support the direction you report. "Fewer/lower rate hike expectations" and "peace deal hopes" both pull yields DOWN — if yields rose, do not use these as drivers. "Hawkish Fed/inflation data" pulls the dollar UP. Safe-haven buying pushes gold UP. If your verb says "rose" but your driver implies "down", rewrite either the verb or the driver to eliminate the contradiction.
 - If a number is missing from the payload, OMIT it entirely. Do NOT estimate, round, or invent.
 - Tickers in recent_earnings_actuals have ALREADY released earnings this week — never write "later this week" or "upcoming earnings" for them. If you mention one, cite the reported EPS and surprise % from the payload.
 
@@ -1347,7 +1349,8 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
             if sign_fixes:
                 print(f"  [CORRECT] Auto-corrected {sign_fixes} sign mismatch(es) in Call 1 output.")
             numeric = _check_numeric_consistency(part1, snapshot)
-            if not banned and not leaks and not numeric:
+            causal = _check_causal_logic(part1, snapshot)
+            if not banned and not leaks and not numeric and not causal:
                 break
             if banned:
                 print(f"  [RETRY] Attempt {attempt + 1} still contained banned phrases after scrub: {banned}. Retrying...")
@@ -1355,6 +1358,8 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
                 print(f"  [RETRY] Attempt {attempt + 1} contained leaked placeholders: {leaks}. Retrying...")
             if numeric:
                 print(f"  [RETRY] Attempt {attempt + 1} had numeric consistency violations: {numeric}. Retrying...")
+            if causal:
+                print(f"  [RETRY] Attempt {attempt + 1} had causal logic inversions: {causal}. Retrying...")
         except Exception as exc:
             print(f"  [WARN] Narrative call failed (attempt {attempt + 1}): {exc}")
             part1 = {}
@@ -1539,24 +1544,37 @@ def _check_numeric_consistency(data: dict, snapshot: dict) -> list[str]:
         m = PCT_RE.search(text or "")
         return float(m.group(1)) if m else None
 
-    # Magnitude + sign check for fields where the first % is the pct_change.
+    def _pct_after_keyword(text: str, keyword: str) -> float | None:
+        """Find the first % figure at or after `keyword` in text."""
+        lower = (text or "").lower()
+        idx = lower.find(keyword.lower())
+        if idx == -1:
+            return None
+        m = PCT_RE.search(text, idx)
+        return float(m.group(1)) if m else None
+
+    # Magnitude + sign check: (narrative_key, snap_key, keyword_or_None).
     # fixed_income excluded — yield level (e.g. "4.39%") ≠ yield pct_change.
+    # keyword_or_None: if set, find the first % AFTER that keyword in the prose
+    # (needed for sections where multiple assets appear, e.g. commodities).
     checks = [
-        ("equities_commentary",    "S&P 500"),
-        ("commodities_commentary", "WTI Crude"),
-        ("currencies_commentary",  "U.S. Dollar (DXY)"),
+        ("equities_commentary",    "S&P 500",            None),
+        ("commodities_commentary", "WTI Crude",           None),
+        ("commodities_commentary", "Gold",                "gold"),
+        ("currencies_commentary",  "U.S. Dollar (DXY)",   None),
     ]
     violations = []
-    for narrative_key, snap_key in checks:
+    for narrative_key, snap_key, kw in checks:
         snap = (snapshot or {}).get(snap_key) or {}
         truth_pct = snap.get("pct_change")
         if truth_pct is None:
             continue
-        if abs(truth_pct) < 0.1:
-            # Snapshot too close to zero to enforce sign — likely stale/pre-open data.
+        if abs(truth_pct) < 0.02:
+            # Near-zero: skip to avoid flagging rounding noise.
             continue
         prose = data.get(narrative_key, "")
-        cited = _first_pct(prose if isinstance(prose, str) else " ".join(prose))
+        prose_str = prose if isinstance(prose, str) else " ".join(prose or [])
+        cited = _first_pct(prose_str) if kw is None else _pct_after_keyword(prose_str, kw)
         if cited is None:
             continue
         if (truth_pct >= 0) != (cited >= 0):
@@ -1614,10 +1632,15 @@ def _check_numeric_consistency(data: dict, snapshot: dict) -> list[str]:
                 if kw in btext:
                     snap = (snapshot or {}).get(snap_key) or {}
                     truth_pct = snap.get("pct_change")
-                    if truth_pct is not None and (truth_pct >= 0) != (cited >= 0):
-                        violations.append(
-                            f"pre_market_bullets: mentions {snap_key} {cited:+.2f}% but snapshot is {truth_pct:+.2f}% (sign mismatch)"
-                        )
+                    if truth_pct is not None:
+                        if (truth_pct >= 0) != (cited >= 0):
+                            violations.append(
+                                f"pre_market_bullets: mentions {snap_key} {cited:+.2f}% but snapshot is {truth_pct:+.2f}% (sign mismatch)"
+                            )
+                        elif abs(truth_pct) >= 0.02 and abs(truth_pct - cited) > 0.5:
+                            violations.append(
+                                f"pre_market_bullets: mentions {snap_key} {cited:+.2f}% but snapshot is {truth_pct:+.2f}% (magnitude > 0.5pp)"
+                            )
                     break
 
     return violations
@@ -1704,7 +1727,7 @@ def _correct_sign_mismatches(data: dict, snapshot: dict) -> int:
     ]
     for narrative_key, snap_key in section_checks:
         truth_pct = (snapshot.get(snap_key) or {}).get("pct_change")
-        if truth_pct is None or abs(truth_pct) < 0.1:
+        if truth_pct is None or abs(truth_pct) < 0.02:
             continue
         prose = data.get(narrative_key)
         if not isinstance(prose, str):
@@ -1734,7 +1757,7 @@ def _correct_sign_mismatches(data: dict, snapshot: dict) -> int:
             for kw, snap_key in asset_kw.items():
                 if kw in btext_lower:
                     truth_pct = (snapshot.get(snap_key) or {}).get("pct_change")
-                    if truth_pct is None or abs(truth_pct) < 0.1:
+                    if truth_pct is None or abs(truth_pct) < 0.02:
                         break
                     corrected, changed = _rewrite_first_pct_sign(corrected, truth_pct)
                     if changed:
@@ -1744,6 +1767,44 @@ def _correct_sign_mismatches(data: dict, snapshot: dict) -> int:
         data["pre_market_bullets"] = new_bullets
 
     return fixes
+
+
+def _check_causal_logic(data: dict, snapshot: dict) -> list[str]:
+    """Detect causal-logic inversions: driver implies one direction but prose says the opposite.
+    Checks sentence-level contradictions in fixed_income_commentary only (the highest-error section).
+    Returns violation strings (empty = clean).
+    """
+    import re
+    violations = []
+
+    fi_prose = data.get("fixed_income_commentary", "")
+    if not isinstance(fi_prose, str) or not fi_prose:
+        return violations
+
+    sentences = re.split(r'(?<=[.!?])\s+', fi_prose)
+    for sent in sentences:
+        sl = sent.lower()
+        yield_rose = bool(re.search(
+            r'\byield[s]?\b.{0,60}\b(rose|climbed|jumped|surged|advanced|pushed\s+higher|moved\s+up)\b', sl
+        ))
+        if not yield_rose:
+            continue
+        # "Fewer/lower/reduced rate-hike expectations" pulls yields DOWN — contradicts "rose".
+        if re.search(r'\b(fewer|lower|reduced)\b.{0,80}\b(rate\s*hikes?|hikes?|tightening|rate\s*increases?)\b', sl):
+            violations.append(
+                "fixed_income_commentary: causal inversion — 'fewer/lower rate hikes' driver should pull "
+                "yields DOWN, but prose says they rose"
+            )
+            break
+        # "Rate cut hopes / dovish expectations" pulls yields DOWN — contradicts "rose".
+        if re.search(r'\b(rate\s+cut|cut\s+expectation|dovish|fewer\s+hike|cut\s+hope)\b', sl):
+            violations.append(
+                "fixed_income_commentary: causal inversion — rate-cut/dovish driver should pull "
+                "yields DOWN, but prose says they rose"
+            )
+            break
+
+    return violations
 
 
 def _atomic_write_json(path: Path, data: dict) -> None:
@@ -1874,6 +1935,10 @@ def validate_commentary(data: dict, known_tickers: set = None, snapshot: dict = 
         violations = _check_numeric_consistency(data, snapshot)
         if violations:
             print(f"[VALIDATE] Numeric consistency violations vs market_snapshot: {violations}")
+            return False
+        causal_violations = _check_causal_logic(data, snapshot)
+        if causal_violations:
+            print(f"[VALIDATE] Causal logic inversions: {causal_violations}")
             return False
     # Normalize market_outlook_label
     label = str(data.get("market_outlook_label", "")).strip()
