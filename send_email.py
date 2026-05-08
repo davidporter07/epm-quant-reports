@@ -163,6 +163,74 @@ def _bullet_list(items: list, color: str = '#374151') -> str:
     return rows
 
 
+def _asset_table_html(title: str, data_dict: dict) -> tuple[str, list]:
+    """Render a cross-asset data table matching the email snapshot style.
+    Returns (html_string, text_lines). Handles yields, FX, spread (bps), and $ assets.
+    """
+    if not data_dict:
+        return '', []
+    rows_html = ''
+    text_lines = []
+    for label, d in data_dict.items():
+        if not isinstance(d, dict):
+            continue
+        level = d.get('level', '')
+        pct   = d.get('pct_change', '')
+        chg   = d.get('change', '')
+        is_spread = 'Spread' in label
+        is_yield  = 'Yield' in label or 'Rate' in label
+        is_fx     = '/' in label and 'Bitcoin' not in label
+        is_btc    = 'Bitcoin' in label
+        is_dxy    = 'Index' in label and 'Dollar' in label
+        try:
+            lv = float(level)
+            if is_spread:
+                level_fmt = f'{lv:.0f} bps'
+            elif is_yield:
+                level_fmt = f'{lv:.3f}'
+            elif is_fx:
+                level_fmt = f'{lv:.4f}'
+            elif is_dxy:
+                level_fmt = f'{lv:,.2f}'
+            else:
+                level_fmt = f'${lv:,.2f}'
+        except Exception:
+            level_fmt = str(level)
+        if is_spread:
+            try:
+                c_val = float(chg)
+                pct_str = f'{c_val:+.0f} bps'
+                color = '#16a34a' if c_val >= 0 else '#dc2626'
+            except Exception:
+                pct_str, color = '', '#6b7280'
+            arrow = ''
+        else:
+            arrow = _arrow(pct)
+            color = _pct_color(pct)
+            try:
+                pct_str = f'{float(pct):+.2f}%'
+            except Exception:
+                pct_str = ''
+        rows_html += (
+            f'<tr>'
+            f'<td style="padding:5px 12px 5px 0;color:#374151;font-size:13px;">{html_lib.escape(label)}</td>'
+            f'<td style="padding:5px 12px 5px 0;color:#111827;font-size:13px;font-weight:600;">{html_lib.escape(level_fmt)}</td>'
+            f'<td style="padding:5px 0;color:{color};font-size:13px;font-weight:600;">{arrow} {html_lib.escape(pct_str)}</td>'
+            f'</tr>'
+        )
+        text_lines.append(f'{label}: {level_fmt}  {arrow} {pct_str}')
+    if not rows_html:
+        return '', []
+    html_out = (
+        '<div style="margin:14px 0;">'
+        f'<p style="margin:0 0 8px 0;font-weight:700;color:#1e2a44;font-size:12px;'
+        f'text-transform:uppercase;letter-spacing:0.05em;">{html_lib.escape(title)}</p>'
+        f'<table style="border-collapse:collapse;">{rows_html}</table>'
+        '</div>'
+    )
+    return html_out, text_lines
+
+
 def build_commentary_email_blocks(commentary):
     c = commentary or {}
     prev_day = (date.today() - __import__('datetime').timedelta(days=1)).strftime('%A, %B %d')
@@ -192,53 +260,19 @@ def build_commentary_email_blocks(commentary):
         except Exception:
             pass
 
-    # ── Market snapshot table ───────────────────────────────────────────────
-    snapshot = c.get('market_snapshot', {})
-    snap_rows_html = ''
-    snap_lines = []
-    label_order = ['S&P 500', 'Nasdaq 100', '10-Yr Yield', 'Gold', 'WTI Crude', 'U.S. Dollar (DXY)']
-    for label in label_order:
-        d = snapshot.get(label)
-        if not d:
-            continue
-        level = d.get('level', '')
-        pct   = d.get('pct_change', '')
-        arrow = _arrow(pct)
-        color = _pct_color(pct)
-        if isinstance(pct, (int, float)):
-            _pct_norm = pct + 0.0  # normalize -0.0 to 0.0 for sign formatting
-            pct_str = f'{_pct_norm:+.2f}%'
-        else:
-            pct_str = ''
-        _is_yield = 'Yield' in label or 'Spread' in label
-        _is_dxy   = 'DXY' in label
-        try:
-            _lv = float(level)
-            if _is_yield:
-                level_fmt = f"{_lv:.3f}"
-            elif _is_dxy:
-                level_fmt = f"{_lv:,.2f}"
-            else:
-                level_fmt = f"${_lv:,.2f}"
-        except Exception:
-            level_fmt = str(level)
-        snap_rows_html += (
-            f'<tr>'
-            f'<td style="padding:5px 12px 5px 0;color:#374151;font-size:13px;">{html_lib.escape(label)}</td>'
-            f'<td style="padding:5px 12px 5px 0;color:#111827;font-size:13px;font-weight:600;">{html_lib.escape(level_fmt)}</td>'
-            f'<td style="padding:5px 0;color:{color};font-size:13px;font-weight:600;">{arrow} {html_lib.escape(pct_str)}</td>'
-            f'</tr>'
-        )
-        snap_lines.append(f'{label}: {level_fmt}  {arrow} {pct_str}')
+    # ── Market snapshot tables ──────────────────────────────────────────────
+    _snap_raw = c.get('market_snapshot') or {}
+    _snap_core_order = ['S&P 500', 'Nasdaq 100', '10-Yr Yield', 'Gold', 'WTI Crude', 'U.S. Dollar (DXY)']
+    _snap_core = {k: _snap_raw[k] for k in _snap_core_order if _snap_raw.get(k)}
+    snapshot_html, snap_lines = _asset_table_html('Market Snapshot', _snap_core)
 
-    snapshot_html = ''
-    if snap_rows_html:
-        snapshot_html = (
-            '<div style="margin:14px 0;">'
-            '<p style="margin:0 0 8px 0;font-weight:700;color:#1e2a44;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;">Market Snapshot</p>'
-            f'<table style="border-collapse:collapse;">{snap_rows_html}</table>'
-            '</div>'
-        )
+    # Additional cross-asset tables (data already fetched; PDF renders these; now email does too)
+    _bonds_html,  _bonds_txt  = _asset_table_html('Treasury Curve',       c.get('bonds_table') or {})
+    _global_html, _global_txt = _asset_table_html('Global Equity Markets', c.get('global_markets') or {})
+    _cmdty_html,  _cmdty_txt  = _asset_table_html('Commodities',           c.get('commodities_table') or {})
+    _fx_html,     _fx_txt     = _asset_table_html('Currencies & Crypto',   c.get('currencies_table') or {})
+    cross_asset_html = _bonds_html + _global_html + _cmdty_html + _fx_html
+    cross_asset_txt  = _bonds_txt  + _global_txt  + _cmdty_txt  + _fx_txt
 
     # ── What Happened Yesterday ─────────────────────────────────────────────
     recap_items  = c.get('session_recap', [])
@@ -369,6 +403,9 @@ def build_commentary_email_blocks(commentary):
     if snapshot_html:
         hp.append(snapshot_html)
 
+    if cross_asset_html:
+        hp.append(cross_asset_html)
+
     if intl_html:
         hp.append(_section_header('Global Context'))
         hp.append(intl_html)
@@ -395,6 +432,8 @@ def build_commentary_email_blocks(commentary):
         tp += ['MARKET ANALYSIS', ''] + analysis_text + ['']
     if snap_lines:
         tp += ['MARKET SNAPSHOT', ''] + snap_lines + ['']
+    if cross_asset_txt:
+        tp += ['CROSS-ASSET DATA', ''] + cross_asset_txt + ['']
     if intl:
         tp += ['GLOBAL CONTEXT', '', intl, '']
     if spotlight_text:
