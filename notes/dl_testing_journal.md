@@ -728,3 +728,76 @@ Interpretation:
   `2026-05-06` has not matured in the panel yet.
 - Keep this as the active shadow candidate and score it again after the next
   data refresh/maturation cycle.
+
+## 2026-05-07 - Rank-Head Paper-Trading Ledger
+
+Objective:
+
+- Continue DL testing before the `2026-05-06` live shadow signal matures.
+- Convert historical rank-head shadow forecasts into a paper-trading ledger
+  that can be compared against Quant Cup-style model runs.
+
+Implementation:
+
+- Added `dl_rank_head_paper_trade.py`.
+- The script treats each historical `AsOfDate` as a paper signal date.
+- It supports configurable long/short basket sizes and writes both a trade
+  ledger CSV and a summary JSON.
+- Important caveat: the returns are 21-trading-day forward returns issued on
+  daily signal dates, so adjacent rows overlap. Mean spread and hit rate are
+  the most useful diagnostics; compounded equity is directional only and should
+  not be treated as a live, non-overlapping portfolio curve.
+
+Commands:
+
+```powershell
+python dl_rank_head_paper_trade.py --log-path data\experiment\rank_head_current_immutable_shadow_backtest_252d.parquet --long-n 1 --short-n 1 --ledger-output data\experiment\rank_head_current_immutable_paper_trades_top1_bottom1.csv --summary-output data\experiment\rank_head_current_immutable_paper_trades_top1_bottom1.json
+python dl_rank_head_paper_trade.py --log-path data\experiment\rank_head_current_immutable_shadow_backtest_252d.parquet --long-n 2 --short-n 2 --ledger-output data\experiment\rank_head_current_immutable_paper_trades_top2_bottom2.csv --summary-output data\experiment\rank_head_current_immutable_paper_trades_top2_bottom2.json
+python dl_rank_head_paper_trade.py --log-path data\experiment\rank_head_current_immutable_shadow_backtest_252d.parquet --long-n 3 --short-n 3 --ledger-output data\experiment\rank_head_current_immutable_paper_trades_top3_bottom3.csv --summary-output data\experiment\rank_head_current_immutable_paper_trades_top3_bottom3.json
+```
+
+Results:
+
+```text
+Top-1 / Bottom-1:
+Trade days: 193
+AsOfDate range: 2025-07-01 -> 2026-04-07
+Mean long return: +0.054870
+Mean short return: +0.007837
+Mean long-short return: +0.047033
+Spread hit rate: 65.29%
+Long hit rate: 59.59%
+Short hit rate: 51.30%
+Max drawdown: -93.80%
+
+Top-2 / Bottom-2:
+Trade days: 193
+Mean long return: +0.040616
+Mean short return: +0.001198
+Mean long-short return: +0.039417
+Spread hit rate: 74.61%
+Long hit rate: 65.29%
+Short hit rate: 50.78%
+Max drawdown: -32.24%
+
+Top-3 / Bottom-3:
+Trade days: 193
+Mean long return: +0.030821
+Mean short return: +0.012586
+Mean long-short return: +0.018236
+Spread hit rate: 64.25%
+Long hit rate: 62.18%
+Short hit rate: 46.11%
+Max drawdown: -80.40%
+```
+
+Interpretation:
+
+- The paper-trading ledger confirms the rank-head signal is useful beyond the
+  single-candidate shadow scorer.
+- Top-1/bottom-1 preserves the strongest average spread, but top-2/bottom-2
+  is more stable and has the best spread hit rate.
+- Top-3/bottom-3 dilutes the edge too much for the current MAG7 universe.
+- Recommended next paper-trading default: top-2/bottom-2 for Quant Cup-style
+  stability testing, while preserving top-1/bottom-1 as the highest-conviction
+  shadow signal.
