@@ -1672,6 +1672,70 @@ body[data-theme="light"] .mini-stat {
 }
 .lookback-verdict.correct { color: #34d399; background: rgba(52,211,153,0.1); border: 1px solid rgba(52,211,153,0.25); }
 .lookback-verdict.wrong   { color: #f87171; background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.25); }
+.lookback-verdict.neutral { color: var(--text-muted, #6b7f9e); background: rgba(148,163,184,0.10); border: 1px solid rgba(148,163,184,0.18); }
+
+.leaderboard-full-list {
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.025);
+  border: 1px solid rgba(255,255,255,0.06);
+}
+.leaderboard-model-row {
+  display: grid;
+  grid-template-columns: 42px minmax(122px, 1.4fr) repeat(5, minmax(54px, auto)) minmax(112px, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid rgba(255,255,255,0.055);
+  font-size: 11px;
+}
+.leaderboard-model-row:first-of-type { border-top: 0; }
+.leaderboard-model-row.is-top-three .leaderboard-rank {
+  color: #d4a84b;
+  border-color: rgba(212,168,75,0.32);
+  background: rgba(212,168,75,0.10);
+}
+.leaderboard-rank {
+  justify-self: start;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(148,163,184,0.18);
+  color: var(--text-muted, #6b7f9e);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.leaderboard-model {
+  min-width: 0;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.leaderboard-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  color: var(--text-primary, #e8eeff);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.leaderboard-stat span {
+  color: var(--text-muted, #6b7f9e);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.leaderboard-lookback {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
 
 /* Light mode */
 [data-theme="light"] .podium-card {
@@ -1687,6 +1751,13 @@ body[data-theme="light"] .mini-stat {
 @media (max-width: 640px) {
   .podium-grid { grid-template-columns: 1fr; }
   .podium-model-name { font-size: 10px; }
+  .leaderboard-model-row {
+    grid-template-columns: 38px minmax(96px, 1fr) repeat(3, minmax(48px, auto));
+  }
+  .leaderboard-stat.optional,
+  .leaderboard-lookback {
+    display: none;
+  }
 }
 
 /* ── Chart Expand Modal ── */

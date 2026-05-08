@@ -40,7 +40,7 @@
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
   <script src="/static/js/chrome.js?v=20260423a"></script>
   <script defer src="/static/js/site.js?v=20260429c"></script>
-  <script defer src="/static/js/forecasting.js?v=20260505a"></script>
+  <script defer src="/static/js/forecasting.js?v=20260507b"></script>
   <link rel="icon" type="image/png" href="/static/epm_logo_sq.png">
   <link rel="apple-touch-icon" href="/static/epm_logo_sq.png">
   <meta property="og:image" content="/static/epm_logo.png">
@@ -114,7 +114,7 @@
           <h3 class="ds-title is-h3">Model Leaderboard</h3>
           <span class="badge">Historical Accuracy + 21-Day Lookback</span>
         </div>
-        <p class="ds-subtitle">Top 3 models per ticker ranked by composite score (RMSE, MAE, directional accuracy, correlation). The 21-day lookback compares each model's prediction from ~21 trading days ago against the actual price movement.</p>
+        <p class="ds-subtitle">All matured models per ticker ranked by 21-trading-day performance. The lookback compares each model's prediction from ~21 trading days ago against the actual price movement.</p>
         <div id="rankingsContainer">
           <div class="placeholder-item">Loading leaderboard…</div>
         </div>

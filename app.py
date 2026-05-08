@@ -433,10 +433,20 @@ def _forecast_store() -> dict[str, dict]:
             if arimax_val is not None:
                 models["ARIMAX"] = {"forecast": round(arimax_val, 6)}
 
+            ranking_cols = [
+                "Model",
+                "Rank",
+                "Composite_Score",
+                "RMSE",
+                "Directional_Accuracy",
+                "MAE",
+                "N",
+                "Corr",
+                "CI_Coverage",
+            ]
+            available_ranking_cols = [c for c in ranking_cols if c in rankings_df.columns]
             ticker_rankings = (
-                rankings_df[rankings_df["Ticker"] == ticker][
-                    ["Model", "Rank", "Composite_Score", "RMSE", "Directional_Accuracy", "MAE"]
-                ]
+                rankings_df[rankings_df["Ticker"] == ticker][available_ranking_cols]
                 .sort_values("Rank")
                 .to_dict(orient="records")
             )

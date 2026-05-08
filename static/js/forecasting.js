@@ -160,6 +160,13 @@ function pct(v, digits = 2) {
   return (v >= 0 ? '+' : '') + (v * 100).toFixed(digits) + '%';
 }
 
+function metricPct(v, digits = 2) {
+  if (v === null || v === undefined || Number.isNaN(Number(v))) return '—';
+  const n = Number(v);
+  const pctValue = Math.abs(n) > 1 ? n : n * 100;
+  return pctValue.toFixed(digits) + '%';
+}
+
 function confidenceClass(label) {
   if (!label) return '';
   const l = label.toLowerCase();
@@ -469,19 +476,19 @@ function renderPodiumLeaderboard(forecastTickers, chartDataMap) {
 
   const cards = ordered.map(ticker => {
     const d = forecastTickers[ticker];
-    const rankings = (d.rankings || []).slice(0, 3);
+    const rankings = (d.rankings || []);
     const chartItem = chartDataMap && chartDataMap[ticker];
     const lookback = chartItem && chartItem.lookback_21d;
 
     // Podium slots: reorder to [2nd, 1st, 3rd] for visual podium
-    const slots = PLATFORM_ORDER.map(i => rankings[i]).filter(Boolean);
+    const topRankings = rankings.slice(0, 3);
+    const slots = PLATFORM_ORDER.map(i => topRankings[i]).filter(Boolean);
 
     const slotsHTML = slots.map(r => {
-      const podiumIdx = PLATFORM_ORDER.findIndex(i => rankings[i] === r);
-      const rank0 = rankings.indexOf(r); // 0=gold,1=silver,2=bronze
+      const rank0 = topRankings.indexOf(r); // 0=gold,1=silver,2=bronze
       const mClass = MEDAL_CLASSES[rank0] || '';
       const dirAcc = r.Directional_Accuracy != null ? (r.Directional_Accuracy * 100).toFixed(0) + '%' : '—';
-      const rmse = r.RMSE != null ? (r.RMSE * 100).toFixed(2) + '%' : '—';
+      const rmse = metricPct(r.RMSE);
       const modelLabel = MODEL_LABELS[r.Model] || r.Model || '—';
       const modelColor = MODEL_COLORS[r.Model] || '#aaa';
 
@@ -509,6 +516,37 @@ function renderPodiumLeaderboard(forecastTickers, chartDataMap) {
           <div class="podium-model-name" style="color:${modelColor}">${modelLabel}</div>
           <div class="podium-model-stats">RMSE ${rmse} · Dir ${dirAcc}</div>
           <div class="podium-platform ${mClass}"></div>
+        </div>`;
+    }).join('');
+
+    const rankingRowsHTML = rankings.map((r, idx) => {
+      const rank = Number(r.Rank || idx + 1);
+      const modelLabel = MODEL_LABELS[r.Model] || r.Model || '—';
+      const modelColor = MODEL_COLORS[r.Model] || '#aaa';
+      const dirAcc = r.Directional_Accuracy != null ? (r.Directional_Accuracy * 100).toFixed(0) + '%' : '—';
+      const obs = r.N != null ? Number(r.N).toFixed(0) : '—';
+      const corr = r.Corr != null && !Number.isNaN(Number(r.Corr)) ? Number(r.Corr).toFixed(2) : '—';
+      let lookbackHTML = '<span class="lookback-verdict neutral">—</span>';
+      if (lookback && lookback.predictions) {
+        const pred = lookback.predictions[r.Model];
+        const actual = lookback.actual_pct;
+        if (pred !== undefined && actual !== undefined) {
+          const correct = (pred >= 0) === (actual >= 0);
+          lookbackHTML = `
+            <span class="${signClass(pred)}">${pct(pred)}</span>
+            <span class="lookback-verdict ${correct ? 'correct' : 'wrong'}">${correct ? '✓ Hit' : '✕ Miss'}</span>`;
+        }
+      }
+      return `
+        <div class="leaderboard-model-row${rank <= 3 ? ' is-top-three' : ''}">
+          <span class="leaderboard-rank">#${rank}</span>
+          <span class="leaderboard-model" style="color:${modelColor}">${modelLabel}</span>
+          <span class="leaderboard-stat"><span>MAE</span>${metricPct(r.MAE)}</span>
+          <span class="leaderboard-stat"><span>RMSE</span>${metricPct(r.RMSE)}</span>
+          <span class="leaderboard-stat"><span>Dir</span>${dirAcc}</span>
+          <span class="leaderboard-stat optional"><span>Corr</span>${corr}</span>
+          <span class="leaderboard-stat optional"><span>N</span>${obs}</span>
+          <span class="leaderboard-lookback">${lookbackHTML}</span>
         </div>`;
     }).join('');
 
@@ -556,6 +594,10 @@ function renderPodiumLeaderboard(forecastTickers, chartDataMap) {
           <div class="podium-consensus ${dirClass}">${pct(consensus, 2)}</div>
         </div>
         <div class="podium-stage">${slotsHTML}</div>
+        <div class="leaderboard-full-list">
+          <div class="podium-lookback-title">All Matured Models · 21-Trading-Day Performance</div>
+          ${rankingRowsHTML || '<div style="color:var(--text-muted);font-size:11px;padding:8px 0;">No ranked model history available.</div>'}
+        </div>
         ${lookbackSection}
       </div>`;
   }).join('');
