@@ -801,3 +801,84 @@ Interpretation:
 - Recommended next paper-trading default: top-2/bottom-2 for Quant Cup-style
   stability testing, while preserving top-1/bottom-1 as the highest-conviction
   shadow signal.
+
+## 2026-05-07 - Historical Blind Adaptive Loop Prototype
+
+Objective:
+
+- Move from static backtests toward a learning loop that experiences historical
+  trading days as they would have appeared at the time.
+- Prevent target leakage by training only on labels that would have matured
+  before each historical decision date.
+- Predict the historical decision date blind, then attach realized returns
+  afterward only for scoring.
+
+Implementation:
+
+- Added `dl_rank_head_historical_blind_loop.py`.
+- For each cycle:
+  - choose a historical decision date with known 21D outcome;
+  - set `TrainLabelThrough` to 21 trading sessions before that decision date;
+  - train rank-head artifacts only on rows with `Date <= TrainLabelThrough`;
+  - predict the decision date with target values replaced by dummy zeros in
+    the prediction panel so the model cannot see the future label;
+  - attach realized `Target_Forward_21D` after prediction for scoring.
+
+Smoke command:
+
+```powershell
+python dl_rank_head_historical_blind_loop.py --cycles 2 --step-days 21 --epochs 1 --seeds 20260505 --val-days 126 --top-n 1 --paper-long-n 1 --paper-short-n 1 --device cpu --output data\experiment\historical_blind_rank_head\smoke_shadow_log.parquet --csv-output data\experiment\historical_blind_rank_head\smoke_shadow_log.csv --summary-output data\experiment\historical_blind_rank_head\smoke_summary.json --output-stem smoke_blind_loop
+```
+
+Smoke result:
+
+```text
+Cycles: 2
+Rows: 14
+Mean long-short return: -0.127338
+Spread hit rate: 50.00%
+```
+
+The smoke test verified mechanics only; one epoch was intentionally too light
+to judge model quality.
+
+Prototype command:
+
+```powershell
+python dl_rank_head_historical_blind_loop.py --cycles 3 --step-days 21 --epochs 3 --seeds 20260505 --val-days 126 --top-n 1 --paper-long-n 2 --paper-short-n 2 --device cpu --date-grouped-batches --dates-per-batch 64 --output data\experiment\historical_blind_rank_head\rank_head_blind_loop_3c_3e_shadow_log.parquet --csv-output data\experiment\historical_blind_rank_head\rank_head_blind_loop_3c_3e_shadow_log.csv --summary-output data\experiment\historical_blind_rank_head\rank_head_blind_loop_3c_3e_summary.json --output-stem rank_head_blind_loop_3c_3e
+```
+
+Prototype result:
+
+```text
+Cycles: 3
+Rows: 21
+Decision dates: 2026-01-28, 2026-02-27, 2026-03-30
+Train-label cutoffs: 2025-12-26, 2026-01-28, 2026-02-27
+Paper basket: top-2 / bottom-2
+Mean long return: +0.031671
+Mean short return: +0.002810
+Mean long-short return: +0.028860
+Spread hit rate: 66.67%
+Long hit rate: 33.33%
+Short hit rate: 66.67%
+Max drawdown: -0.40%
+```
+
+Cycle high-conviction signals:
+
+```text
+2026-01-28: long TSLA, short MSFT, long-short +0.115602
+2026-02-27: long AMZN, short AAPL, long-short +0.023337
+2026-03-30: long AMZN, short TSLA, long-short +0.259669
+```
+
+Interpretation:
+
+- The prototype successfully creates a no-peeking historical learning loop.
+- The 3-cycle/3-epoch run is positive, but the sample is too small for
+  promotion decisions.
+- This is now the right direction for making the neural system adaptive:
+  expand cycle count, compare challengers to the current immutable champion,
+  and promote only when a blind loop beats the champion across several
+  historical regimes.
