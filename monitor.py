@@ -2780,6 +2780,6 @@ print(f" Total runtime: {time.time() - start_time:.1f}s")
 # Sync output to server and log predictions
 if not DEV_MODE:
     try:
-        subprocess.run([VENV_PYTHON, "post_run.py"], check=True, timeout=180)
-    except subprocess.CalledProcessError as e:
+        subprocess.run([VENV_PYTHON, "post_run.py"], check=True)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         print(f"[WARN] post_run.py failed: {e}")

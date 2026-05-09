@@ -810,6 +810,12 @@ def build_email():
 
 # --- Main send flow ---
 if __name__ == "__main__":
+    import argparse as _ap
+    _parser = _ap.ArgumentParser()
+    _parser.add_argument("--send-only", action="store_true",
+                         help="Skip monitor.py re-run and send with existing data (requires fresh commentary)")
+    _args, _ = _parser.parse_known_args()
+
     if already_sent_today():
         print(" Email already sent today. Skipping.")
         logging.info(" Email already sent today. Skipping.")
@@ -818,9 +824,13 @@ if __name__ == "__main__":
         logging.info(" Market closed today. No email sent.")
     else:
         try:
-            logging.info(" Running monitor.py to generate new report...")
-            subprocess.run([PY, 'monitor.py'], cwd=str(ROOT), env={**os.environ, 'PDF_MODE': 'true'}, check=True)
-            logging.info(" Report updated.")
+            if _args.send_only:
+                logging.info(" --send-only: skipping monitor.py, using existing commentary.")
+                print(" --send-only: skipping monitor.py re-run.")
+            else:
+                logging.info(" Running monitor.py to generate new report...")
+                subprocess.run([PY, 'monitor.py'], cwd=str(ROOT), env={**os.environ, 'PDF_MODE': 'true'}, check=True)
+                logging.info(" Report updated.")
 
             # Freshness gate — block send if narrative is stale or missing.
             _today = datetime.now(TZ).strftime('%Y-%m-%d')
