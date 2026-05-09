@@ -561,13 +561,6 @@ def build_commentary_email_blocks(commentary):
     _snap_core = {k: _snap_raw[k] for k in _snap_core_order if _snap_raw.get(k)}
     snapshot_html, snap_lines = _asset_table_html('Market Snapshot', _snap_core)
 
-    # Additional cross-asset tables (data already fetched; PDF renders these; now email does too)
-    _bonds_html,  _bonds_txt  = _asset_table_html('Treasury Curve',       c.get('bonds_table') or {})
-    _global_html, _global_txt = _asset_table_html('Global Equity Markets', c.get('global_markets') or {})
-    _cmdty_html,  _cmdty_txt  = _asset_table_html('Commodities',           c.get('commodities_table') or {})
-    _fx_html,     _fx_txt     = _asset_table_html('Currencies & Crypto',   c.get('currencies_table') or {})
-    cross_asset_html = _bonds_html + _global_html + _cmdty_html + _fx_html
-    cross_asset_txt  = _bonds_txt  + _global_txt  + _cmdty_txt  + _fx_txt
 
     # ── Pre-Market Look block ────────────────────────────────────────────────
     premarket_html, premarket_txt = _build_premarket_block(c)
@@ -709,13 +702,12 @@ def build_commentary_email_blocks(commentary):
 
     if snapshot_html:
         hp.append(snapshot_html)
-
-    if cross_asset_html:
-        hp.append(cross_asset_html)
-
-    if intl_html:
-        hp.append(_section_header('Global Context'))
-        hp.append(intl_html)
+        hp.append(
+            f'<p style="margin:10px 0 0 0;font-size:12px;color:#6b7280;">'
+            f'Full cross-asset data (Treasury curve, global equity, commodities, currencies &amp; crypto) '
+            f'&#8212; <a href="{GITHUB_LINK}" style="color:#1d4ed8;font-weight:600;">'
+            f'view today&#39;s report &rarr;</a></p>'
+        )
 
     if spotlight_html:
         hp.append(_section_header('Portfolio Spotlight'))
@@ -743,10 +735,7 @@ def build_commentary_email_blocks(commentary):
         tp += scenarios_txt
     if snap_lines:
         tp += ['MARKET SNAPSHOT', ''] + snap_lines + ['']
-    if cross_asset_txt:
-        tp += ['CROSS-ASSET DATA', ''] + cross_asset_txt + ['']
-    if intl:
-        tp += ['GLOBAL CONTEXT', '', intl, '']
+    tp += [f'Full cross-asset data (Treasury curve, global equity, commodities, currencies & crypto): {GITHUB_LINK}', '']
     if spotlight_text:
         tp += ['PORTFOLIO SPOTLIGHT', ''] + spotlight_text + ['']
     tp += ['Full data and disclosures: see report site.', '']
