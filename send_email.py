@@ -300,42 +300,57 @@ def _build_premarket_block(c: dict) -> tuple[str, list]:
         fed_parts.append(f'<span style="display:block;margin:2px 0;">{line}</span>')
         fed_txt.append(f'{sp.get("speaker","")} {time_et}: {sp.get("topic","")}')
 
-    # ── Today's Key Economic Events ─────────────────────────────────────────
-    econ_today = []
+    # ── This Week's Key Economic Events (next 5 trading days) ───────────────
+    _week_days = _next_n_trading_days(date.today(), 5)
+    _week_iso  = {d.isoformat(): d for d in _week_days}
+
+    econ_by_day: dict[str, list] = {}
     try:
         _cal_path = ROOT / 'data' / 'economic_calendar.json'
         if _cal_path.exists():
             with open(_cal_path, 'r', encoding='utf-8') as _cf:
                 _cal = json.load(_cf)
             for ev in (_cal.get('events') or []):
-                if str(ev.get('date', ''))[:10] == today_iso and ev.get('importance') in ('high', 'medium'):
-                    econ_today.append(ev)
+                d_iso = str(ev.get('date', ''))[:10]
+                if d_iso in _week_iso and ev.get('importance') in ('high', 'medium'):
+                    econ_by_day.setdefault(d_iso, []).append(ev)
     except Exception:
         pass
 
     econ_parts = []
     econ_txt   = []
-    for ev in econ_today[:5]:
-        evname = html_lib.escape(str(ev.get('event', '')))
-        cons   = ev.get('consensus')
-        prev   = ev.get('previous')
-        imp    = str(ev.get('importance', '')).lower()
-        imp_color = '#dc2626' if imp == 'high' else '#ea580c'
-        suffix = ''
-        suf_txt = ''
-        if cons is not None:
-            suffix   += f' &nbsp;<span style="color:#374151;">Cons: <b>{html_lib.escape(str(cons))}</b></span>'
-            suf_txt  += f'  Cons: {cons}'
-        if prev is not None:
-            suffix  += f' &nbsp;<span style="color:#6b7280;">Prev: {html_lib.escape(str(prev))}</span>'
-            suf_txt += f'  Prev: {prev}'
-        econ_parts.append(
-            f'<span style="display:block;margin:2px 0;">'
-            f'<span style="color:{imp_color};font-size:10px;font-weight:700;text-transform:uppercase;'
-            f'margin-right:5px;">{html_lib.escape(imp)}</span>'
-            f'{evname}{suffix}</span>'
-        )
-        econ_txt.append(f'[{imp.upper()}] {ev.get("event","")} {suf_txt}')
+    _total_shown = 0
+    for d_iso in sorted(econ_by_day.keys()):
+        if _total_shown >= 6:
+            break
+        day_obj  = _week_iso[d_iso]
+        day_label = 'Today' if d_iso == today_iso else day_obj.strftime('%a')
+        label_style = 'font-weight:700;color:#1e3a8a;' if d_iso == today_iso else 'font-weight:600;color:#374151;'
+        for ev in econ_by_day[d_iso][:2]:
+            if _total_shown >= 6:
+                break
+            evname    = html_lib.escape(str(ev.get('event', '')))
+            cons      = ev.get('consensus')
+            prev      = ev.get('previous')
+            imp       = str(ev.get('importance', '')).lower()
+            imp_color = '#dc2626' if imp == 'high' else '#ea580c'
+            suffix    = ''
+            suf_txt   = ''
+            if cons is not None:
+                suffix  += f' &nbsp;<span style="color:#374151;">Cons: <b>{html_lib.escape(str(cons))}</b></span>'
+                suf_txt += f'  Cons: {cons}'
+            if prev is not None:
+                suffix  += f' &nbsp;<span style="color:#6b7280;">Prev: {html_lib.escape(str(prev))}</span>'
+                suf_txt += f'  Prev: {prev}'
+            econ_parts.append(
+                f'<span style="display:block;margin:2px 0;">'
+                f'<span style="{label_style}font-size:11px;margin-right:5px;">{day_label}</span>'
+                f'<span style="color:{imp_color};font-size:10px;font-weight:700;text-transform:uppercase;'
+                f'margin-right:5px;">{html_lib.escape(imp)}</span>'
+                f'{evname}{suffix}</span>'
+            )
+            econ_txt.append(f'{day_label} [{imp.upper()}] {ev.get("event","")} {suf_txt}')
+            _total_shown += 1
 
     # ── Bail if nothing to show ──────────────────────────────────────────────
     has_content = fut_rows or earn_parts or fed_parts or econ_parts
@@ -373,7 +388,7 @@ def _build_premarket_block(c: dict) -> tuple[str, list]:
     if econ_parts:
         right_col += (
             f'<p style="margin:0 0 3px 0;font-size:10px;font-weight:700;text-transform:uppercase;'
-            f'color:#6b7280;letter-spacing:0.06em;">Key Data Today</p>'
+            f'color:#6b7280;letter-spacing:0.06em;">Key Data This Week</p>'
             f'<p style="margin:0;font-size:12px;line-height:1.7;">{"".join(econ_parts)}</p>'
         )
 
@@ -403,7 +418,7 @@ def _build_premarket_block(c: dict) -> tuple[str, list]:
     elif not fed_txt:
         txt_lines += ['Fed Speak: No scheduled Fed speakers today.', '']
     if econ_txt:
-        txt_lines += ['Key Data Today:'] + [f'  {t}' for t in econ_txt] + ['']
+        txt_lines += ['Key Data This Week:'] + [f'  {t}' for t in econ_txt] + ['']
 
     return html_out, txt_lines
 
@@ -535,6 +550,18 @@ def _last_trading_day(d: date) -> date:
     while walk.weekday() >= 5 or walk in us_holidays_set:
         walk -= timedelta(days=1)
     return walk
+
+
+def _next_n_trading_days(start: date, n: int) -> list[date]:
+    """Return the next n trading days starting from (and including) start."""
+    us_h = holidays.US() if holidays is not None else set()
+    days: list[date] = []
+    walk = start
+    while len(days) < n:
+        if walk.weekday() < 5 and walk not in us_h:
+            days.append(walk)
+        walk += timedelta(days=1)
+    return days
 
 
 def build_commentary_email_blocks(commentary):

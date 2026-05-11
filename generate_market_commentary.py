@@ -1157,7 +1157,7 @@ def load_recent_earnings_actuals() -> list[dict]:
             "eps_estimate":     rec.get("eps_estimate"),
             "eps_surprise_pct": rec.get("eps_surprise_pct"),
         })
-    out.sort(key=lambda r: r.get("earnings_date") or "", reverse=True)
+    out.sort(key=lambda r: abs(r.get("eps_surprise_pct") or 0), reverse=True)
     return out
 
 
@@ -1203,7 +1203,7 @@ NUMBER FIDELITY (non-negotiable):
 pre_market_bullets: Array of 5 strings:
   [0] "Markets closed [higher/lower]  S&P 500 [pct]%, Nasdaq 100 [pct]%; [specific catalyst from news]."
   [1] International/macro driver  cite a specific event from the payload.
-  [2] Economic calendar: if there are events today in upcoming_economic_events, cite the most important one (name the event and its importance). If there are no events today, OMIT this bullet entirely and produce only 4 items total.
+  [2] Economic calendar: cite the single most important event from upcoming_economic_events across the next 5 trading days (name the event, its importance, and its date as "today", "Tuesday", etc.). If upcoming_economic_events is empty, OMIT this bullet entirely and produce only 4 items total.
   [3] Fed/rates: cite 10-yr yield level and direction with a specific driver.
   [4] Top commodity or currency move with level and driver.
 
@@ -1213,7 +1213,7 @@ FLAT-DAY CALIBRATION: when |pct_change| < 0.10 for an index, write "essentially 
   GOOD: "S&P 500 closed essentially flat at 7,365.12 (+0.04%)"
   GOOD: "Markets closed mixed — S&P 500 essentially flat (+0.04%), Nasdaq 100 -0.12%; [catalyst]"
 
-equities_commentary: 5-8 sentences. Lead with S&P 500 direction and level. Sector leadership. Connect to macro driver from news. Global market context. Risk ahead.
+equities_commentary: 5-8 sentences. Lead with S&P 500 direction and level. Sector leadership. If recent_earnings_actuals is non-empty, name 1-2 specific tickers from it with their EPS surprise % (e.g., "AMD's 12% EPS beat lifted semis") — use only eps_surprise_pct values from the payload. Connect to macro driver from news. Global market context. Risk ahead.
 
 fixed_income_commentary: 5-6 sentences. Lead with 10-yr yield direction and exact level. Connect to inflation/growth data. For the 2s10s spread: read bonds["10s-2s Spread"]["change"] from the payload — if that value is negative the spread NARROWED (flattened), if positive it WIDENED (steepened); state the direction and magnitude in basis points. Implication for equity multiples.
 
@@ -2227,6 +2227,74 @@ def validate_commentary(data: dict, known_tickers: set = None, snapshot: dict = 
 
 
 # ---------------------------------------------------------------------------
+# Historical return enrichment
+# ---------------------------------------------------------------------------
+_YIELD_NAMES: frozenset[str] = frozenset({
+    "10-Yr Yield", "10-Year Yield", "30-Year Yield", "2-Year Yield",
+})
+
+
+def enrich_with_historical_returns(
+    snapshots: list[tuple[dict, dict[str, str]]],
+) -> None:
+    """Add pct_change_1w / pct_change_ytd (bp_change_* for yields) to snapshot dicts in-place.
+
+    snapshots: list of (data_dict, {display_name: yf_ticker})
+    """
+    if yf is None:
+        return
+    reverse: dict[str, tuple[dict, str]] = {}
+    for data_dict, ticker_map in snapshots:
+        for name, ticker in ticker_map.items():
+            if name in data_dict and ticker not in reverse:
+                reverse[ticker] = (data_dict, name)
+    if not reverse:
+        return
+    try:
+        today = datetime.today()
+        ytd_start = pd.Timestamp(today.year, 1, 1)
+        dl_start  = ytd_start.strftime("%Y-%m-%d")
+        dl_end    = today.strftime("%Y-%m-%d")
+        raw = yf.download(
+            list(reverse.keys()), start=dl_start, end=dl_end,
+            progress=False, auto_adjust=True,
+        )
+        if raw.empty:
+            return
+        if isinstance(raw.columns, pd.MultiIndex):
+            closes = raw["Close"]
+        else:
+            t = list(reverse.keys())[0]
+            closes = pd.DataFrame({t: raw["Close"]})
+        closes.index = pd.to_datetime(closes.index).tz_localize(None)
+    except Exception as exc:
+        print(f"[WARN] enrich_with_historical_returns: {exc}")
+        return
+
+    for ticker, (data_dict, name) in reverse.items():
+        if ticker not in closes.columns:
+            continue
+        s = pd.to_numeric(closes[ticker], errors="coerce").dropna()
+        if len(s) < 2:
+            continue
+        is_yield = name in _YIELD_NAMES
+        last = float(s.iloc[-1])
+        if len(s) > 5:
+            base_1w = float(s.iloc[-6])
+            if is_yield:
+                data_dict[name]["bp_change_1w"] = round((last - base_1w) * 100, 1)
+            elif base_1w != 0:
+                data_dict[name]["pct_change_1w"] = round((last / base_1w - 1) * 100, 2)
+        s_ytd = s[s.index >= ytd_start]
+        if len(s_ytd) >= 1:
+            base_ytd = float(s_ytd.iloc[0])
+            if is_yield:
+                data_dict[name]["bp_change_ytd"] = round((last - base_ytd) * 100, 1)
+            elif base_ytd != 0:
+                data_dict[name]["pct_change_ytd"] = round((last / base_ytd - 1) * 100, 2)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main() -> int:
@@ -2268,6 +2336,25 @@ def main() -> int:
             "pct_change": _tsy_10y.get("pct_change"),
         }
         print(f"  [OK] Snapshot 10-Yr synced to Treasury.gov: {_tsy_10y['level']:.3f}%")
+
+    print("[DATA] Enriching with 1W/YTD historical returns...")
+    try:
+        _bond_yf_map = {"10-Year Yield": "^TNX", "30-Year Yield": "^TYX"}
+        enrich_with_historical_returns([
+            (snapshot,        MARKET_TICKERS),
+            (global_markets,  GLOBAL_TICKERS),
+            (commodities_tbl, COMMODITY_TICKERS),
+            (currencies_tbl,  CURRENCY_TICKERS),
+            (bonds_tbl,       _bond_yf_map),
+        ])
+        # Sync 10-Yr Yield bp changes from bonds_tbl to snapshot (keys differ: "10-Year" vs "10-Yr")
+        for _bk in ("bp_change_1w", "bp_change_ytd"):
+            if _bk in bonds_tbl.get("10-Year Yield", {}):
+                snapshot.setdefault("10-Yr Yield", {})
+                snapshot["10-Yr Yield"][_bk] = bonds_tbl["10-Year Yield"][_bk]
+        print("  [OK] Historical enrichment complete")
+    except Exception as _enrich_exc:
+        print(f"  [WARN] Historical enrichment skipped: {_enrich_exc}")
 
     tech_levels      = fetch_technical_levels()
     print(f"  [OK] Technical levels: {len(tech_levels)} assets")
