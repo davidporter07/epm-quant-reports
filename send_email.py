@@ -211,11 +211,35 @@ def _asset_table_html(title: str, data_dict: dict) -> tuple[str, list]:
                 pct_str = f'{float(pct):+.2f}%'
             except Exception:
                 pct_str = ''
+        _sub: list[str] = []
+        try:
+            if is_spread or is_yield:
+                _bpw = d.get("bp_change_1w"); _bpy = d.get("bp_change_ytd")
+                if _bpw is not None:
+                    _sgn = "+" if float(_bpw) >= 0 else ""
+                    _sub.append(f"1W: {_sgn}{float(_bpw):.0f}bp")
+                if _bpy is not None:
+                    _sgn = "+" if float(_bpy) >= 0 else ""
+                    _sub.append(f"YTD: {_sgn}{float(_bpy):.0f}bp")
+            else:
+                _pw = d.get("pct_change_1w"); _py = d.get("pct_change_ytd")
+                if _pw is not None:
+                    _sgn = "+" if float(_pw) >= 0 else ""
+                    _sub.append(f"1W: {_sgn}{float(_pw):.1f}%")
+                if _py is not None:
+                    _sgn = "+" if float(_py) >= 0 else ""
+                    _sub.append(f"YTD: {_sgn}{float(_py):.1f}%")
+        except Exception:
+            pass
+        sub_email = (
+            '<div style="font-size:10px;font-weight:400;color:#6b7280;margin-top:1px;">'
+            + "&nbsp;&bull;&nbsp;".join(_sub) + "</div>"
+        ) if _sub else ""
         rows_html += (
             f'<tr>'
             f'<td style="padding:5px 12px 5px 0;color:#374151;font-size:13px;">{html_lib.escape(label)}</td>'
             f'<td style="padding:5px 12px 5px 0;color:#111827;font-size:13px;font-weight:600;">{html_lib.escape(level_fmt)}</td>'
-            f'<td style="padding:5px 0;color:{color};font-size:13px;font-weight:600;">{arrow} {html_lib.escape(pct_str)}</td>'
+            f'<td style="padding:5px 0;color:{color};font-size:13px;font-weight:600;">{arrow} {html_lib.escape(pct_str)}{sub_email}</td>'
             f'</tr>'
         )
         text_lines.append(f'{label}: {level_fmt}  {arrow} {pct_str}')

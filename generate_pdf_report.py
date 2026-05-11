@@ -894,12 +894,37 @@ def build_snapshot_table(snapshot: dict, title: str = "U.S. Markets", show_dolla
             chg_str = pct_str = "\u2014"
             cls = "flat"
 
+        _sub: list[str] = []
+        try:
+            if is_yield:
+                _bpw = data.get("bp_change_1w"); _bpy = data.get("bp_change_ytd")
+                if _bpw is not None:
+                    _sgn = "+" if float(_bpw) >= 0 else ""
+                    _sub.append(f"1W: {_sgn}{float(_bpw):.0f}bp")
+                if _bpy is not None:
+                    _sgn = "+" if float(_bpy) >= 0 else ""
+                    _sub.append(f"YTD: {_sgn}{float(_bpy):.0f}bp")
+            else:
+                _pw = data.get("pct_change_1w"); _py = data.get("pct_change_ytd")
+                if _pw is not None:
+                    _sgn = "+" if float(_pw) >= 0 else ""
+                    _sub.append(f"1W: {_sgn}{float(_pw):.1f}%")
+                if _py is not None:
+                    _sgn = "+" if float(_py) >= 0 else ""
+                    _sub.append(f"YTD: {_sgn}{float(_py):.1f}%")
+        except Exception:
+            pass
+        sub_html = (
+            '<div style="font-size:9px;color:#94a3b8;margin-top:1px;">'
+            + "&nbsp;|&nbsp;".join(_sub) + "</div>"
+        ) if _sub else ""
+
         rows += f"""
     <tr>
       <td class="market-name">{esc(name)}</td>
       <td class="r">{esc(lvs)}</td>
       <td class="r {cls}">{esc(chg_str)}</td>
-      <td class="r {cls}">{esc(pct_str)}</td>
+      <td class="r {cls}">{esc(pct_str)}{sub_html}</td>
     </tr>"""
 
     return f"""
@@ -1007,12 +1032,29 @@ def build_bonds_table_html(bonds: dict) -> str:
             except Exception:
                 pass
 
+        _sub: list[str] = []
+        if not is_spread:
+            try:
+                _bpw = data.get("bp_change_1w"); _bpy = data.get("bp_change_ytd")
+                if _bpw is not None:
+                    _sgn = "+" if float(_bpw) >= 0 else ""
+                    _sub.append(f"1W: {_sgn}{float(_bpw):.0f}bp")
+                if _bpy is not None:
+                    _sgn = "+" if float(_bpy) >= 0 else ""
+                    _sub.append(f"YTD: {_sgn}{float(_bpy):.0f}bp")
+            except Exception:
+                pass
+        sub_html = (
+            '<div style="font-size:9px;color:#94a3b8;margin-top:1px;">'
+            + "&nbsp;|&nbsp;".join(_sub) + "</div>"
+        ) if _sub else ""
+
         rows += f"""
     <tr>
       <td class="l">{esc(name)}</td>
       <td class="r">{esc(lvs)}</td>
       <td class="r {cls}">{esc(chg_str)}</td>
-      <td class="r {cls}">{esc(pct_str)}</td>
+      <td class="r {cls}">{esc(pct_str)}{sub_html}</td>
     </tr>"""
 
     return f"""
@@ -1104,12 +1146,28 @@ def build_simple_data_table(data: dict, title: str, is_currency: bool = False) -
             chg_str = pct_str = "\u2014"
             cls = "flat"
 
+        _sub: list[str] = []
+        try:
+            _pw = d.get("pct_change_1w"); _py = d.get("pct_change_ytd")
+            if _pw is not None:
+                _sgn = "+" if float(_pw) >= 0 else ""
+                _sub.append(f"1W: {_sgn}{float(_pw):.1f}%")
+            if _py is not None:
+                _sgn = "+" if float(_py) >= 0 else ""
+                _sub.append(f"YTD: {_sgn}{float(_py):.1f}%")
+        except Exception:
+            pass
+        sub_html = (
+            '<div style="font-size:9px;color:#94a3b8;margin-top:1px;">'
+            + "&nbsp;|&nbsp;".join(_sub) + "</div>"
+        ) if _sub else ""
+
         rows += f"""
     <tr>
       <td class="l">{esc(name)}</td>
       <td class="r">{esc(lvs)}</td>
       <td class="r {cls}">{esc(chg_str)}</td>
-      <td class="r {cls}">{esc(pct_str)}</td>
+      <td class="r {cls}">{esc(pct_str)}{sub_html}</td>
     </tr>"""
 
     return f"""
