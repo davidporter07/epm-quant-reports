@@ -6,7 +6,7 @@ import ssl
 import subprocess
 import logging
 import html as html_lib
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -269,13 +269,16 @@ def _build_premarket_block(c: dict) -> tuple[str, list]:
     ]
     earn_parts = []
     earn_txt   = []
-    for e in earnings_today[:8]:
+    _earn_with_est = [e for e in earnings_today[:8] if e.get('eps_estimate') is not None]
+    for idx, e in enumerate(_earn_with_est):
         sym  = html_lib.escape(str(e.get('symbol', '')))
         hour = str(e.get('hour') or '').upper() or '?'
         est  = e.get('eps_estimate')
-        est_str = f'${est:.2f}E' if est is not None else 'E/N/A'
+        est_str = f'${est:.2f}E'
+        is_last = idx == len(_earn_with_est) - 1
+        sep = '' if is_last else 'padding-right:14px;border-right:1px solid #e5e7eb;'
         earn_parts.append(
-            f'<span style="margin-right:12px;white-space:nowrap;">'
+            f'<span style="display:inline-block;margin:0 14px 4px 0;{sep}white-space:nowrap;">'
             f'<b>{sym}</b> <span style="color:#6b7280;font-size:11px;">{hour}</span>'
             f' <span style="color:#374151;">{html_lib.escape(est_str)}</span></span>'
         )
@@ -526,9 +529,17 @@ def _build_scenarios_block(c: dict) -> tuple[str, list]:
     return html_out, all_txt
 
 
+def _last_trading_day(d: date) -> date:
+    us_holidays_set = holidays.US() if holidays is not None else set()
+    walk = d - timedelta(days=1)
+    while walk.weekday() >= 5 or walk in us_holidays_set:
+        walk -= timedelta(days=1)
+    return walk
+
+
 def build_commentary_email_blocks(commentary):
     c = commentary or {}
-    prev_day = (date.today() - __import__('datetime').timedelta(days=1)).strftime('%A, %B %d')
+    prev_day = _last_trading_day(date.today()).strftime('%A, %B %d')
     today_str = date.today().strftime('%A, %B %d')
 
     # ── Fear & Greed badge ──────────────────────────────────────────────────
@@ -578,47 +589,22 @@ def build_commentary_email_blocks(commentary):
     watch_html   = _bullet_list(watch_items, '#111827')
     watch_text   = [f'  • {_clean(str(i))}' for i in watch_items if _clean(str(i))]
 
-    # ── Market Analysis (deep-dive sections) ────────────────────────────────
-    _pm_raw = c.get('pre_market_summary') or c.get('pre_market_bullets', '')
-    pre_market   = _clean(' '.join(_pm_raw) if isinstance(_pm_raw, list) else _pm_raw)
-    equities     = _clean(c.get('equities_commentary', ''))
-    fixed_income = _clean(c.get('fixed_income_commentary', ''))
-    commodities  = _clean(c.get('commodities_commentary', ''))
-    currencies   = _clean(c.get('currencies_commentary', ''))
-    economics    = _clean(c.get('economics_commentary', ''))
-    synthesis    = _clean(c.get('cross_asset_synthesis', ''))
-
-    analysis_html = ''
-    analysis_text = []
-    for label, text in [
-        ('Overview', pre_market),
-        ('Equities', equities),
-        ('Fixed Income', fixed_income),
-        ('Commodities', commodities),
-        ('Currencies', currencies),
-        ('Economics', economics),
-    ]:
-        if not text:
-            continue
-        analysis_html += (
-            f'<p style="margin:10px 0 0 0;font-size:13px;line-height:1.6;">'
-            f'<span style="font-weight:700;color:#1e2a44;">{label}:</span> '
-            f'{html_lib.escape(text)}</p>'
-        )
-        analysis_text.append(f'{label}: {text}')
+    # ── Today's Take (synthesis only — full narrative prose lives in the PDF) ─
+    synthesis = _clean(c.get('cross_asset_synthesis', ''))
 
     synthesis_html = ''
+    synthesis_text = []
     if synthesis:
         synthesis_html = (
-            f'<div style="margin:14px 0 0 0;padding:10px 14px;'
+            f'<div style="margin:14px 0 0 0;padding:12px 14px;'
             f'border-left:3px solid #2c4a6e;background:#f8f9fb;border-radius:2px;">'
             f'<p style="margin:0 0 4px 0;font-size:11px;font-weight:700;color:#2c4a6e;'
-            f'text-transform:uppercase;letter-spacing:0.06em;">Market Take</p>'
-            f'<p style="margin:0;font-size:13px;line-height:1.65;color:#1a1f27;">'
+            f'text-transform:uppercase;letter-spacing:0.06em;">Today\'s Take</p>'
+            f'<p style="margin:0;font-size:14px;line-height:1.65;color:#1a1f27;">'
             f'{html_lib.escape(synthesis)}</p>'
             f'</div>'
         )
-        analysis_text.append(f'Market Take: {synthesis}')
+        synthesis_text = ["TODAY'S TAKE", '', synthesis, '']
 
     # ── International Context ───────────────────────────────────────────────
     intl = _clean(c.get('international_section', ''))
@@ -690,10 +676,6 @@ def build_commentary_email_blocks(commentary):
         hp.append(_section_header(f'What to Watch — {today_str}'))
         hp.append(watch_html)
 
-    if analysis_html:
-        hp.append(_section_header('Market Analysis'))
-        hp.append(analysis_html)
-
     if synthesis_html:
         hp.append(synthesis_html)
 
@@ -729,8 +711,8 @@ def build_commentary_email_blocks(commentary):
         tp += [f'WHAT HAPPENED {prev_day.upper()}', ''] + recap_text + ['']
     if watch_text:
         tp += [f'WHAT TO WATCH — {today_str.upper()}', ''] + watch_text + ['']
-    if analysis_text:
-        tp += ['MARKET ANALYSIS', ''] + analysis_text + ['']
+    if synthesis_text:
+        tp += synthesis_text
     if scenarios_txt:
         tp += scenarios_txt
     if snap_lines:

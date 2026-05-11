@@ -1173,6 +1173,7 @@ Do NOT describe a yield or price as "unchanged" if a non-zero pct_change is prov
 Do not invent figures or events not in the payload.
 Do NOT attribute geopolitical actions, policy proposals, or peace initiatives to specific companies or financial institutions — if a headline mentions a bank alongside a geopolitical event, the bank is a commentator or stakeholder, not the actor proposing the policy.
 Do NOT escalate the severity of geopolitical events beyond the exact language in the payload — if headlines say "tensions" or "conflict", do not write "war"; if they say "negotiations", do not write "deal reached".
+NARRATIVE COHERENCE: All sections must describe the same geopolitical reality. If one section cites escalating risk ("expanded strikes", "rising tensions"), no other section may simultaneously frame the same situation as de-escalating ("easing tensions", "peace deal hopes", "ceasefire optimism"). Pick the dominant tone from the headlines payload and apply it consistently across every section.
 ONE-SHOT CALIBRATION — geopolitical tone (follow this pattern exactly):
   Headline in payload: "U.S. and Israel expand strikes near Iranian facilities; diplomatic talks stall"
   BAD: "Mounting costs of the Iran war strain U.S. finances as the conflict widens."
@@ -1289,6 +1290,7 @@ Rules:
 - Name the single most important upcoming catalyst (from upcoming_economic_events or earnings_upcoming) and state exactly what outcome you are watching for (beat vs miss, hawkish vs dovish).
 - The tone MUST be consistent with market_outlook_label: if Cautious, explain the specific mechanism of risk without adding false balance; if Bullish, name the specific driver without inventing caveats.
 - 3-4 sentences total. No preamble. No conclusion phrase. Start directly with the cross-asset theme.
+- DATE CONSISTENCY: When a referenced economic event appears in the upcoming_economic_events payload for today's date, refer to it as "today" or "this morning" — never as a named weekday ("on Friday", "on Tuesday"). Do not assign a future weekday to an event that is already in today's calendar.
 
 ONE-SHOT EXAMPLE:
   market_outlook_label: "Cautious"
