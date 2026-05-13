@@ -397,7 +397,7 @@ def _build_premarket_block(c: dict) -> tuple[str, list]:
         right_col += (
             f'<p style="margin:0 0 3px 0;font-size:10px;font-weight:700;text-transform:uppercase;'
             f'color:#6b7280;letter-spacing:0.06em;">Today\'s Earnings</p>'
-            f'<p style="margin:0 0 8px 0;font-size:12px;line-height:1.6;">{"".join(earn_parts)}</p>'
+            f'<p style="margin:0 0 8px 0;font-size:12px;line-height:1.6;">{" &nbsp;&middot;&nbsp; ".join(earn_parts)}</p>'
         )
     if fed_parts:
         right_col += (
@@ -619,7 +619,7 @@ def build_commentary_email_blocks(commentary):
 
     # ── Market snapshot tables ──────────────────────────────────────────────
     _snap_raw = c.get('market_snapshot') or {}
-    _snap_core_order = ['S&P 500', 'Nasdaq 100', '10-Yr Yield', 'Gold', 'WTI Crude', 'U.S. Dollar (DXY)']
+    _snap_core_order = ['S&P 500', '10-Yr Yield', 'Gold']
     _snap_core = {k: _snap_raw[k] for k in _snap_core_order if _snap_raw.get(k)}
     snapshot_html, snap_lines = _asset_table_html('Market Snapshot', _snap_core)
 
@@ -742,9 +742,6 @@ def build_commentary_email_blocks(commentary):
             f'view today&#39;s report &rarr;</a></p>'
         )
 
-    if spotlight_html:
-        hp.append(_section_header('Portfolio Spotlight'))
-        hp.append(spotlight_html)
 
     hp.append(
         '<p style="margin:16px 0 0 0;color:#9ca3af;font-size:11px;border-top:1px solid #e5e7eb;padding-top:10px;">'
@@ -769,8 +766,6 @@ def build_commentary_email_blocks(commentary):
     if snap_lines:
         tp += ['MARKET SNAPSHOT', ''] + snap_lines + ['']
     tp += [f'Full cross-asset data (Treasury curve, global equity, commodities, currencies & crypto): {GITHUB_LINK}', '']
-    if spotlight_text:
-        tp += ['PORTFOLIO SPOTLIGHT', ''] + spotlight_text + ['']
     tp += ['Full data and disclosures: see report site.', '']
 
     return ''.join(hp), '\n'.join(tp) + '\n\n'

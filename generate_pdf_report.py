@@ -916,7 +916,7 @@ def build_snapshot_table(snapshot: dict, title: str = "U.S. Markets", show_dolla
             pass
         sub_html = (
             '<div style="font-size:9px;color:#94a3b8;margin-top:1px;">'
-            + "&nbsp;|&nbsp;".join(_sub) + "</div>"
+            + "<br>".join(_sub) + "</div>"
         ) if _sub else ""
 
         rows += f"""
@@ -1033,20 +1033,19 @@ def build_bonds_table_html(bonds: dict) -> str:
                 pass
 
         _sub: list[str] = []
-        if not is_spread:
-            try:
-                _bpw = data.get("bp_change_1w"); _bpy = data.get("bp_change_ytd")
-                if _bpw is not None:
-                    _sgn = "+" if float(_bpw) >= 0 else ""
-                    _sub.append(f"1W: {_sgn}{float(_bpw):.0f}bp")
-                if _bpy is not None:
-                    _sgn = "+" if float(_bpy) >= 0 else ""
-                    _sub.append(f"YTD: {_sgn}{float(_bpy):.0f}bp")
-            except Exception:
-                pass
+        try:
+            _bpw = data.get("bp_change_1w"); _bpy = data.get("bp_change_ytd")
+            if _bpw is not None:
+                _sgn = "+" if float(_bpw) >= 0 else ""
+                _sub.append(f"1W: {_sgn}{float(_bpw):.0f}bp")
+            if _bpy is not None:
+                _sgn = "+" if float(_bpy) >= 0 else ""
+                _sub.append(f"YTD: {_sgn}{float(_bpy):.0f}bp")
+        except Exception:
+            pass
         sub_html = (
             '<div style="font-size:9px;color:#94a3b8;margin-top:1px;">'
-            + "&nbsp;|&nbsp;".join(_sub) + "</div>"
+            + "<br>".join(_sub) + "</div>"
         ) if _sub else ""
 
         rows += f"""
@@ -1159,7 +1158,7 @@ def build_simple_data_table(data: dict, title: str, is_currency: bool = False) -
             pass
         sub_html = (
             '<div style="font-size:9px;color:#94a3b8;margin-top:1px;">'
-            + "&nbsp;|&nbsp;".join(_sub) + "</div>"
+            + "<br>".join(_sub) + "</div>"
         ) if _sub else ""
 
         rows += f"""
@@ -1644,92 +1643,6 @@ def build_spotlight_html(commentary: dict) -> str:
 </div>"""
 
 
-def build_scenarios_html(commentary: dict) -> str:
-    scenarios     = commentary.get("scenarios") or []
-    levels        = commentary.get("levels_to_watch") or []
-    event         = str(commentary.get("scenario_event") or "").strip()
-    consensus     = str(commentary.get("scenario_consensus") or "").strip()
-
-    if not scenarios:
-        return ""
-
-    _COLORS = {
-        "hot":     ("#fef2f2", "#dc2626", "#991b1b"),
-        "in-line": ("#eff6ff", "#2563eb", "#1e40af"),
-        "in line": ("#eff6ff", "#2563eb", "#1e40af"),
-        "cold":    ("#f0fdf4", "#16a34a", "#166534"),
-    }
-
-    header = ""
-    if event:
-        cons_str = f" — Consensus: {esc(consensus)}" if consensus else ""
-        header = f'<div class="outlook-header" style="margin-bottom:6px;">Scenario Framework: {esc(event)}{cons_str}</div>'
-
-    scenario_blocks = ""
-    for sc in scenarios[:3]:
-        label      = str(sc.get("label") or "").strip()
-        thesis     = str(sc.get("thesis") or "").strip()
-        rates      = str(sc.get("rates") or "—").strip()
-        equities   = str(sc.get("equities") or "—").strip()
-        commodities = str(sc.get("commodities") or "—").strip()
-        tickers    = sc.get("tickers") or []
-
-        key = label.lower().replace("in-line", "in line")
-        bg, border, txt = _COLORS.get(key, ("#f9fafb", "#6b7280", "#374151"))
-
-        chips = "".join(
-            f'<span style="display:inline-block;background:{border};color:#fff;'
-            f'border-radius:3px;padding:1px 6px;font-size:7.5pt;margin:1px 2px;">{esc(t)}</span>'
-            for t in tickers
-        )
-
-        scenario_blocks += f"""
-<div style="border:1px solid {border};border-radius:5px;background:{bg};
-            padding:7px 10px;margin-bottom:6px;page-break-inside:avoid;">
-  <div style="font-weight:700;font-size:9.5pt;color:{txt};margin-bottom:3px;">{esc(label)}</div>
-  <div style="font-size:8pt;color:#374151;margin-bottom:4px;">{esc(thesis)}</div>
-  <table style="width:100%;border-collapse:collapse;font-size:7.5pt;margin-bottom:4px;">
-    <tr>
-      <td style="width:33%;padding:2px 4px;border:1px solid #e5e7eb;"><strong>Rates</strong><br>{esc(rates)}</td>
-      <td style="width:33%;padding:2px 4px;border:1px solid #e5e7eb;"><strong>Equities</strong><br>{esc(equities)}</td>
-      <td style="width:34%;padding:2px 4px;border:1px solid #e5e7eb;"><strong>Commodities</strong><br>{esc(commodities)}</td>
-    </tr>
-  </table>
-  {f'<div style="margin-top:2px;">{chips}</div>' if chips else ""}
-</div>"""
-
-    levels_html = ""
-    if levels:
-        rows = "".join(
-            f"""<tr>
-              <td class="l" style="padding:2px 5px;">{esc(lv.get("asset",""))}</td>
-              <td style="padding:2px 5px;">{esc(str(lv.get("level","")) )}</td>
-              <td class="l" style="padding:2px 5px;">{esc(lv.get("significance",""))}</td>
-            </tr>"""
-            for lv in levels
-        )
-        levels_html = f"""
-<div class="sec-header" style="margin-top:8px;font-size:8pt;">Levels to Watch</div>
-<table class="outlook-table" style="font-size:7.5pt;">
-  <thead>
-    <tr>
-      <th class="l" style="width:100px;padding:2px 5px;">Asset</th>
-      <th style="width:70px;padding:2px 5px;">Level</th>
-      <th class="l" style="padding:2px 5px;">Significance</th>
-    </tr>
-  </thead>
-  <tbody>{rows}</tbody>
-</table>"""
-
-    return f"""
-<div class="rule"></div>
-<div class="sec-header first">Today's Scenarios</div>
-<div style="padding:0 2px;">
-  {header}
-  {scenario_blocks}
-  {levels_html}
-</div>"""
-
 
 def _render_metrics_half(rows_df: pd.DataFrame, col_map: dict) -> str:
     _cell_pad = "padding:2px 4px;"
@@ -1869,8 +1782,6 @@ def build_page5_html(logo_b64: str, commentary: dict, features_df: pd.DataFrame)
 {build_technical_perspectives_html(commentary)}
 
 {build_market_outlook_html(commentary) if fresh else ""}
-
-{build_scenarios_html(commentary) if fresh else ""}
 
 <div class="rule"></div>
 

@@ -273,7 +273,6 @@ def _fetch_treasury_gov_yields() -> dict[str, dict]:
 
         today = datetime.today()
         ym_cur  = today.strftime("%Y%m")
-        # Also fetch prior month in case today is early in the month
         prev_month = (today.replace(day=1) - timedelta(days=1))
         ym_prev = prev_month.strftime("%Y%m")
 
@@ -281,12 +280,28 @@ def _fetch_treasury_gov_yields() -> dict[str, dict]:
         if len(rows) < 2:
             rows.update(_fetch_month(ym_prev))
 
+        # Fetch January data for YTD baseline when current/prev months don't cover it
+        ym_jan = f"{today.year}01"
+        if ym_jan not in (ym_cur, ym_prev):
+            rows.update(_fetch_month(ym_jan))
+
         sorted_dates = sorted(rows.keys())
         if len(sorted_dates) < 2:
             return {}
 
         today_row = rows[sorted_dates[-1]]
         prev_row  = rows[sorted_dates[-2]]
+        week_row  = rows[sorted_dates[-6]] if len(sorted_dates) >= 6 else None
+        jan_dates = [d for d in sorted_dates if d.startswith(str(today.year))]
+        ytd_row   = rows[jan_dates[0]] if jan_dates else None
+
+        def _get_val(row: dict | None, field: str) -> float | None:
+            if row is None:
+                return None
+            try:
+                return float(row[field])
+            except Exception:
+                return None
 
         def _build(field: str) -> dict | None:
             try:
@@ -294,7 +309,14 @@ def _fetch_treasury_gov_yields() -> dict[str, dict]:
                 prev = float(prev_row[field])
                 chg  = round(cur - prev, 3)
                 pct  = round(chg / prev * 100, 2) if prev else None
-                return {"level": cur, "change": chg, "pct_change": pct}
+                entry: dict = {"level": cur, "change": chg, "pct_change": pct}
+                wk = _get_val(week_row, field)
+                if wk is not None:
+                    entry["bp_change_1w"] = round((cur - wk) * 100, 1)
+                yt = _get_val(ytd_row, field)
+                if yt is not None:
+                    entry["bp_change_ytd"] = round((cur - yt) * 100, 1)
+                return entry
             except Exception:
                 return None
 
@@ -316,11 +338,20 @@ def _fetch_treasury_gov_yields() -> dict[str, dict]:
             spread_chg = None
             if y10_chg is not None and y2_chg is not None:
                 spread_chg = round((y10_chg - y2_chg) * 100, 1)
-            result["10s-2s Spread"] = {
+            spread_entry: dict = {
                 "level": round((y10 - y2) * 100, 1),
                 "change": spread_chg,
                 "pct_change": None,
             }
+            y10_1w = result.get("10-Year Yield", {}).get("bp_change_1w")
+            y2_1w  = result.get("2-Year Yield",  {}).get("bp_change_1w")
+            if y10_1w is not None and y2_1w is not None:
+                spread_entry["bp_change_1w"] = round(y10_1w - y2_1w, 1)
+            y10_yt = result.get("10-Year Yield", {}).get("bp_change_ytd")
+            y2_yt  = result.get("2-Year Yield",  {}).get("bp_change_ytd")
+            if y10_yt is not None and y2_yt is not None:
+                spread_entry["bp_change_ytd"] = round(y10_yt - y2_yt, 1)
+            result["10s-2s Spread"] = spread_entry
         return result
 
     except Exception as exc:
@@ -2264,11 +2295,11 @@ def enrich_with_historical_returns(
     """
     if yf is None:
         return
-    reverse: dict[str, tuple[dict, str]] = {}
+    reverse: dict[str, list[tuple[dict, str]]] = {}
     for data_dict, ticker_map in snapshots:
         for name, ticker in ticker_map.items():
-            if name in data_dict and ticker not in reverse:
-                reverse[ticker] = (data_dict, name)
+            if name in data_dict:
+                reverse.setdefault(ticker, []).append((data_dict, name))
     if not reverse:
         return
     try:
@@ -2292,27 +2323,28 @@ def enrich_with_historical_returns(
         print(f"[WARN] enrich_with_historical_returns: {exc}")
         return
 
-    for ticker, (data_dict, name) in reverse.items():
+    for ticker, targets in reverse.items():
         if ticker not in closes.columns:
             continue
         s = pd.to_numeric(closes[ticker], errors="coerce").dropna()
         if len(s) < 2:
             continue
-        is_yield = name in _YIELD_NAMES
         last = float(s.iloc[-1])
-        if len(s) > 5:
-            base_1w = float(s.iloc[-6])
-            if is_yield:
-                data_dict[name]["bp_change_1w"] = round((last - base_1w) * 100, 1)
-            elif base_1w != 0:
-                data_dict[name]["pct_change_1w"] = round((last / base_1w - 1) * 100, 2)
+        base_1w = float(s.iloc[-6]) if len(s) > 5 else None
         s_ytd = s[s.index >= ytd_start]
-        if len(s_ytd) >= 1:
-            base_ytd = float(s_ytd.iloc[0])
-            if is_yield:
-                data_dict[name]["bp_change_ytd"] = round((last - base_ytd) * 100, 1)
-            elif base_ytd != 0:
-                data_dict[name]["pct_change_ytd"] = round((last / base_ytd - 1) * 100, 2)
+        base_ytd = float(s_ytd.iloc[0]) if len(s_ytd) >= 1 else None
+        for data_dict, name in targets:
+            is_yield = name in _YIELD_NAMES
+            if base_1w is not None:
+                if is_yield:
+                    data_dict[name]["bp_change_1w"] = round((last - base_1w) * 100, 1)
+                elif base_1w != 0:
+                    data_dict[name]["pct_change_1w"] = round((last / base_1w - 1) * 100, 2)
+            if base_ytd is not None:
+                if is_yield:
+                    data_dict[name]["bp_change_ytd"] = round((last - base_ytd) * 100, 1)
+                elif base_ytd != 0:
+                    data_dict[name]["pct_change_ytd"] = round((last / base_ytd - 1) * 100, 2)
 
 
 # ---------------------------------------------------------------------------
@@ -2360,19 +2392,12 @@ def main() -> int:
 
     print("[DATA] Enriching with 1W/YTD historical returns...")
     try:
-        _bond_yf_map = {"10-Year Yield": "^TNX", "30-Year Yield": "^TYX"}
         enrich_with_historical_returns([
             (snapshot,        MARKET_TICKERS),
             (global_markets,  GLOBAL_TICKERS),
             (commodities_tbl, COMMODITY_TICKERS),
             (currencies_tbl,  CURRENCY_TICKERS),
-            (bonds_tbl,       _bond_yf_map),
         ])
-        # Sync 10-Yr Yield bp changes from bonds_tbl to snapshot (keys differ: "10-Year" vs "10-Yr")
-        for _bk in ("bp_change_1w", "bp_change_ytd"):
-            if _bk in bonds_tbl.get("10-Year Yield", {}):
-                snapshot.setdefault("10-Yr Yield", {})
-                snapshot["10-Yr Yield"][_bk] = bonds_tbl["10-Year Yield"][_bk]
         print("  [OK] Historical enrichment complete")
     except Exception as _enrich_exc:
         print(f"  [WARN] Historical enrichment skipped: {_enrich_exc}")
