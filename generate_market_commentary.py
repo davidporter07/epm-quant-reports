@@ -1926,9 +1926,10 @@ def _rewrite_first_pct_sign(text: str, truth_pct: float) -> tuple[str, bool]:
     if matches:
         verb_match = matches[-1]
 
-    # If a directional verb will be flipped, the verb itself conveys sign —
-    # use bare magnitude. Otherwise emit explicit signed percent.
-    if verb_match is not None:
+    # Positive truth with verb flip: bare magnitude is unambiguous (no leading sign = positive).
+    # Negative truth: always emit explicit "-" so the validator can read the sign from the number
+    # itself, regardless of whether a verb flip also occurs.
+    if verb_match is not None and truth_pct >= 0:
         new_pct = f"{abs(truth_pct):.2f}%"
     else:
         new_sign = "-" if truth_pct < 0 else "+"
@@ -1946,6 +1947,22 @@ def _rewrite_first_pct_sign(text: str, truth_pct: float) -> tuple[str, bool]:
     return new_text, True
 
 
+def _rewrite_pct_sign_after_keyword(text: str, keyword: str, truth_pct: float) -> tuple[str, bool]:
+    """Rewrite the first percent figure AFTER `keyword` in `text` to match `truth_pct`'s sign.
+    Slices from the keyword position and delegates to _rewrite_first_pct_sign, then stitches back.
+    Idempotent. Returns (new_text, changed).
+    """
+    if not isinstance(text, str) or not text:
+        return text, False
+    idx = text.lower().find(keyword.lower())
+    if idx == -1:
+        return text, False
+    new_suffix, changed = _rewrite_first_pct_sign(text[idx:], truth_pct)
+    if not changed:
+        return text, False
+    return text[:idx] + new_suffix, True
+
+
 def _correct_sign_mismatches(data: dict, snapshot: dict) -> int:
     """Rewrite sign-flipped percents in narrative fields to match snapshot.
     Mutates data in place. Returns number of corrections applied.
@@ -1956,18 +1973,22 @@ def _correct_sign_mismatches(data: dict, snapshot: dict) -> int:
     fixes = 0
 
     section_checks = [
-        ("equities_commentary",    "S&P 500"),
-        ("commodities_commentary", "WTI Crude"),
-        ("currencies_commentary",  "U.S. Dollar (DXY)"),
+        ("equities_commentary",    "S&P 500",            None),
+        ("commodities_commentary", "WTI Crude",          "wti"),
+        ("commodities_commentary", "Gold",               "gold"),
+        ("currencies_commentary",  "U.S. Dollar (DXY)",  None),
     ]
-    for narrative_key, snap_key in section_checks:
+    for narrative_key, snap_key, kw in section_checks:
         truth_pct = (snapshot.get(snap_key) or {}).get("pct_change")
         if truth_pct is None or abs(truth_pct) < 0.02:
             continue
         prose = data.get(narrative_key)
         if not isinstance(prose, str):
             continue
-        new_prose, changed = _rewrite_first_pct_sign(prose, truth_pct)
+        if kw is None:
+            new_prose, changed = _rewrite_first_pct_sign(prose, truth_pct)
+        else:
+            new_prose, changed = _rewrite_pct_sign_after_keyword(prose, kw, truth_pct)
         if changed:
             data[narrative_key] = new_prose
             fixes += 1
