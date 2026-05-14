@@ -586,6 +586,14 @@ _NEWS_BUCKETS: dict[str, list[str]] = {
     "macro":        ["gdp", "recession", "growth", "unemployment", "jobs", "economy", "economic", "jolts", "pce", "consumer"],
 }
 
+# Promotional/sponsored content patterns to exclude from LLM context
+_NOISE_KEYWORDS: frozenset[str] = frozenset({
+    "ebook", "webinar", "whitepaper", "free report", "trading guide",
+    "free download", "cfd broker", " cfds ", "sponsored", "advertisement",
+    "launches free", "free tool", "sign up", "newsletter", "free access",
+    "claim your", "download now", "register now", "watch now",
+})
+
 
 def bucket_headlines(entries: list[str]) -> dict[str, list[str]]:
     buckets: dict[str, list[str]] = {k: [] for k in _NEWS_BUCKETS}
@@ -1233,7 +1241,7 @@ NUMBER FIDELITY (non-negotiable):
 
 pre_market_bullets: Array of 5 strings:
   [0] "Markets closed [higher/lower]  S&P 500 [pct]%, Nasdaq 100 [pct]%; [specific catalyst from news]."
-  [1] International/macro driver  cite a specific event from the payload.
+  [1] International/macro driver — cite one specific market-moving event (earnings beat/miss, geopolitical development, central bank action, major economic data). NEVER cite broker promotions, ebooks, webinars, or sponsored content.
   [2] Economic calendar: cite the single most important event from upcoming_economic_events across the next 5 trading days (name the event, its importance, and its date as "today", "Tuesday", etc.). If upcoming_economic_events is empty, OMIT this bullet entirely and produce only 4 items total.
   [3] Fed/rates: cite 10-yr yield level and direction with a specific driver.
   [4] Top commodity or currency move with level and driver.
@@ -2469,7 +2477,10 @@ def main() -> int:
     for cat, articles in (enrich_news if isinstance(enrich_news, dict) else {}).items():
         sorted_arts = sorted(articles, key=lambda x: abs(x.get("sentiment", 0)), reverse=True)
         for a in sorted_arts[:4]:
-            entry = a.get("headline", "")
+            headline = a.get("headline", "")
+            if any(kw in headline.lower() for kw in _NOISE_KEYWORDS):
+                continue
+            entry = headline
             if a.get("summary"):
                 entry += f"  {a['summary'][:150]}"
             world_buckets.setdefault(cat, []).append(entry)
@@ -2541,12 +2552,15 @@ def main() -> int:
         "spx_52w_high": tech_levels.get("S&P 500", {}).get("52w_high"),
     }
 
-    # Top 10 earnings by proximity (already sorted by date)
+    # Top earnings by proximity — filter to $500M+ market cap to exclude microcaps
+    _MIN_MKTCAP = 500_000_000
     _top_earnings = [
         {"date": e["date"], "symbol": e["symbol"],
-         "eps_estimate": e.get("eps_estimate"), "hour": e.get("hour")}
-        for e in (earnings_cal if isinstance(earnings_cal, list) else [])[:10]
-    ]
+         "eps_estimate": e.get("eps_estimate"),
+         "hour": e.get("hour") or ""}
+        for e in (earnings_cal if isinstance(earnings_cal, list) else [])
+        if e.get("market_cap", _MIN_MKTCAP) >= _MIN_MKTCAP
+    ][:8]
     # Today's earnings — only entries for report_date, with non-null eps_estimate,
     # limited to known large-caps by filtering out empty tickers
     _today_earnings = [

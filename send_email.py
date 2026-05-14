@@ -296,17 +296,19 @@ def _build_premarket_block(c: dict) -> tuple[str, list]:
     _earn_with_est = [e for e in earnings_today[:8] if e.get('eps_estimate') is not None]
     for idx, e in enumerate(_earn_with_est):
         sym  = html_lib.escape(str(e.get('symbol', '')))
-        hour = str(e.get('hour') or '').upper() or '?'
+        hour = str(e.get('hour') or '').upper()
         est  = e.get('eps_estimate')
         est_str = f'${est:.2f}E'
         is_last = idx == len(_earn_with_est) - 1
         sep = '' if is_last else 'padding-right:14px;border-right:1px solid #e5e7eb;'
+        hour_html = f' <span style="color:#6b7280;font-size:11px;">{hour}</span>' if hour else ''
         earn_parts.append(
             f'<span style="display:inline-block;margin:0 14px 4px 0;{sep}white-space:nowrap;">'
-            f'<b>{sym}</b> <span style="color:#6b7280;font-size:11px;">{hour}</span>'
+            f'<b>{sym}</b>{hour_html}'
             f' <span style="color:#374151;">{html_lib.escape(est_str)}</span></span>'
         )
-        earn_txt.append(f'{e.get("symbol","")} {hour} {est_str}')
+        hour_part = f' {hour}' if hour else ''
+        earn_txt.append(f'{e.get("symbol","")}{hour_part} {est_str}')
 
     # ── Fed Speakers ────────────────────────────────────────────────────────
     fed_items = c.get('fed_speakers') or []

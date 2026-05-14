@@ -326,6 +326,19 @@ def fetch_earnings_calendar() -> list[dict]:
                 "hour":            str(e.get("hour", "")),  # "bmo" | "amc" | ""
             })
         out.sort(key=lambda x: x["date"])
+        # Enrich with market cap so downstream can filter microcaps
+        _symbols = [e["symbol"] for e in out[:20] if e.get("symbol")]
+        if _symbols:
+            try:
+                import yfinance as yf
+                batch = yf.Tickers(" ".join(_symbols))
+                for e in out:
+                    sym = e.get("symbol", "")
+                    t = batch.tickers.get(sym)
+                    mc = (t.fast_info.get("marketCap") if t else None) or 0
+                    e["market_cap"] = mc
+            except Exception:
+                pass  # leave market_cap absent; downstream passes through
         print(f"[ENRICH] Earnings calendar: {len(out)} events in next 14 days")
         return out
     except Exception as exc:

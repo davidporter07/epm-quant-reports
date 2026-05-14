@@ -464,7 +464,6 @@ body {{
   vertical-align: top;
   width: 50%;
   padding-right: 14px;
-  overflow: hidden;
 }}
 .tables-row-right {{
   display: table-cell;
@@ -472,7 +471,6 @@ body {{
   width: 50%;
   padding-left: 14px;
   border-left: 1px solid {BORDER};
-  overflow: hidden;
 }}
 
 /* ======================= COLOR CODING ======================= */
@@ -916,7 +914,7 @@ def build_snapshot_table(snapshot: dict, title: str = "U.S. Markets", show_dolla
             pass
         sub_html = (
             '<div style="font-size:9px;color:#94a3b8;margin-top:1px;">'
-            + "<br>".join(_sub) + "</div>"
+            + "&nbsp;|&nbsp;".join(_sub) + "</div>"
         ) if _sub else ""
 
         rows += f"""
