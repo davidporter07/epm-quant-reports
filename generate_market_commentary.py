@@ -1244,7 +1244,7 @@ pre_market_bullets: Array of 5 strings:
   [1] International/macro driver — cite one specific market-moving event (earnings beat/miss, geopolitical development, central bank action, major economic data). NEVER cite broker promotions, ebooks, webinars, or sponsored content.
   [2] Economic calendar: cite the single most important event from upcoming_economic_events across the next 5 trading days (name the event, its importance, and its date as "today", "Tuesday", etc.). If upcoming_economic_events is empty, OMIT this bullet entirely and produce only 4 items total.
   [3] Fed/rates: cite 10-yr yield level and direction with a specific driver.
-  [4] Top commodity or currency move with level and driver.
+  [4] Top commodity or currency move. If recent_headlines contains a specific commodity move with a named driver (oil on Iran/OPEC/supply, gold on rates/dollar), cite that headline's development as the pre-market story. Otherwise describe the largest mover from commodities_top6 as yesterday's closing change with its driver.
 
 FLAT-DAY CALIBRATION: when |pct_change| < 0.10 for an index, write "essentially flat at [level]" instead of citing only a percent. Example:
   BAD: "S&P 500 unchanged% at 7,365.12"   (template substitution failure)
@@ -1252,7 +1252,7 @@ FLAT-DAY CALIBRATION: when |pct_change| < 0.10 for an index, write "essentially 
   GOOD: "S&P 500 closed essentially flat at 7,365.12 (+0.04%)"
   GOOD: "Markets closed mixed — S&P 500 essentially flat (+0.04%), Nasdaq 100 -0.12%; [catalyst]"
 
-equities_commentary: 5-8 sentences. Lead with S&P 500 direction and level. Sector leadership. If recent_earnings_actuals is non-empty, name 1-2 specific tickers from it with their EPS surprise % (e.g., "AMD's 12% EPS beat lifted semis") — use only eps_surprise_pct values from the payload. Connect to macro driver from news. Global market context. Risk ahead.
+equities_commentary: 5-8 sentences — write all 8 if the data supports it; never truncate at 4. Lead with S&P 500 direction and level. Sector leadership (name which sectors led up or down). If recent_earnings_actuals is non-empty, name 1-2 specific tickers from it with their EPS surprise % (e.g., "AMD's 12% EPS beat lifted semis") — use only eps_surprise_pct values from the payload. Name at least one specific catalyst from recent_headlines (company news, earnings, geopolitical development, or macro event that moved stocks). Global market context: cite one or two international index moves and their driver. Forward: what level or catalyst traders are watching next.
 
 fixed_income_commentary: 5-6 sentences. Lead with 10-yr yield direction and exact level. Connect to inflation/growth data. For the 2s10s spread: read bonds["10s-2s Spread"]["change"] from the payload — if that value is negative the spread NARROWED (flattened), if positive it WIDENED (steepened); state the direction and magnitude in basis points. Implication for equity multiples.
 
@@ -1260,7 +1260,7 @@ commodities_commentary: 5-6 sentences. WTI direction and level first, then gold.
 
 currencies_commentary: 4-5 sentences. DXY direction and level. Rate differential or trade-flow driver. EUR/USD and JPY if notable. EM implication.
 
-economics_commentary: 4-5 sentences. Most important recent data release from payload (actual vs consensus). Macro cycle context (soft landing, slowdown, re-acceleration). Fed implications.
+economics_commentary: 4-5 sentences. If recent_headlines contains any economic data release (Retail Sales, jobless claims, CPI, PPI, industrial production, PMI, GDP), cite the actual result vs consensus from the headline and interpret the beat or miss. Most important release first. Macro cycle context (soft landing, slowdown, re-acceleration). Fed rate trajectory implication.
 
 ONE-SHOT EXAMPLE — concrete reference for prose style ONLY. Use payload-specific numbers, tickers, events, and drivers; do NOT copy any of these specifics:
 {"pre_market_bullets":["Markets closed mixed — S&P 500 -0.12%, Nasdaq 100 +0.08%; megacap tech offset weakness in regional banks after Q1 deposit guidance.","Hang Seng rose 0.9% as PBoC drained liquidity at a slower pace, easing Q2 tightening fears.","Key data today: ISM Services PMI (high importance) — consensus 52.0 vs prior 51.4; a beat would reinforce the soft-landing thesis and pressure long-end yields.","10-yr yield rose 4 bps to 4.36%, breakevens widened on stronger jobless claims; real yields edged up.","WTI rose 1.2% to $77.40 on OPEC+ extending production cuts through Q3."],"equities_commentary":"...","fixed_income_commentary":"...","commodities_commentary":"...","currencies_commentary":"...","economics_commentary":"..."}
@@ -1534,9 +1534,16 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
 
     # Flatten news to a plain headline list — avoids model templating output after section names
     # Articles in llm_buckets are pre-formatted strings (headline + summary snippet)
+    # Priority order: "general" (Finnhub Reuters/AP breaking news) first, then equities/rates,
+    # then commodities/world — prevents stale ETF-flow articles from crowding out breaking stories.
+    _NEWS_PRIORITY = ["general", "equities", "fixed_income", "currencies", "commodities", "world"]
+    _ordered_news = (
+        [(k, news_trimmed[k]) for k in _NEWS_PRIORITY if k in news_trimmed]
+        + [(k, v) for k, v in news_trimmed.items() if k not in _NEWS_PRIORITY]
+    )
     flat_headlines = [
         a if isinstance(a, str) else (a.get("headline") or a.get("title") or "")
-        for articles in news_trimmed.values()
+        for _, articles in _ordered_news
         for a in articles
         if a
     ][:15]
@@ -2552,8 +2559,8 @@ def main() -> int:
         "spx_52w_high": tech_levels.get("S&P 500", {}).get("52w_high"),
     }
 
-    # Top earnings by proximity — filter to $500M+ market cap to exclude microcaps
-    _MIN_MKTCAP = 500_000_000
+    # Top earnings by proximity — filter to $2B+ market cap (large/mid-cap only)
+    _MIN_MKTCAP = 2_000_000_000
     _top_earnings = [
         {"date": e["date"], "symbol": e["symbol"],
          "eps_estimate": e.get("eps_estimate"),
