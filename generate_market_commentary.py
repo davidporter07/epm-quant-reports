@@ -49,11 +49,16 @@ try:
 except ImportError:
     yf = None
 
+try:
+    from json_repair import repair_json as _repair_json
+except ImportError:
+    _repair_json = None
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 OLLAMA_HOST    = os.getenv("LOCAL_OLLAMA_URL",     "http://100.101.63.65:11434")
-OLLAMA_MODEL   = os.getenv("LOCAL_OLLAMA_MODEL",   "qwen2.5:14b")
+OLLAMA_MODEL   = os.getenv("COMMENTARY_OLLAMA_MODEL", "qwen3.5:9b")
 OLLAMA_TIMEOUT = int(os.getenv("LOCAL_OLLAMA_TIMEOUT", "900"))
 
 ROOT             = Path(__file__).resolve().parent
@@ -111,35 +116,53 @@ BOND_TICKERS: dict[str, str] = {
     "30-Year Yield":     "^TYX",
 }
 
+SECTOR_TICKERS: dict[str, str] = {
+    "Technology":        "XLK",
+    "Financials":        "XLF",
+    "Health Care":       "XLV",
+    "Energy":            "XLE",
+    "Consumer Discr":    "XLY",
+    "Industrials":       "XLI",
+    "Consumer Staples":  "XLP",
+    "Utilities":         "XLU",
+    "Materials":         "XLB",
+    "Real Estate":       "XLRE",
+    "Communication":     "XLC",
+}
+
 # ---------------------------------------------------------------------------
 # Market data helpers
 # ---------------------------------------------------------------------------
-def _fetch_quote(ticker: str, days_back: int = 7, prev_close: float | None = None) -> dict | None:
+def _fetch_quote(ticker: str, days_back: int = 7, prev_close: float | None = None,
+                 mode: str = "eod") -> dict | None:
     """Return {level, change, pct_change} for a single ticker, or None.
 
-    Tries fast_info first for a live intraday quote (avoids 0% pct_change when
-    the daily bar is incomplete at market open). Falls back to historical daily bars.
+    mode="eod"  — use completed daily-bar closes only (authoritative yesterday's close).
+                  Never returns intraday data — safe to call at any time of day.
+    mode="live" — try fast_info first (live intraday), fall back to daily bars.
+                  Use for pre-market futures block only.
     """
     if yf is None:
         return None
-    # --- fast_info path: live intraday price vs previous session close ---
-    try:
-        fi = yf.Ticker(ticker).fast_info
-        last = float(fi.last_price)
-        prev_fi = float(fi.previous_close)
-        if last > 0 and prev_fi > 0:
-            # Honour stored prev_close for contract-roll tickers (futures) when provided.
-            prev = prev_close if (prev_close and prev_close > 0) else prev_fi
-            change = last - prev
-            pct    = (change / prev) * 100
-            return {
-                "level":      round(last, 4),
-                "change":     round(change, 4),
-                "pct_change": round(pct, 2),
-            }
-    except Exception:
-        pass
-    # --- fallback: historical daily bars ---
+    # --- live path: fast_info intraday quote (futures/live tables only) ---
+    if mode == "live":
+        try:
+            fi = yf.Ticker(ticker).fast_info
+            last = float(fi.last_price)
+            prev_fi = float(fi.previous_close)
+            if last > 0 and prev_fi > 0:
+                # Honour stored prev_close for contract-roll tickers when provided.
+                prev = prev_close if (prev_close and prev_close > 0) else prev_fi
+                change = last - prev
+                pct    = (change / prev) * 100
+                return {
+                    "level":      round(last, 4),
+                    "change":     round(change, 4),
+                    "pct_change": round(pct, 2),
+                }
+        except Exception:
+            pass
+    # --- eod path: completed daily-bar closes (default, all snapshot/table fetchers) ---
     try:
         end   = datetime.today()
         start = end - timedelta(days=days_back)
@@ -183,6 +206,37 @@ def _prev_level(prev_data: dict | None, name: str) -> float | None:
         return val if val > 0 else None
     except Exception:
         return None
+
+
+def _guard_snapshot_drift(new_snapshot: dict, prev_path: "Path") -> None:
+    """Warn loudly if same-session re-run produces materially different levels.
+
+    A >1% level shift for the same report_date almost certainly means a bad
+    data fetch (e.g. intraday print mis-labeled as a prior close). Prints a
+    warning but does NOT block the write — the alert is enough to catch issues
+    during the daily review.
+    """
+    try:
+        if not prev_path.exists():
+            return
+        import json as _json
+        prev_full = _json.loads(prev_path.read_text(encoding="utf-8"))
+        prev_snap = prev_full.get("market_snapshot", {})
+        # Only compare if both describe the same session date
+        if prev_full.get("report_date") != datetime.today().strftime("%Y-%m-%d"):
+            return
+        _DRIFT_KEYS = ("S&P 500", "Nasdaq 100", "Gold", "10-Yr Yield")
+        for key in _DRIFT_KEYS:
+            old = (prev_snap.get(key) or {}).get("level")
+            new = (new_snapshot.get(key) or {}).get("level")
+            if old and new and old > 0 and abs(new - old) / old > 0.01:
+                print(
+                    f"[WARN] Snapshot drift guard: {key} shifted {old:.4f} → {new:.4f} "
+                    f"({(new-old)/old*100:+.2f}%) within same session. "
+                    f"Possible bad fast_info read — verify data before trusting."
+                )
+    except Exception:
+        pass
 
 
 def fetch_market_snapshot(prev_data: dict | None = None) -> dict[str, dict]:
@@ -232,7 +286,7 @@ FUTURES_TICKERS: dict[str, str] = {
 def fetch_futures_table(prev_data: dict | None = None) -> dict[str, dict]:
     result: dict[str, dict] = {}
     for name, ticker in FUTURES_TICKERS.items():
-        q = _fetch_quote(ticker, prev_close=_prev_level(prev_data, name))
+        q = _fetch_quote(ticker, mode="live", prev_close=_prev_level(prev_data, name))
         if q:
             result[name] = q
     return result
@@ -434,6 +488,50 @@ def fetch_technical_levels() -> dict[str, dict]:
             pass
 
     return result
+
+
+def fetch_sector_performance() -> list[dict]:
+    """Return daily % change for all 11 SPDR sector ETFs, sorted best to worst.
+
+    Each entry: {"name": str, "ticker": str, "pct_change": float, "level": float}
+    Returns empty list if yfinance unavailable.
+    """
+    if yf is None:
+        return []
+    try:
+        tickers = list(SECTOR_TICKERS.values())
+        end   = datetime.today()
+        start = end - timedelta(days=7)
+        data  = yf.download(tickers, start=start, end=end,
+                            progress=False, auto_adjust=True, group_by="ticker")
+        results: list[dict] = []
+        for name, ticker in SECTOR_TICKERS.items():
+            try:
+                if len(tickers) == 1:
+                    closes = data["Close"].dropna()
+                else:
+                    closes = data[ticker]["Close"].dropna()
+                if hasattr(closes, "squeeze"):
+                    closes = closes.squeeze()
+                arr = closes.to_numpy()
+                if len(arr) < 2:
+                    continue
+                last = float(arr[-1])
+                prev = float(arr[-2])
+                pct  = round((last - prev) / prev * 100, 2) if prev else 0.0
+                results.append({"name": name, "ticker": ticker,
+                                 "pct_change": pct, "level": round(last, 2)})
+            except Exception:
+                continue
+        results.sort(key=lambda x: x["pct_change"], reverse=True)
+        top3    = results[:3]
+        bottom3 = results[-3:][::-1]
+        print(f"  [OK] Sectors: top={top3[0]['name']} {top3[0]['pct_change']:+.2f}%  "
+              f"bottom={bottom3[0]['name']} {bottom3[0]['pct_change']:+.2f}%")
+        return results
+    except Exception as exc:
+        print(f"[WARN] fetch_sector_performance failed: {exc}")
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -883,7 +981,9 @@ def fetch_economic_calendar() -> list[dict]:
     # Whitelist: only releases matching a keyword below appear on the calendar.
     # ORDER MATTERS — first match wins, so more-specific keys must come first.
     _EVENT_MAP = {
-        "fomc press release":                          ("FOMC Meeting / Rate Decision",          "high"),
+        "fomc minutes":                                    ("Fed FOMC Minutes",                       "high"),
+        "minutes of the federal open market committee":    ("Fed FOMC Minutes",                       "high"),
+        "fomc press release":                              ("FOMC Meeting / Rate Decision",           "high"),
         "gdpnow":                                      ("Atlanta Fed GDPNow Estimate",            "medium"),
         "consumer price index":                        ("CPI Inflation Report",                   "high"),
         "employment situation":                        ("Non-Farm Payrolls / Jobs Report",         "high"),
@@ -931,6 +1031,9 @@ def fetch_economic_calendar() -> list[dict]:
         "house price index":                           ("FHFA House Price Index",                  "medium"),
         "advance economic indicators":                 ("Advance Trade & Inventories",             "medium"),
         "chicago fed national activity":               ("Chicago Fed National Activity Index",      "medium"),
+        "flash composite pmi":                         ("S&P Global Flash PMI",                   "high"),
+        "flash manufacturing pmi":                     ("S&P Global Flash PMI",                   "high"),
+        "flash services pmi":                          ("S&P Global Flash PMI",                   "high"),
     }
     try:
         from epm_secrets import FRED_API_KEY as _fk
@@ -1147,6 +1250,58 @@ def fetch_economic_calendar() -> list[dict]:
         })
         _existing_fomc.add(_fd)
         print(f"[CAL] Injected FOMC date: {_fd}")
+    # ── Inject FOMC Minutes dates (3 weeks / 21 days after each announcement). ─
+    # FRED never surfaces these; Fed website JSON is unreliable. Derive from the
+    # same hardcoded/fetched announcement list so Minutes always appear in the
+    # 4-week view when due.
+    _minutes_label = "Fed FOMC Minutes"
+    _existing_minutes = {e["date"] for e in events if e["event"] == _minutes_label}
+    for _fd in _fomc_dates:
+        try:
+            _min_d = _ddate.fromisoformat(_fd) + timedelta(days=21)
+        except (ValueError, TypeError):
+            continue
+        _min_str = _min_d.isoformat()
+        if _min_d < _today_d or _min_d > _next4w_d:
+            continue
+        if any(abs((_min_d - _ddate.fromisoformat(_ex)).days) <= 1 for _ex in _existing_minutes):
+            continue
+        events.append({
+            "date": _min_str, "event": _minutes_label, "country": "US",
+            "importance": "high", "actual": None, "consensus": None, "previous": None,
+        })
+        _existing_minutes.add(_min_str)
+        print(f"[CAL] Injected FOMC Minutes date: {_min_str}")
+
+    # ── Inject Flash PMI dates (3rd Friday of each month, S&P Global). ──────
+    # S&P Global Flash PMI is not a FRED release. Published ~3rd Friday monthly.
+    _pmi_label = "S&P Global Flash PMI"
+    _existing_pmi = {e["date"] for e in events if e["event"] == _pmi_label}
+    for _yr, _mo in {(_today_d.year, _today_d.month), (_next4w_d.year, _next4w_d.month)}:
+        # Find 3rd Friday of month (try/except guards short months)
+        _fridays = []
+        for _d in range(1, 32):
+            try:
+                _day = _ddate(_yr, _mo, _d)
+            except ValueError:
+                break
+            if _day.weekday() == 4:
+                _fridays.append(_day)
+        if len(_fridays) < 3:
+            continue
+        _pmi_d   = _fridays[2]
+        _pmi_str = _pmi_d.isoformat()
+        if _pmi_d < _today_d or _pmi_d > _next4w_d:
+            continue
+        if _pmi_str in _existing_pmi:
+            continue
+        events.append({
+            "date": _pmi_str, "event": _pmi_label, "country": "US",
+            "importance": "high", "actual": None, "consensus": None, "previous": None,
+        })
+        _existing_pmi.add(_pmi_str)
+        print(f"[CAL] Injected Flash PMI date: {_pmi_str}")
+
     events.sort(key=lambda x: x["date"])
 
     try:
@@ -1224,12 +1379,20 @@ Return ONLY valid JSON  no markdown fences, no explanation."""
 # Call 1: Market narrative sections
 SYSTEM_PROMPT_NARRATIVE = WRITING_RULES + """
 
-Return JSON with EXACTLY these 6 keys:
+Return JSON with EXACTLY these 6 keys (no others):
+pre_market_bullets, equities_commentary, fixed_income_commentary, commodities_commentary, currencies_commentary, economics_commentary
+
+{"pre_market_bullets":["...","...","...","...","..."],"equities_commentary":"...","fixed_income_commentary":"...","commodities_commentary":"...","currencies_commentary":"...","economics_commentary":"..."}
+
+SESSION FRAME: The payload "date" field is the report date. All pct_change, level, and bp_change values in market_levels, bonds, commodities, and currencies reflect the PREVIOUS SESSION's closing values — that is the session you are narrating. recent_earnings_actuals contain results released AFTER that session's close; they did NOT move session equity returns. Mention them in equities_commentary as "after the close" or "in extended trading" only — NEVER credit them as drivers of the day's S&P 500 return.
+
+FLAT-DAY EQUITY RULE: If market_levels["S&P 500"]["pct_change"] is between -0.30% and +0.30%, do NOT write "rallied", "surged", "soared", "jumped", or "plunged" for the overall market. Instead write "closed essentially flat", "ended little changed", or "traded in a narrow range" and pivot to sector rotation or a specific catalyst story.
 
 NUMBER FIDELITY (non-negotiable):
 - Every percent and price you cite MUST equal the value in the payload to within 0.01.
 - S&P 500: use market_levels["S&P 500"]["pct_change"] for the percent; ["level"] for the price.
-- Apply the same rule for Nasdaq 100, DXY, 10-Yr Yield, Gold, WTI Crude against market_levels / bonds / commodities_top6 / currencies_top5.
+- Apply the same rule for Nasdaq 100, DXY, Gold, WTI Crude against market_levels / commodities_top6 / currencies_top5.
+- For 10-Yr Yield: cite the daily move in BASIS POINTS using market_levels["10-Yr Yield"]["bp_change"] (e.g. "+2 bp", "-5 bp"). NEVER write a percent sign after a yield move ("+0.44%" is wrong; "+2 bp" is correct).
 - Direction words (rose/fell/gained/slid) MUST agree with the SIGN of pct_change. A pct_change of -0.04% is "essentially flat" or "barely changed" — NOT "lower" or "fell".
 - SIGN PRESERVATION (most-violated rule): If pct_change is negative, the cited percent must be negative AND the verb must be "fell"/"slid"/"declined". If pct_change is positive, the cited percent must be positive AND the verb must be "rose"/"gained"/"climbed". Magnitude alone is wrong — sign and verb must both match.
   BAD: snapshot WTI Crude pct_change=-0.79 → "WTI rose 0.79% on supply concerns" (sign flipped, verb wrong)
@@ -1240,10 +1403,10 @@ NUMBER FIDELITY (non-negotiable):
 - Tickers in recent_earnings_actuals have ALREADY released earnings this week — never write "later this week" or "upcoming earnings" for them. If you mention one, cite the reported EPS and surprise % from the payload.
 
 pre_market_bullets: Array of 5 strings:
-  [0] "Markets closed [higher/lower]  S&P 500 [pct]%, Nasdaq 100 [pct]%; [specific catalyst from news]."
+  [0] Use the following template verbatim as the first bullet, replacing {catalyst} with one specific driver from recent_headlines (e.g. "megacap earnings beat", "tariff headlines"). Keep all numbers exactly as given — do NOT alter them. Template: BULLET_0_TEMPLATE
   [1] International/macro driver — cite one specific market-moving event (earnings beat/miss, geopolitical development, central bank action, major economic data). NEVER cite broker promotions, ebooks, webinars, or sponsored content.
-  [2] Economic calendar: cite the single most important event from upcoming_economic_events across the next 5 trading days (name the event, its importance, and its date as "today", "Tuesday", etc.). If upcoming_economic_events is empty, OMIT this bullet entirely and produce only 4 items total.
-  [3] Fed/rates: cite 10-yr yield level and direction with a specific driver.
+  [2] Economic calendar: check todays_economic_events first. If it has entries, cite the most important one — include scheduled time and consensus vs prior — format: "Key data today: [Event] at [time] ET — consensus [X] vs prior [Y]; a [beat/miss] would [1-sentence market implication]." If todays_economic_events is EMPTY, cite the next important event from week_ahead_econ_events by its WEEKDAY name — format: "[Weekday]'s [Event] (consensus [X] vs prior [Y]) will be the next macro test." NEVER call a week_ahead_econ_events entry "today". If both lists are empty, OMIT this bullet and produce only 4 items total.
+  [3] Fed/rates: cite 10-yr yield level and direction in basis points with a specific driver.
   [4] Top commodity or currency move. If recent_headlines contains a specific commodity move with a named driver (oil on Iran/OPEC/supply, gold on rates/dollar), cite that headline's development as the pre-market story. Otherwise describe the largest mover from commodities_top6 as yesterday's closing change with its driver.
 
 FLAT-DAY CALIBRATION: when |pct_change| < 0.10 for an index, write "essentially flat at [level]" instead of citing only a percent. Example:
@@ -1252,20 +1415,46 @@ FLAT-DAY CALIBRATION: when |pct_change| < 0.10 for an index, write "essentially 
   GOOD: "S&P 500 closed essentially flat at 7,365.12 (+0.04%)"
   GOOD: "Markets closed mixed — S&P 500 essentially flat (+0.04%), Nasdaq 100 -0.12%; [catalyst]"
 
-equities_commentary: 5-8 sentences — write all 8 if the data supports it; never truncate at 4. Lead with S&P 500 direction and level. Sector leadership (name which sectors led up or down). If recent_earnings_actuals is non-empty, name 1-2 specific tickers from it with their EPS surprise % (e.g., "AMD's 12% EPS beat lifted semis") — use only eps_surprise_pct values from the payload. Name at least one specific catalyst from recent_headlines (company news, earnings, geopolitical development, or macro event that moved stocks). Global market context: cite one or two international index moves and their driver. Forward: what level or catalyst traders are watching next.
+equities_commentary: 5-8 sentences — write all 8 if the data supports it; never truncate at 4. Lead with S&P 500 direction and level. SECTOR ROTATION (required): cite the top 2 sectors from sector_top3 and bottom 2 from sector_bottom3 by name and pct_change — e.g. "Technology led (+1.2%), followed by Financials (+0.8%), while Energy (-1.1%) and Real Estate (-0.9%) lagged." Use sector_top3 and sector_bottom3 from the payload. Include VIX level from technical_context and whether SPX is above or below its 200-day MA. If recent_earnings_actuals is non-empty, name 1-2 specific tickers from it with their EPS surprise % (e.g., "AMD's 12% EPS beat lifted semis") — use only eps_surprise_pct values from the payload. Name at least one specific catalyst from recent_headlines. Global market context: cite one or two international index moves. Forward: what level or catalyst traders are watching next.
 
-fixed_income_commentary: 5-6 sentences. Lead with 10-yr yield direction and exact level. Connect to inflation/growth data. For the 2s10s spread: read bonds["10s-2s Spread"]["change"] from the payload — if that value is negative the spread NARROWED (flattened), if positive it WIDENED (steepened); state the direction and magnitude in basis points. Implication for equity multiples.
+fixed_income_commentary: 5-6 sentences on TREASURY MARKET dynamics, the yield curve, and Fed policy implications. SCOPE: yield levels, curve shape, Fed rate-path expectations, and equity-multiple effects ONLY. Do NOT write about covered-call ETFs, JEPQ, equity-linked notes, CLOs, retail income strategies, or bond substitutes.
+  Sentence 1 MUST begin: "The [10/30]-year Treasury yield [rose/fell/held] [N] bp[s] to [X.XX]% ..." — use bp_change from bonds["10-Year Yield"]["bp_change"] and level from market_levels["10-Yr Yield"]["level"]. If |bp_change| < 1, write "held near [level]%."
+  Sentence 2: 30-yr yield level and any notable threshold; or 2-yr yield if 30-yr absent.
+  Sentence 3: Yield curve shape — bonds["10s-2s Spread"]["change"] negative = NARROWED, positive = WIDENED; state magnitude in bps.
+  Sentence 4: Fed policy — connect yield move to rate expectations or a named FOMC official/event from news_by_category["fixed_income"].
+  Sentence 5: Equity multiple implication of the current 10-yr yield level.
+  STYLE REFERENCE (use payload numbers, not these): "The 10-year Treasury yield rose 7 bps to 4.68%, extending a three-session climb driven by sticky services inflation and rising odds of a 2026 rate hike. The 30-year yield pushed above 5.00% for the first time since 2007, signalling that the long end is pricing a sustained higher-for-longer regime. The 2s10s spread widened 4 bps to -17 bps as back-end selling outpaced the front end. Fed funds futures now embed an 80% probability of a 2026 hike following the Warsh nomination — a sharp reversal from two cuts expected just weeks ago. At a 10-year yield above 4.65%, the Nasdaq 100's 32x forward P/E implies a near-cycle-low equity risk premium, sustaining compression headwinds on growth names."
 
 commodities_commentary: 5-6 sentences. WTI direction and level first, then gold. Specific fundamental driver for each. Key price level nearby. Connect to macro thesis.
 
 currencies_commentary: 4-5 sentences. DXY direction and level. Rate differential or trade-flow driver. EUR/USD and JPY if notable. EM implication.
 
-economics_commentary: 4-5 sentences. If recent_headlines contains any economic data release (Retail Sales, jobless claims, CPI, PPI, industrial production, PMI, GDP), cite the actual result vs consensus from the headline and interpret the beat or miss. Most important release first. Macro cycle context (soft landing, slowdown, re-acceleration). Fed rate trajectory implication.
+economics_commentary: 4-5 sentences. If recent_headlines contains any economic data release that ALREADY occurred (Retail Sales, jobless claims, CPI, PPI, industrial production, PMI, GDP), cite the actual result vs consensus and interpret the beat or miss — but mark it clearly as a PAST release (e.g., "Last Thursday's Jobless Claims came in at 211k, in line with the 211k prior."). NEVER cite a past headline release as an upcoming event. Most important release first. Macro cycle context (soft landing, slowdown, re-acceleration). Fed rate trajectory implication.
 
-ONE-SHOT EXAMPLE — concrete reference for prose style ONLY. Use payload-specific numbers, tickers, events, and drivers; do NOT copy any of these specifics:
-{"pre_market_bullets":["Markets closed mixed — S&P 500 -0.12%, Nasdaq 100 +0.08%; megacap tech offset weakness in regional banks after Q1 deposit guidance.","Hang Seng rose 0.9% as PBoC drained liquidity at a slower pace, easing Q2 tightening fears.","Key data today: ISM Services PMI (high importance) — consensus 52.0 vs prior 51.4; a beat would reinforce the soft-landing thesis and pressure long-end yields.","10-yr yield rose 4 bps to 4.36%, breakevens widened on stronger jobless claims; real yields edged up.","WTI rose 1.2% to $77.40 on OPEC+ extending production cuts through Q3."],"equities_commentary":"...","fixed_income_commentary":"...","commodities_commentary":"...","currencies_commentary":"...","economics_commentary":"..."}
+ONE-SHOT EXAMPLE — bullet format reference ONLY. Use payload-specific numbers; do NOT copy these specifics:
+{"pre_market_bullets":["Markets closed mixed — S&P 500 -0.12%, Nasdaq 100 +0.08%; megacap tech offset weakness in regional banks after Q1 deposit guidance.","Hang Seng rose 0.9% as PBoC drained liquidity at a slower pace, easing Q2 tightening fears.","Key data today: ISM Services PMI (high importance) at 10:00 AM ET — consensus 52.0 vs prior 51.4; a beat would reinforce the soft-landing thesis and add upward pressure to long-end yields.","10-yr yield fell 3 bps to 4.36%; breakevens widened on stronger jobless claims.","WTI rose 1.2% to $77.40 on OPEC+ extending production cuts through Q3."],"equities_commentary":"...","fixed_income_commentary":"...","commodities_commentary":"...","currencies_commentary":"...","economics_commentary":"..."}"""
 
-Output schema (replace "..." with your generated content for all 6 keys):
+# Call 1r: Refinement/generation pass — deepens existing sections AND generates any missing ones.
+# Input shape: {"draft": {...}, "source_data": {...}, "missing_keys": [...]}
+# "missing_keys" is populated when Call 1 returned an incomplete draft — the model must
+# GENERATE those sections from scratch using source_data rather than leaving them absent.
+SYSTEM_PROMPT_REFINE = WRITING_RULES + """
+You are a financial editor reviewing a draft market commentary. You will receive a JSON object with these keys:
+- "draft": the commentary to review (partial or complete 6-key schema)
+- "source_data": the market data payload used to generate the draft
+- "missing_keys": list of keys that are ABSENT from the draft and MUST be written from scratch
+
+Your job:
+
+1. GENERATE MISSING — For every key in missing_keys, write the section from scratch using source_data. Follow the same length and specificity rules as the primary call. This takes priority over everything else.
+2. LENGTH — For sections already in the draft: if equities_commentary, fixed_income_commentary, commodities_commentary, currencies_commentary, or economics_commentary has fewer than 6 sentences, add sentences grounded in specific facts from source_data (named tickers, price levels, pct changes, economic releases). Do NOT add vague filler.
+3. SPECIFICITY — If any sentence makes a directional claim without a supporting data point (no ticker, no price, no pct, no named event), replace it with one that cites the relevant number from source_data.
+4. SIGN ACCURACY — Verify every direction word (rose/fell/gained/slid) matches the sign of pct_change in source_data. Correct any mismatches silently.
+5. PRESERVE GOOD SECTIONS — If a section already meets the length and specificity standard, return it verbatim. Do not rewrite for its own sake.
+6. FIXED INCOME SCOPE CHECK — If the draft's fixed_income_commentary discusses covered-call ETFs, yield-alternative products (JEPQ, ELNs, CLOs), retail income strategies, or bond substitutes, it is off-scope and MUST be rewritten entirely from the bonds data in source_data. A valid fixed_income_commentary MUST begin with the 10-year Treasury yield level and daily bp move, then cover 30-yr yield context, yield curve shape (2s10s spread), Fed rate-path expectations, and equity multiple implications. Nothing else.
+7. pre_market_bullets — only change a bullet if it is factually wrong per source_data or cites sponsored/promotional content. Otherwise return unchanged.
+
+Return JSON with ALL 6 keys — generate any that are absent from the draft:
 {"pre_market_bullets":["...","...","...","...","..."],"equities_commentary":"...","fixed_income_commentary":"...","commodities_commentary":"...","currencies_commentary":"...","economics_commentary":"..."}"""
 
 # Call 2: Outlook, allocation, portfolio spotlight
@@ -1275,11 +1464,11 @@ Return JSON with EXACTLY these 7 keys:
 
 market_outlook_label: Exactly one of: "Bullish", "Cautious", "Neutral", "Bearish"  near-term 4-6 week equity view.
 
-market_outlook_rationale: Exactly 2 sentences. Sentence 1: primary supporting factor. Sentence 2: key risk that could change the label.
+market_outlook_rationale: Exactly 2 sentences. If prior_day_label is provided and market_outlook_label differs from it, Sentence 1 MUST explain what changed and why the view shifted since yesterday; otherwise Sentence 1 is the primary supporting factor. Sentence 2: key risk that could change the label.
 
-tactical_outperforming: Short phrase (3-5 words)  sectors/themes outperforming. E.g., "Technology, energy, small caps".
+tactical_outperforming: Short phrase (3-5 words) — sectors/themes outperforming. Ground in sector_top3 from the payload (e.g., "Technology, Financials, semis").
 
-tactical_underperforming: Short phrase (3-5 words)  sectors/themes lagging. E.g., "Regional banks, consumer discretionary".
+tactical_underperforming: Short phrase (3-5 words) — sectors/themes lagging. Ground in sector_bottom3 from the payload (e.g., "Energy, Real Estate, utilities").
 
 asset_class_outlooks: Object with keys "Equities", "Fixed Income", "Commodities", "US Dollar". Each: {"label": one of Bullish/Cautious/Neutral/Negative, "rationale": "1-2 sentences"}.
 
@@ -1305,8 +1494,8 @@ session_recap: Array of exactly 3 strings summarising the PREVIOUS trading sessi
   [2] Top non-equity mover: the most notable commodity OR currency with exact level and driver.
 
 watch_today: Array of exactly 3 strings — actionable items for TODAY's session:
-  [0] Economic data: cite the most important event from upcoming_economic_events or "No major data today."
-  [1] Earnings/corporate: cite from earnings_calendar (symbol + timing) or "No major earnings today."
+  [0] Economic data: cite the most important event from todays_economic_events ONLY. If todays_economic_events is empty, output exactly "No major data today." NEVER promote an event from week_ahead_econ_events into this slot — those belong to future days.
+  [1] Earnings/corporate: cite from todays_earnings ONLY (entries whose date == today). If todays_earnings is empty, output exactly "No major earnings today." NEVER assign a future-day entry from this_week_earnings to today.
   [2] Technical level or market structure: one specific price level or spread to monitor.
 
 international_section: 3-4 sentences covering non-US market impact on US outlook. Use global_markets and international_macro data. Include at least one of: EU/ECB, Japan/BOJ, China/Asia. Connect explicitly to how it affects US equities, rates, or commodities.
@@ -1326,10 +1515,10 @@ cross_asset_synthesis: Exactly 3-4 sentences. This is the "Market Take" wrap-up 
 Rules:
 - Commit to a directional view — do NOT hedge with "risk remains elevated", "uncertainty persists", or "the outlook is mixed".
 - Name the dominant cross-asset linkage (e.g., "oil is driving yields which is compressing tech multiples" — pick the actual theme from the payload).
-- Name the single most important upcoming catalyst (from upcoming_economic_events or earnings_upcoming) and state exactly what outcome you are watching for (beat vs miss, hawkish vs dovish).
+- Name the single most important upcoming catalyst: use todays_economic_events if non-empty (call it "today"), otherwise use the first entry of week_ahead_econ_events (name it by weekday, e.g., "Thursday's Initial Jobless Claims") or this_week_earnings. State exactly what outcome you are watching for (beat vs miss, hawkish vs dovish).
 - The tone MUST be consistent with market_outlook_label: if Cautious, explain the specific mechanism of risk without adding false balance; if Bullish, name the specific driver without inventing caveats.
 - 3-4 sentences total. No preamble. No conclusion phrase. Start directly with the cross-asset theme.
-- DATE CONSISTENCY: When a referenced economic event appears in the upcoming_economic_events payload for today's date, refer to it as "today" or "this morning" — never as a named weekday ("on Friday", "on Tuesday"). Do not assign a future weekday to an event that is already in today's calendar.
+- DATE CONSISTENCY: If todays_economic_events is EMPTY, there are NO economic releases today — do NOT call any event "today" or "this morning". Events in week_ahead_econ_events are FUTURE; always name them by their weekday (e.g., "Wednesday's Fed minutes", "Thursday's Flash PMI"). NEVER assign a week_ahead event to "today".
 
 ONE-SHOT EXAMPLE:
   market_outlook_label: "Cautious"
@@ -1463,14 +1652,22 @@ def _scrub_text(text: str) -> str:
     return text
 
 
+def _scrub_nested(val):
+    """Recursively scrub banned phrases from strings inside any nested structure."""
+    if isinstance(val, str):
+        return _scrub_text(val)
+    if isinstance(val, list):
+        return [_scrub_nested(item) for item in val]
+    if isinstance(val, dict):
+        return {k: _scrub_nested(v) for k, v in val.items()}
+    return val
+
+
 def scrub_banned_phrases(data: dict) -> dict:
     """Post-process commentary dict: replace banned phrases with accurate alternatives."""
     for key in NARRATIVE_KEYS:
-        val = data.get(key)
-        if isinstance(val, list):
-            data[key] = [_scrub_text(item) if isinstance(item, str) else item for item in val]
-        elif isinstance(val, str):
-            data[key] = _scrub_text(val)
+        if key in data:
+            data[key] = _scrub_nested(data[key])
     return data
 
 NARRATIVE_KEYS = [
@@ -1482,7 +1679,7 @@ NARRATIVE_KEYS = [
 ]
 
 
-def _call_ollama_raw(system: str, user_payload: dict) -> dict:
+def _call_ollama_raw(system: str, user_payload: dict, num_ctx: int = 8192) -> dict:
     body = {
         "model":   OLLAMA_MODEL,
         "messages": [
@@ -1491,10 +1688,11 @@ def _call_ollama_raw(system: str, user_payload: dict) -> dict:
         ],
         "stream": False,
         "format": "json",
+        "think":  False,
         "options": {
             "temperature": 0,
-            "num_predict": 2048,
-            "num_ctx":     8192,
+            "num_predict": 4096,
+            "num_ctx":     num_ctx,
         },
     }
     resp = requests.post(
@@ -1504,7 +1702,42 @@ def _call_ollama_raw(system: str, user_payload: dict) -> dict:
     )
     resp.raise_for_status()
     content = resp.json()["message"]["content"]
-    return json.loads(content)
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        if _repair_json is not None:
+            parsed = json.loads(_repair_json(content))
+        else:
+            raise
+    return _hoist_nested_dicts(parsed)
+
+
+def _hoist_nested_dicts(data: dict) -> dict:
+    """Fix LLM output where sub-keys were embedded as dicts inside a string array.
+
+    qwen3.5:4b sometimes generates:
+      {"pre_market_bullets": ["str1", ..., {"equities_commentary": "..."}]}
+    instead of closing the array and opening a new top-level key.
+    Runs iteratively until no more hoisting is possible (handles multi-level nesting).
+    """
+    result = dict(data)
+    changed = True
+    while changed:
+        changed = False
+        for key in list(result.keys()):
+            value = result[key]
+            if isinstance(value, list):
+                has_strings = any(isinstance(item, str) for item in value)
+                has_dicts = any(isinstance(item, dict) for item in value)
+                # Only hoist when the list is mixed (strings + dicts). A pure dict
+                # list (e.g. scenarios, portfolio_spotlight) is intentional — leave it.
+                if has_strings and has_dicts:
+                    result[key] = [item for item in value if isinstance(item, str)]
+                    for item in value:
+                        if isinstance(item, dict):
+                            result.update(item)
+                    changed = True
+    return result
 
 
 def call_ollama(payload: dict, snapshot: dict) -> dict:
@@ -1532,6 +1765,14 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
     # Economic events: top 5
     econ = (payload.get("upcoming_economic_events") or [])[:5]
 
+    # Split events and earnings into today vs. rest-of-week so prompts can distinguish them.
+    today_str  = payload.get("date") or ""
+    today_econ = [e for e in econ if str(e.get("date", ""))[:10] == today_str]
+    week_econ  = [e for e in econ if str(e.get("date", ""))[:10] != today_str]
+    earn       = payload.get("earnings_calendar") or []
+    today_earn = [e for e in earn if str(e.get("date", ""))[:10] == today_str]
+    week_earn  = [e for e in earn if str(e.get("date", ""))[:10] != today_str][:5]
+
     # Flatten news to a plain headline list — avoids model templating output after section names
     # Articles in llm_buckets are pre-formatted strings (headline + summary snippet)
     # Priority order: "general" (Finnhub Reuters/AP breaking news) first, then equities/rates,
@@ -1548,6 +1789,51 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
         if a
     ][:15]
 
+    # Sector leaders/laggards for narrative — item #2
+    _sp = payload.get("sector_performance") or []
+    _sector_top3    = _sp[:3]
+    _sector_bottom3 = _sp[-3:][::-1] if len(_sp) >= 3 else []
+
+    # Technical context for equities commentary — item #3
+    _tl = payload.get("technical_levels") or {}
+    _spx_tl = _tl.get("S&P 500", {})
+    _vix_tl = _tl.get("VIX", {})
+    _technical_context = {
+        "vix":           _vix_tl.get("current"),
+        "spx_ma200":     _spx_tl.get("ma200"),
+        "spx_52w_high":  _spx_tl.get("52w_high"),
+        "spx_current":   _spx_tl.get("current"),
+        "spx_above_ma200": (
+            bool(_spx_tl.get("current") and _spx_tl.get("ma200") and
+                 _spx_tl["current"] > _spx_tl["ma200"])
+        ),
+    }
+
+    # Week-over-week return context — item #5
+    _week_context = {
+        "SP500_1w_pct":   (levels.get("S&P 500") or {}).get("pct_change_1w"),
+        "NDX_1w_pct":     (levels.get("Nasdaq 100") or {}).get("pct_change_1w"),
+        "Gold_1w_pct":    (levels.get("Gold") or {}).get("pct_change_1w"),
+        "Yield10_bp_1w":  (bonds.get("10-Year Yield") or {}).get("bp_change_1w"),
+        "DXY_1w_pct":     (levels.get("U.S. Dollar (DXY)") or {}).get("pct_change_1w"),
+    }
+
+    # Deterministic opener for pre_market_bullets[0] — item #6
+    # Compute from snapshot to guarantee number accuracy; LLM fills [catalyst] only.
+    _sp500 = levels.get("S&P 500", {})
+    _ndx   = levels.get("Nasdaq 100", {})
+    _sp_pct  = _sp500.get("pct_change")
+    _ndx_pct = _ndx.get("pct_change")
+    _sp_lvl  = _sp500.get("level")
+    _direction = "higher" if (_sp_pct or 0) >= 0 else "lower"
+    _sp_str  = f"{float(_sp_pct):+.2f}%" if _sp_pct is not None else "N/A"
+    _ndx_str = f"{float(_ndx_pct):+.2f}%" if _ndx_pct is not None else "N/A"
+    _lvl_str = f"{float(_sp_lvl):,.2f}" if _sp_lvl is not None else ""
+    _deterministic_opener = (
+        f"Markets closed {_direction} — S&P 500 {_sp_str} to {_lvl_str}, "
+        f"Nasdaq 100 {_ndx_str}; {{catalyst}}"
+    )
+
     narrative_payload = {
         "date":                     payload.get("date"),
         "market_levels":            levels,
@@ -1555,27 +1841,55 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
         "global_markets_top5":      gm,
         "commodities_top6":         cmdty,
         "currencies_top5":          fx,
-        "upcoming_economic_events": econ,
-        "recent_headlines":         flat_headlines,
+        "todays_economic_events":   today_econ,
+        "week_ahead_econ_events":   week_econ,
+        # item #7: bucketed headlines so model knows which category each story belongs to
+        "news_by_category":         news_trimmed,
+        "recent_headlines":         flat_headlines,   # flat list kept as fallback
         "recent_earnings_actuals":  payload.get("recent_earnings_actuals") or [],
+        # items #2–#6
+        "sector_top3":              _sector_top3,
+        "sector_bottom3":           _sector_bottom3,
+        "technical_context":        _technical_context,
+        "fear_greed":               payload.get("fear_greed") or {},
+        "week_context":             _week_context,
     }
+
+    # Inline the opener into the system prompt (not the payload) so the model cannot
+    # echo the key name as its sole output — the sentinel is replaced with the actual
+    # template string before every Call 1 attempt.
+    _narrative_sys = SYSTEM_PROMPT_NARRATIVE.replace("BULLET_0_TEMPLATE", _deterministic_opener)
 
     print("  [LLM Call 1/3] Generating market narrative sections...")
     part1 = {}
     for attempt in range(4):
         try:
-            part1 = _call_ollama_raw(SYSTEM_PROMPT_NARRATIVE, narrative_payload)
+            part1 = _call_ollama_raw(_narrative_sys, narrative_payload, num_ctx=16384)
             print(f"    Keys returned: {list(part1.keys())}")
-            # Remap aliases to canonical keys BEFORE scrubbing so scrubber finds them
+            # Remap aliases to canonical keys BEFORE scrubbing so scrubber finds them.
+            # Only remap when the value is a non-empty string — a dict value (e.g. market_summary
+            # returned as a nested object) must not become equities_commentary.
             for alias, canonical in LLM_KEY_ALIASES.items():
                 if alias in part1 and canonical not in part1:
-                    part1[canonical] = part1.pop(alias)
+                    _v = part1[alias]
+                    if isinstance(_v, str) and _v.strip():
+                        part1[canonical] = part1.pop(alias)
+                    else:
+                        part1.pop(alias)  # discard non-string alias values
             part1 = scrub_banned_phrases(part1)
             banned = find_banned_phrases(part1)
             leaks = find_leaked_placeholders(part1)
             sign_fixes = _correct_sign_mismatches(part1, snapshot)
             if sign_fixes:
                 print(f"  [CORRECT] Auto-corrected {sign_fixes} sign mismatch(es) in Call 1 output.")
+            _call1_required = {
+                "pre_market_bullets", "equities_commentary", "fixed_income_commentary",
+                "currencies_commentary", "commodities_commentary", "economics_commentary",
+            }
+            missing_required = _call1_required - set(part1.keys())
+            if missing_required:
+                print(f"  [RETRY] Attempt {attempt + 1} missing required narrative keys: {sorted(missing_required)}. Retrying...")
+                continue
             numeric = _check_numeric_consistency(part1, snapshot)
             causal = _check_causal_logic(part1, snapshot)
             if not banned and not leaks and not numeric and not causal:
@@ -1592,7 +1906,62 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
             print(f"  [WARN] Narrative call failed (attempt {attempt + 1}): {exc}")
             part1 = {}
 
-    # Compact payload for outlook call
+    # Refinement pass: deepen existing sections AND generate any that Call 1 missed.
+    if part1:
+        print("  [LLM Call 1r] Refining narrative sections...")
+        _call1_required = {
+            "pre_market_bullets", "equities_commentary", "fixed_income_commentary",
+            "currencies_commentary", "commodities_commentary", "economics_commentary",
+        }
+        _missing_after_loop = sorted(_call1_required - set(part1.keys()))
+        if _missing_after_loop:
+            print(f"  [GENERATE] Refinement pass will generate missing keys: {_missing_after_loop}")
+        refinement_input = {
+            "draft":        part1,
+            "source_data":  narrative_payload,
+            "missing_keys": _missing_after_loop,
+        }
+        for attempt in range(2):
+            try:
+                part1_refined = _call_ollama_raw(SYSTEM_PROMPT_REFINE, refinement_input)
+                for key in ["equities_commentary", "fixed_income_commentary",
+                            "commodities_commentary", "currencies_commentary", "economics_commentary"]:
+                    refined_val = part1_refined.get(key, "")
+                    if refined_val and len(refined_val) > len(part1.get(key, "")):
+                        part1[key] = refined_val
+                if (isinstance(part1_refined.get("pre_market_bullets"), list)
+                        and len(part1_refined["pre_market_bullets"]) >= 4):
+                    part1["pre_market_bullets"] = part1_refined["pre_market_bullets"]
+                print(f"    Refinement pass complete (attempt {attempt + 1}).")
+                break
+            except Exception as exc:
+                print(f"  [WARN] Refinement pass attempt {attempt + 1} failed: {exc}")
+
+    # Safety net: if pre_market_bullets is still absent after all LLM attempts + refinement,
+    # inject snapshot-derived bullets so validate_commentary passes with narrative_source='llm'.
+    if not isinstance(part1.get("pre_market_bullets"), list) or not part1["pre_market_bullets"]:
+        def _snap_val(key, field, default=0.0):
+            return (snapshot.get(key) or {}).get(field) or default
+        def _snap_dir(pct):
+            return "gained" if pct >= 0 else "fell"
+        _sp_pct  = _snap_val("S&P 500",           "pct_change")
+        _sp_lvl  = _snap_val("S&P 500",           "level")
+        _ndx_pct = _snap_val("Nasdaq 100",         "pct_change")
+        _tyr_lvl = _snap_val("10-Yr Yield",        "level")
+        _wti_pct = _snap_val("WTI Crude",          "pct_change")
+        _wti_lvl = _snap_val("WTI Crude",          "level")
+        _gld_pct = _snap_val("Gold",               "pct_change")
+        _dxy_pct = _snap_val("U.S. Dollar (DXY)",  "pct_change")
+        _dxy_lvl = _snap_val("U.S. Dollar (DXY)",  "level")
+        part1["pre_market_bullets"] = [
+            f"S&P 500 {_snap_dir(_sp_pct)} {_sp_pct:+.2f}% to {_sp_lvl:,.0f}; Nasdaq 100 {_snap_dir(_ndx_pct)} {_ndx_pct:+.2f}%.",
+            f"10-Yr yield at {_tyr_lvl:.3f}%.",
+            f"WTI crude {_snap_dir(_wti_pct)} {_wti_pct:+.2f}% to ${_wti_lvl:.2f}.",
+            f"DXY {_snap_dir(_dxy_pct)} {_dxy_pct:+.2f}% to {_dxy_lvl:.2f}.",
+        ]
+        print("  [FALLBACK] Injected deterministic pre_market_bullets (LLM failed to generate).")
+
+    # Compact payload for outlook call — items #2 (sectors) and #8 (prior-day continuity)
     outlook_payload = {
         "date":                      payload.get("date"),
         "market_levels":             levels,
@@ -1601,6 +1970,10 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
         "portfolio_names_to_watch":  payload.get("portfolio_names_to_watch"),
         "mag7_consensus_forecasts":  payload.get("mag7_consensus_forecasts"),
         "news_headlines":            {k: v[:2] for k, v in news_trimmed.items()},
+        "sector_top3":               _sector_top3,
+        "sector_bottom3":            _sector_bottom3,
+        "prior_day_label":           payload.get("prior_day_label"),
+        "prior_day_synthesis":       payload.get("prior_day_synthesis"),
     }
 
     print("  [LLM Call 2/3] Generating market outlook and portfolio intelligence...")
@@ -1630,8 +2003,10 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
         "global_markets_top3":      dict(list(gm.items())[:3]),
         "commodities_top3":         dict(list(cmdty.items())[:3]),
         "currencies_top3":          dict(list(fx.items())[:3]),
-        "upcoming_economic_events": econ,
-        "earnings_calendar":        (payload.get("earnings_calendar") or [])[:5],
+        "todays_economic_events":   today_econ,
+        "week_ahead_econ_events":   week_econ,
+        "todays_earnings":          today_earn,
+        "this_week_earnings":       week_earn,
         "international_macro":      payload.get("international_macro") or {},
         "fear_greed":               payload.get("fear_greed") or {},
         "news_headlines":           {k: v[:2] for k, v in news_trimmed.items()},
@@ -1657,6 +2032,21 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
             print(f"  [WARN] Recap call failed (attempt {attempt + 1}): {exc}")
             part3 = {}
 
+    # Deterministic watch_today fallback — upcoming earnings and econ events for the next session
+    if not part3.get("watch_today"):
+        _w: list[str] = []
+        for _e in week_earn[:3]:
+            _sym = _e.get("symbol", ""); _hr = _e.get("hour", "AMC")
+            if _sym:
+                _w.append(f"{_sym} earnings ({_hr})")
+        for _e in week_econ[:2]:
+            _ev = _e.get("event", ""); _imp = _e.get("importance", "")
+            if _ev:
+                _w.append(f"{_ev} ({_imp})" if _imp else _ev)
+        part3["watch_today"] = _w
+        if _w:
+            print("  [FALLBACK] Injected deterministic watch_today.")
+
     # Collect known tickers from the portfolio payload for post-generation validation
     known_tickers: set[str] = set()
     for entry in (payload.get("mag7_consensus_forecasts") or {}).keys():
@@ -1670,14 +2060,17 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
 
     # Compact synthesis payload — reads already-generated text, no raw market data needed
     synthesis_payload = {
+        "date":                     today_str,
         "market_outlook_label":     part2.get("market_outlook_label"),
         "equities_commentary":      part1.get("equities_commentary", ""),
         "fixed_income_commentary":  part1.get("fixed_income_commentary", ""),
         "commodities_commentary":   part1.get("commodities_commentary", ""),
         "currencies_commentary":    part1.get("currencies_commentary", ""),
         "economics_commentary":     part1.get("economics_commentary", ""),
-        "upcoming_economic_events": econ,
-        "earnings_upcoming":        (payload.get("earnings_calendar") or [])[:3],
+        "todays_economic_events":   today_econ,
+        "week_ahead_econ_events":   week_econ,
+        "todays_earnings":          today_earn,
+        "this_week_earnings":       week_earn[:3],
     }
 
     print("  [LLM Call 4/4] Generating cross-asset synthesis...")
@@ -1736,9 +2129,10 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
                         _sc["tickers"] = _clean
                 if _any_bad:
                     print(f"  [VALIDATE] Stripped non-whitelist ticker(s) from scenarios.")
-                # Accept if structure is good
-                if len(_scens) == 3 and len(_lvls) >= 2:
-                    # Annotate with the event metadata
+                # Accept if we have at least 3 scenarios; levels_to_watch is optional
+                if len(_scens) >= 3:
+                    part5["scenarios"]       = _scens[:3]
+                    part5["levels_to_watch"] = _lvls  # may be empty — render handles gracefully
                     part5["scenario_event"]     = _ev_name
                     part5["scenario_consensus"] = str(_ev_cons) if _ev_cons is not None else None
                     break
@@ -1779,12 +2173,22 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
     return merged, known_tickers
 
 
+def _extract_text_recursive(val) -> str:
+    """Extract all text from a nested string/list/dict structure."""
+    if isinstance(val, str):
+        return val
+    if isinstance(val, list):
+        return " ".join(_extract_text_recursive(item) for item in val)
+    if isinstance(val, dict):
+        return " ".join(_extract_text_recursive(v) for v in val.values())
+    return ""
+
+
 def find_banned_phrases(data: dict) -> list[str]:
     found = []
     for key in NARRATIVE_KEYS:
         val = data.get(key, "")
-        text = " ".join(val) if isinstance(val, list) else str(val)
-        text = text.lower()
+        text = _extract_text_recursive(val).lower()
         for phrase in BANNED_PHRASES:
             if phrase in text and phrase not in found:
                 found.append(phrase)
@@ -1850,11 +2254,24 @@ def _check_numeric_consistency(data: dict, snapshot: dict) -> list[str]:
         truth_pct = snap.get("pct_change")
         if truth_pct is None:
             continue
-        if abs(truth_pct) < 0.02:
-            # Near-zero: skip to avoid flagging rounding noise.
-            continue
         prose = data.get(narrative_key, "")
         prose_str = prose if isinstance(prose, str) else " ".join(prose or [])
+        if abs(truth_pct) < 0.02:
+            # Near-zero: skip magnitude/sign check, but flag strong directional language
+            # in equities_commentary — catches "rallied over 1%" on flat-close days.
+            if narrative_key == "equities_commentary":
+                _STRONG_MOVES = {
+                    "rallied", "surged", "soared", "jumped", "skyrocketed",
+                    "plunged", "collapsed", "tumbled", "sold off sharply",
+                    "rose sharply", "fell sharply",
+                }
+                cited_strong = [w for w in _STRONG_MOVES if w in prose_str.lower()]
+                if cited_strong:
+                    violations.append(
+                        f"{snap_key}: snapshot {truth_pct:+.2f}% (essentially flat) "
+                        f"but equities_commentary uses strong directional language: {cited_strong}"
+                    )
+            continue
         cited = _first_pct(prose_str) if kw is None else _pct_after_keyword(prose_str, kw)
         if cited is None:
             continue
@@ -2009,6 +2426,44 @@ def _rewrite_pct_sign_after_keyword(text: str, keyword: str, truth_pct: float) -
     return text[:idx] + new_suffix, True
 
 
+def _rewrite_first_pct_magnitude(text: str, truth_pct: float) -> tuple[str, bool]:
+    """Rewrite the first percent figure in `text` to match `truth_pct`'s magnitude.
+    Only fires when signs already agree — sign mismatches are left to _rewrite_first_pct_sign.
+    Idempotent: returns text unchanged if within 0.5pp or signs disagree.
+    Returns (new_text, changed).
+    """
+    if not isinstance(text, str) or not text:
+        return text, False
+    pct_re = re.compile(r"([-+]?)(\d+(?:\.\d+)?)\s*%")
+    m = pct_re.search(text)
+    if not m:
+        return text, False
+    sign_str, mag_str = m.group(1), m.group(2)
+    cited = float((sign_str or "") + mag_str)
+    if (cited >= 0) != (truth_pct >= 0):
+        return text, False  # sign mismatch — handled by _rewrite_first_pct_sign
+    if abs(truth_pct - cited) <= 0.5:
+        return text, False  # within tolerance
+    new_pct = f"{sign_str}{abs(truth_pct):.2f}%"
+    return text[:m.start()] + new_pct + text[m.end():], True
+
+
+def _rewrite_pct_magnitude_after_keyword(text: str, keyword: str, truth_pct: float) -> tuple[str, bool]:
+    """Rewrite the first percent figure AFTER `keyword` in `text` to match `truth_pct`'s magnitude.
+    Slices from the keyword position and delegates to _rewrite_first_pct_magnitude.
+    Idempotent. Returns (new_text, changed).
+    """
+    if not isinstance(text, str) or not text:
+        return text, False
+    idx = text.lower().find(keyword.lower())
+    if idx == -1:
+        return text, False
+    new_suffix, changed = _rewrite_first_pct_magnitude(text[idx:], truth_pct)
+    if not changed:
+        return text, False
+    return text[:idx] + new_suffix, True
+
+
 def _correct_sign_mismatches(data: dict, snapshot: dict) -> int:
     """Rewrite sign-flipped percents in narrative fields to match snapshot.
     Mutates data in place. Returns number of corrections applied.
@@ -2067,6 +2522,148 @@ def _correct_sign_mismatches(data: dict, snapshot: dict) -> int:
                     break
             new_bullets.append(corrected)
         data["pre_market_bullets"] = new_bullets
+
+    return fixes
+
+
+def _correct_magnitude_mismatches(data: dict, snapshot: dict) -> int:
+    """Rewrite magnitude-divergent percents in narrative fields to match snapshot.
+    Must run AFTER _correct_sign_mismatches — only fires when signs already agree.
+    Mutates data in place. Returns number of corrections applied. Idempotent.
+    """
+    if not snapshot:
+        return 0
+    fixes = 0
+
+    section_checks = [
+        ("equities_commentary",    "S&P 500",            None),
+        ("commodities_commentary", "WTI Crude",          "wti"),
+        ("commodities_commentary", "Gold",               "gold"),
+        ("currencies_commentary",  "U.S. Dollar (DXY)",  None),
+    ]
+    for narrative_key, snap_key, kw in section_checks:
+        truth_pct = (snapshot.get(snap_key) or {}).get("pct_change")
+        if truth_pct is None or abs(truth_pct) < 0.02:
+            continue
+        prose = data.get(narrative_key)
+        if not isinstance(prose, str):
+            continue
+        if kw is None:
+            new_prose, changed = _rewrite_first_pct_magnitude(prose, truth_pct)
+        else:
+            new_prose, changed = _rewrite_pct_magnitude_after_keyword(prose, kw, truth_pct)
+        if changed:
+            data[narrative_key] = new_prose
+            fixes += 1
+
+    asset_kw = {
+        "s&p":    "S&P 500",
+        "nasdaq": "Nasdaq 100",
+        "wti":    "WTI Crude",
+        "crude":  "WTI Crude",
+        "gold":   "Gold",
+        "dxy":    "U.S. Dollar (DXY)",
+    }
+    bullets = data.get("pre_market_bullets")
+    if isinstance(bullets, list):
+        new_bullets = []
+        for bullet in bullets:
+            if not isinstance(bullet, str):
+                new_bullets.append(bullet)
+                continue
+            btext_lower = bullet.lower()
+            corrected = bullet
+            for kw, snap_key in asset_kw.items():
+                if kw in btext_lower:
+                    truth_pct = (snapshot.get(snap_key) or {}).get("pct_change")
+                    if truth_pct is None or abs(truth_pct) < 0.02:
+                        break
+                    corrected, changed = _rewrite_first_pct_magnitude(corrected, truth_pct)
+                    if changed:
+                        fixes += 1
+                    break
+            new_bullets.append(corrected)
+        data["pre_market_bullets"] = new_bullets
+
+    return fixes
+
+
+def _correct_yield_pct_to_bp(data: dict, snapshot: dict) -> int:
+    """Replace yield-move percent citations with basis-point figures in Calls 2/3 output fields.
+
+    Calls 2/3 (outlook, recap) may write "yields fell 2.14%" where 2.14 is the yield's
+    pct_change — which is meaningless and wrong per NUMBER FIDELITY. This corrector finds
+    the exact pct_change string (e.g. "2.14%") in yield-adjacent fields and replaces it
+    with the correct bp expression (e.g. "10 bps").
+    Mutates data in place. Returns number of corrections applied.
+    """
+    if not snapshot:
+        return 0
+    y10 = snapshot.get("10-Yr Yield") or {}
+    pct_change = y10.get("pct_change")
+    bp_change  = y10.get("bp_change")
+    if pct_change is None or bp_change is None or abs(bp_change) < 1:
+        return 0
+
+    abs_pct = abs(pct_change)
+    bp_abs  = abs(bp_change)
+    bp_sfx  = "bp" if bp_abs == 1 else "bps"
+
+    # Build exact string targets: "2.14%" and "-2.14%" and "+2.14%"
+    targets = {
+        f"{abs_pct:.2f}%",
+        f"-{abs_pct:.2f}%",
+        f"+{abs_pct:.2f}%",
+    }
+    replacement = f"{bp_abs:.0f} {bp_sfx}"
+
+    fields = ["market_outlook_rationale", "cross_asset_synthesis"]
+    fixes = 0
+
+    def _fix_text(text: str) -> tuple[str, bool]:
+        changed = False
+        for t in targets:
+            if t in text:
+                text = text.replace(t, replacement)
+                changed = True
+        return text, changed
+
+    for field in fields:
+        val = data.get(field)
+        if isinstance(val, str):
+            new_val, changed = _fix_text(val)
+            if changed:
+                data[field] = new_val
+                fixes += 1
+
+    # session_recap is a list of strings
+    recap = data.get("session_recap")
+    if isinstance(recap, list):
+        new_recap = []
+        changed_any = False
+        for item in recap:
+            if isinstance(item, str):
+                new_item, ch = _fix_text(item)
+                new_recap.append(new_item)
+                if ch:
+                    changed_any = True
+            else:
+                new_recap.append(item)
+        if changed_any:
+            data["session_recap"] = new_recap
+            fixes += 1
+
+    # asset_class_outlooks is a nested dict
+    aclooks = data.get("asset_class_outlooks")
+    if isinstance(aclooks, dict):
+        for asset_val in aclooks.values():
+            if isinstance(asset_val, dict):
+                rationale = asset_val.get("rationale", "")
+                if isinstance(rationale, str):
+                    new_r, ch = _fix_text(rationale)
+                    if ch:
+                        asset_val["rationale"] = new_r
+                        fixes += 1
 
     return fixes
 
@@ -2234,6 +2831,12 @@ def validate_commentary(data: dict, known_tickers: set = None, snapshot: dict = 
         sign_fixes = _correct_sign_mismatches(data, snapshot)
         if sign_fixes:
             print(f"[CORRECT] Auto-corrected {sign_fixes} sign mismatch(es) in merged commentary.")
+        mag_fixes = _correct_magnitude_mismatches(data, snapshot)
+        if mag_fixes:
+            print(f"[CORRECT] Auto-corrected {mag_fixes} magnitude mismatch(es) in merged commentary.")
+        bp_fixes = _correct_yield_pct_to_bp(data, snapshot)
+        if bp_fixes:
+            print(f"[CORRECT] Auto-corrected {bp_fixes} yield-pct-to-bp citation(s) in merged commentary.")
         violations = _check_numeric_consistency(data, snapshot)
         if violations:
             print(f"[VALIDATE] Numeric consistency violations vs market_snapshot: {violations}")
@@ -2368,8 +2971,11 @@ def enrich_with_historical_returns(
 def main() -> int:
     today = datetime.today().strftime("%Y-%m-%d")
 
-    # Load yesterday's stored levels before fetching so each instrument's
-    # prev_close reference is the value we actually reported last run.
+    # Load yesterday's stored levels so each instrument's prev_close is the value
+    # we actually reported last run.  GUARD: if the existing commentary file is from
+    # TODAY (a same-day re-run), feeding its levels back would make daily pct_change
+    # collapse to ~0 (today-vs-today).  In that case fall back to the most recent
+    # prior-day archive file so contract-roll protection is still available.
     _prev: dict = {}
     if COMMENTARY_PATH.exists():
         try:
@@ -2377,6 +2983,28 @@ def main() -> int:
                 _prev = json.load(_pf)
         except Exception:
             pass
+
+    if _prev.get("report_date") == today:
+        # Same-day re-run detected — source prev_close from prior archive instead.
+        _archive_dir = COMMENTARY_PATH.parent / "commentary_archive"
+        _archive_prev: dict = {}
+        if _archive_dir.exists():
+            _archive_files = sorted(
+                (f for f in _archive_dir.glob("*.json") if f.stem < today),
+                reverse=True,
+            )
+            if _archive_files:
+                try:
+                    with open(_archive_files[0], "r", encoding="utf-8") as _af:
+                        _archive_prev = json.load(_af)
+                    print(f"[DATA] Same-day re-run: using prior archive {_archive_files[0].name} for prev_close.")
+                except Exception:
+                    pass
+        if _archive_prev:
+            _prev = _archive_prev
+        else:
+            print("[DATA] Same-day re-run: no prior archive found — fetchers will use arr[-2] as prev_close.")
+            _prev = {}
 
     print("[DATA] Fetching live market data...")
     snapshot         = fetch_market_snapshot(prev_data=_prev.get("market_snapshot"))
@@ -2398,10 +3026,12 @@ def main() -> int:
     # so the market snapshot table and the yield table always agree on level/direction.
     _tsy_10y = bonds_tbl.get("10-Year Yield")
     if _tsy_10y and _tsy_10y.get("level") is not None:
+        _tsy_chg = _tsy_10y.get("change")
         snapshot["10-Yr Yield"] = {
             "level":      _tsy_10y["level"],
-            "change":     _tsy_10y.get("change"),
+            "change":     _tsy_chg,
             "pct_change": _tsy_10y.get("pct_change"),
+            "bp_change":  round((_tsy_chg or 0) * 100, 1),
         }
         print(f"  [OK] Snapshot 10-Yr synced to Treasury.gov: {_tsy_10y['level']:.3f}%")
 
@@ -2419,6 +3049,9 @@ def main() -> int:
 
     tech_levels      = fetch_technical_levels()
     print(f"  [OK] Technical levels: {len(tech_levels)} assets")
+
+    sector_perf      = fetch_sector_performance()
+    print(f"  [OK] Sectors: {len(sector_perf)} ETFs fetched")
 
     futures_tbl      = fetch_futures_table(prev_data=_prev.get("futures_table"))
     print(f"  [OK] Futures: {len(futures_tbl)} contracts")
@@ -2559,14 +3192,29 @@ def main() -> int:
         "spx_52w_high": tech_levels.get("S&P 500", {}).get("52w_high"),
     }
 
-    # Top earnings by proximity — filter to $2B+ market cap (large/mid-cap only)
+    # Top earnings by proximity — filter to known large-caps or $2B+ market cap.
+    # Symbol-based set is the primary gate; market_cap is a fallback for unlisted names.
+    # (The enrichment in fetch_enrichment.py populates market_cap for up to 40 symbols
+    # per run, prioritising this set — but the set catches them even if enrichment fails.)
+    _PRIORITY_EARNINGS_SYMBOLS = {
+        "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA",
+        "AMD","INTC","QCOM","AVGO","TXN","MU","AMAT","ADI",
+        "JPM","BAC","GS","MS","V","MA","WFC","C","BLK",
+        "JNJ","UNH","XOM","CVX","WMT","HD","TGT","COST",
+        "LOW","TJX","INTU","CRM","ORCL","IBM","ADBE",
+        "DIS","NFLX","CMCSA","NKE","SBUX","MCD","PEP","KO","PG",
+        "ELF","ULTA",
+    }
     _MIN_MKTCAP = 2_000_000_000
     _top_earnings = [
         {"date": e["date"], "symbol": e["symbol"],
          "eps_estimate": e.get("eps_estimate"),
          "hour": e.get("hour") or ""}
         for e in (earnings_cal if isinstance(earnings_cal, list) else [])
-        if e.get("market_cap", _MIN_MKTCAP) >= _MIN_MKTCAP
+        if e.get("symbol") and (
+            e["symbol"] in _PRIORITY_EARNINGS_SYMBOLS
+            or (e.get("market_cap") or 0) >= _MIN_MKTCAP
+        )
     ][:8]
     # Today's earnings — only entries for report_date, with non-null eps_estimate,
     # limited to known large-caps by filtering out empty tickers
@@ -2597,6 +3245,10 @@ def main() -> int:
         "earnings_calendar":         _top_earnings,
         "news_sentiment_summary":    sent_summary,
         "recent_earnings_actuals":   load_recent_earnings_actuals(),
+        "sector_performance":        sector_perf,
+        # item #8: prior-day continuity for outlook call
+        "prior_day_label":           _prev.get("market_outlook_label"),
+        "prior_day_synthesis":       _prev.get("cross_asset_synthesis"),
     }
 
     # Write market data first so snapshot/tables are always fresh.
@@ -2620,7 +3272,10 @@ def main() -> int:
     existing["fed_speakers"]       = fed_speakers
     existing["today_earnings"]     = _today_earnings
     existing["technical_levels"]   = tech_levels
+    existing["sector_performance"] = sector_perf
     existing["report_date"]        = today
+    existing["generated_at"]       = datetime.now(timezone.utc).isoformat()
+    existing["data_source"]        = "yfinance:daily-bar"
     # Enrichment fields — available to email renderer even if LLM skipped.
     # Write a single structured fear_greed block; remove any stale fear_greed_index
     # that may have been written by a previous LLM output or older code path.
@@ -2659,6 +3314,7 @@ def main() -> int:
         existing.pop(_k, None)
 
     DATA_DIR.mkdir(exist_ok=True)
+    _guard_snapshot_drift(snapshot, COMMENTARY_PATH)
     _atomic_write_json(COMMENTARY_PATH, existing)
     print(f"[OK] Market data saved -> {COMMENTARY_PATH}")
 
