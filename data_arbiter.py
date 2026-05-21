@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import requests
 
 ROOT     = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
@@ -184,6 +185,111 @@ def _arbitrate_economics(econ_live: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# 2b. FRED fallback — used when YCharts indicator scraping is empty/stale
+# ---------------------------------------------------------------------------
+_FRED_YIELD_SERIES: dict[str, str] = {
+    "1M":            "DGS1MO",
+    "3M":            "DGS3MO",
+    "6M":            "DGS6MO",
+    "1Y":            "DGS1",
+    "2Y":            "DGS2",
+    "3Y":            "DGS3",
+    "5Y":            "DGS5",
+    "7Y":            "DGS7",
+    "10Y":           "DGS10",
+    "20Y":           "DGS20",
+    "30Y":           "DGS30",
+    "10s2s":         "T10Y2Y",
+    "Breakeven_10Y": "T10YIE",
+    "Fed_Funds":     "DFF",
+    "SOFR":          "SOFR",
+}
+
+_FRED_ECON_SERIES: dict[str, tuple[str, dict]] = {
+    "CPI_YoY":           ("CPIAUCSL",         {"units": "pc1"}),
+    "Core_CPI_YoY":      ("CPILFESL",         {"units": "pc1"}),
+    "PCE_YoY":           ("PCEPI",            {"units": "pc1"}),
+    "Core_PCE_YoY":      ("PCEPILFE",         {"units": "pc1"}),
+    "Unemployment":      ("UNRATE",           {}),
+    "GDP_Growth":        ("A191RL1Q225SBEA",  {}),
+    "Initial_Claims":    ("ICSA",             {}),
+    "Consumer_Sentiment":("UMCSENT",          {}),
+    "PPI_YoY":           ("PPIACO",           {"units": "pc1"}),
+    "Retail_Sales_MoM":  ("RSXFS",            {"units": "pch"}),
+    "Nonfarm_Payrolls":  ("PAYEMS",           {"units": "chg"}),
+    "Fed_Funds":         ("DFEDTARU",         {}),
+}
+
+_FRED_BASE = "https://api.stlouisfed.org/fred/series/observations"
+
+
+def _fred_api_key() -> str:
+    try:
+        from epm_secrets import FRED_API_KEY  # type: ignore[import]
+        return FRED_API_KEY or ""
+    except Exception:
+        return ""
+
+
+def _fred_fetch_series(series_id: str, extra: dict, api_key: str) -> dict:
+    params = {
+        "series_id": series_id,
+        "api_key": api_key,
+        "sort_order": "desc",
+        "limit": 2,
+        "file_type": "json",
+        "observation_end": TODAY_STR,
+        **extra,
+    }
+    r = requests.get(_FRED_BASE, params=params, timeout=10)
+    r.raise_for_status()
+    obs = [o for o in r.json().get("observations", [])
+           if o.get("value") not in (".", None, "")]
+    if not obs:
+        return {}
+    result: dict[str, Any] = {
+        "value": float(obs[0]["value"]),
+        "date":  obs[0]["date"],
+    }
+    if len(obs) > 1:
+        result["prev_value"] = float(obs[1]["value"])
+        result["prev_date"]  = obs[1]["date"]
+    return result
+
+
+def _fetch_fred_yield_curve() -> dict[str, Any]:
+    api_key = _fred_api_key()
+    if not api_key:
+        return {}
+    result: dict[str, Any] = {}
+    for label, series_id in _FRED_YIELD_SERIES.items():
+        try:
+            entry = _fred_fetch_series(series_id, {}, api_key)
+            if entry:
+                result[label] = entry
+        except Exception as exc:
+            print(f"  [FRED yield] {series_id}: {exc}")
+    print(f"[Arbiter/FRED] Yield curve: {len(result)}/{len(_FRED_YIELD_SERIES)} tenors")
+    return result
+
+
+def _fetch_fred_economics() -> dict[str, Any]:
+    api_key = _fred_api_key()
+    if not api_key:
+        return {}
+    result: dict[str, Any] = {}
+    for label, (series_id, extra) in _FRED_ECON_SERIES.items():
+        try:
+            entry = _fred_fetch_series(series_id, extra, api_key)
+            if entry:
+                result[label] = entry
+        except Exception as exc:
+            print(f"  [FRED econ] {series_id}: {exc}")
+    print(f"[Arbiter/FRED] Economics: {len(result)}/{len(_FRED_ECON_SERIES)} indicators")
+    return result
+
+
+# ---------------------------------------------------------------------------
 # 3. Build features_from_ycharts.csv from YCharts scraper data
 # ---------------------------------------------------------------------------
 
@@ -267,27 +373,48 @@ def run_arbitration(yf_commentary: dict | None = None) -> dict:
                    containing yfinance-sourced bonds_table, etc.
     """
     live = _load_json(YCHARTS_LIVE)
+    yc_fresh = bool(live) and _is_fresh(live.get("scrape_date", ""))
 
-    if not live or not _is_fresh(live.get("scrape_date", "")):
-        print("[Arbiter] YCharts data missing or stale  using yfinance only")
-        return {}
+    if not live:
+        print("[Arbiter] YCharts data missing — yield/econ via FRED fallback")
+        live = {}
+    elif not yc_fresh:
+        print(f"[Arbiter] YCharts stale ({live.get('scrape_date','?')}) — yield/econ via FRED fallback")
 
     yf_bonds = {}
     if yf_commentary and "bonds_table" in yf_commentary:
         yf_bonds = yf_commentary["bonds_table"]
 
+    # Use YCharts yield/econ only when fresh; fall back to FRED otherwise.
+    # Check for actual data content, not just key presence (empty {} = failed scrape).
+    yc_yields = live.get("yield_curve", {}) if yc_fresh else {}
+    yc_econ   = live.get("economic", {})    if yc_fresh else {}
+    yc_yields_populated = any(v for v in yc_yields.values() if isinstance(v, dict) and v)
+    yc_econ_populated   = any(v for v in yc_econ.values()   if isinstance(v, dict) and v)
+
+    if not yc_yields_populated:
+        fred_yields = _fetch_fred_yield_curve()
+        merged_yields = {**fred_yields, **{k: v for k, v in yc_yields.items() if v}}
+    else:
+        merged_yields = yc_yields
+
+    if not yc_econ_populated:
+        fred_econ = _fetch_fred_economics()
+        merged_econ = {**fred_econ, **{k: v for k, v in yc_econ.items() if v}}
+    else:
+        merged_econ = yc_econ
+
     arbitrated: dict[str, Any] = {
-        "arbitrated_date":  TODAY_STR,
+        "arbitrated_date":   TODAY_STR,
         "ycharts_scrape_ts": live.get("scrape_ts"),
-        "yield_curve":       _arbitrate_yields(live.get("yield_curve", {}), yf_bonds),
-        "economics":         _arbitrate_economics(live.get("economic", {})),
+        "yield_curve":       _arbitrate_yields(merged_yields, yf_bonds),
+        "economics":         _arbitrate_economics(merged_econ),
     }
 
-    # Build features CSV from scraper data
+    # Build features CSV from scraper funds data (use even if slightly stale)
     if live.get("funds"):
         _build_features_csv(live["funds"])
 
-    # Save arbitrated file
     with open(ARBITRATED, "w", encoding="utf-8") as f:
         json.dump(arbitrated, f, indent=2, default=str)
 

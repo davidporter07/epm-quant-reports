@@ -130,6 +130,31 @@ def _pairwise_rank_loss(pred: torch.Tensor, target: torch.Tensor, temperature: f
     return torch.nn.functional.softplus(-margin).mean()
 
 
+def _top_excess_loss(pred: torch.Tensor, target: torch.Tensor, temperature: float) -> torch.Tensor:
+    p = pred.view(-1)
+    y = target.view(-1)
+    if p.numel() < 2:
+        return p.sum() * 0.0
+    temp = max(float(temperature), 1e-4)
+    centered = p - p.mean()
+    weights = torch.softmax(centered / temp, dim=0)
+    top_return = torch.sum(weights * y)
+    universe_return = y.mean()
+    return -(top_return - universe_return)
+
+
+def _monotonic_rank_loss(pred: torch.Tensor, target: torch.Tensor, quantiles: int) -> torch.Tensor:
+    p = pred.view(-1)
+    y = target.view(-1)
+    if p.numel() < 2:
+        return p.sum() * 0.0
+    q = max(2, int(quantiles))
+    target_scale = torch.std(y, unbiased=False).clamp_min(1e-4) / float(q)
+    target_weights = torch.softmax((y - y.mean()) / target_scale, dim=0).detach()
+    log_probs = torch.log_softmax(p - p.mean(), dim=0)
+    return -(target_weights * log_probs).sum()
+
+
 def _ungrouped_aux_loss(
     pred: torch.Tensor,
     target: torch.Tensor,
@@ -143,6 +168,89 @@ def _ungrouped_aux_loss(
     if loss_name == "rank":
         return _pairwise_rank_loss(pred, aux_target, temperature)
     raise ValueError(f"Unknown auxiliary loss: {loss_name}")
+
+
+def _apply_target_mode(panel: pd.DataFrame, target_mode: str) -> pd.DataFrame:
+    mode = str(target_mode).strip().lower()
+    if mode == "raw":
+        return panel
+    out = panel.copy()
+    target = pd.to_numeric(out[TARGET_COL], errors="coerce")
+    if mode == "date_excess":
+        date_mean = target.groupby(out["Date"], sort=False).transform("mean")
+        out[TARGET_COL] = (target - date_mean).astype(np.float32)
+        return out
+    raise ValueError(f"Unknown target mode: {target_mode}")
+
+
+def _grouped_top_excess_loss(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    dates_ns: torch.Tensor,
+    min_batch_size: int,
+    temperature: float,
+) -> torch.Tensor:
+    losses = []
+    flat_dates = dates_ns.view(-1)
+    for date_ns in torch.unique(flat_dates):
+        mask = flat_dates == date_ns
+        if int(mask.sum().item()) < int(min_batch_size):
+            continue
+        losses.append(_top_excess_loss(pred[mask], target[mask], temperature))
+    if not losses:
+        return pred.sum() * 0.0
+    return torch.stack(losses).mean()
+
+
+def _grouped_monotonic_rank_loss(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    dates_ns: torch.Tensor,
+    min_batch_size: int,
+    quantiles: int,
+) -> torch.Tensor:
+    losses = []
+    flat_dates = dates_ns.view(-1)
+    for date_ns in torch.unique(flat_dates):
+        mask = flat_dates == date_ns
+        if int(mask.sum().item()) < int(min_batch_size):
+            continue
+        losses.append(_monotonic_rank_loss(pred[mask], target[mask], quantiles))
+    if not losses:
+        return pred.sum() * 0.0
+    return torch.stack(losses).mean()
+
+
+def _ticker_exposure_concentration_loss(
+    pred: torch.Tensor,
+    ticker_idx: torch.Tensor,
+    dates_ns: torch.Tensor,
+    ticker_count: int,
+    min_batch_size: int,
+    temperature: float,
+) -> torch.Tensor:
+    p = pred.view(-1)
+    tickers = ticker_idx.view(-1).long()
+    flat_dates = dates_ns.view(-1)
+    if p.numel() < 2 or int(ticker_count) < 2:
+        return p.sum() * 0.0
+
+    exposure = torch.zeros(int(ticker_count), dtype=p.dtype, device=p.device)
+    date_groups = 0
+    temp = max(float(temperature), 1e-4)
+    for date_ns in torch.unique(flat_dates):
+        mask = flat_dates == date_ns
+        if int(mask.sum().item()) < int(min_batch_size):
+            continue
+        weights = torch.softmax((p[mask] - p[mask].mean()) / temp, dim=0)
+        exposure = exposure.scatter_add(0, tickers[mask], weights)
+        date_groups += 1
+
+    if date_groups == 0:
+        return p.sum() * 0.0
+    shares = exposure / exposure.sum().clamp_min(1e-6)
+    uniform_hhi = 1.0 / float(ticker_count)
+    return torch.sum(shares * shares) - uniform_hhi
 
 
 def _center_by_date(pred: np.ndarray, dates_ns: np.ndarray) -> np.ndarray:
@@ -324,6 +432,13 @@ def _train_one(
     direction_min: float,
     hard_gate: bool,
     daily_ic_weight: float,
+    top_excess_weight: float = 0.0,
+    monotonic_weight: float = 0.0,
+    top_excess_temperature: float = 0.05,
+    monotonic_quantiles: int = 5,
+    ticker_concentration_weight: float = 0.0,
+    ticker_concentration_temperature: float = 0.05,
+    target_mode: str = "raw",
     artifact_dir: Path | None = None,
 ) -> dict:
     _set_seed(seed)
@@ -333,6 +448,7 @@ def _train_one(
 
     panel = _ensure_panel_schema(read_panel(panel_path))
     panel = panel[pd.to_numeric(panel[TARGET_COL], errors="coerce").notna()].copy()
+    panel = _apply_target_mode(panel, target_mode)
     cutoff, _ = time_split(panel, val_days)
     train_panel = panel[panel["Date"] < cutoff]
     val_panel = panel[panel["Date"] >= cutoff]
@@ -342,6 +458,7 @@ def _train_one(
     scaler = fit_scaler(train_panel, feature_cols)
     train_ds = PanelSequenceDataset(train_panel, scaler, feature_cols, cfg.seq_len, seed=seed)
     val_ds = PanelSequenceDataset(val_panel, scaler, feature_cols, cfg.seq_len, seed=seed + 1)
+    train_ticker_to_idx = {str(ticker): idx for idx, ticker in enumerate(train_ds._tickers)}
 
     loader_kwargs = {"num_workers": int(num_workers), "pin_memory": pin}
     if int(num_workers) > 0:
@@ -394,6 +511,14 @@ def _train_one(
         f"_rw{str(rank_weight).replace('.', 'p')}"
         f"_nw{str(nll_weight).replace('.', 'p')}"
     )
+    if top_excess_weight > 0:
+        variant = f"{variant}_tew{str(top_excess_weight).replace('.', 'p')}"
+    if monotonic_weight > 0:
+        variant = f"{variant}_mw{str(monotonic_weight).replace('.', 'p')}"
+    if ticker_concentration_weight > 0:
+        variant = f"{variant}_tcw{str(ticker_concentration_weight).replace('.', 'p')}"
+    if str(target_mode).strip().lower() != "raw":
+        variant = f"{variant}_tm{str(target_mode).strip().lower()}"
     if date_grouped_batches:
         variant = f"{variant}_dgb"
     save_dir = Path(artifact_dir) if artifact_dir is not None else EXPERIMENT_DIR
@@ -411,10 +536,16 @@ def _train_one(
     for epoch in range(1, epochs + 1):
         model.train()
         train_losses = []
-        for xb, yb, _, date_ns in train_loader:
+        for xb, yb, tickers, date_ns in train_loader:
             xb = xb.to(device, non_blocking=pin)
             yb = yb.to(device, non_blocking=pin)
             date_ns = date_ns.to(device, non_blocking=pin)
+            if ticker_concentration_weight > 0:
+                ticker_idx = torch.tensor(
+                    [train_ticker_to_idx[str(ticker)] for ticker in tickers],
+                    dtype=torch.long,
+                    device=device,
+                )
             opt.zero_grad(set_to_none=True)
             with torch.amp.autocast("cuda", enabled=use_amp):
                 mu, log_sigma, rank_score = model(xb)
@@ -465,6 +596,42 @@ def _train_one(
                     )
                 )
                 loss = loss + float(rank_weight) * pair_loss
+            if top_excess_weight > 0:
+                top_loss = (
+                    _grouped_top_excess_loss(
+                        rank_loss_input,
+                        yb_loss,
+                        date_ns,
+                        min_date_batch_size,
+                        top_excess_temperature,
+                    )
+                    if date_grouped_batches
+                    else _top_excess_loss(rank_loss_input, yb_loss, top_excess_temperature)
+                )
+                loss = loss + float(top_excess_weight) * top_loss
+            if monotonic_weight > 0:
+                mono_loss = (
+                    _grouped_monotonic_rank_loss(
+                        rank_loss_input,
+                        yb_loss,
+                        date_ns,
+                        min_date_batch_size,
+                        monotonic_quantiles,
+                    )
+                    if date_grouped_batches
+                    else _monotonic_rank_loss(rank_loss_input, yb_loss, monotonic_quantiles)
+                )
+                loss = loss + float(monotonic_weight) * mono_loss
+            if ticker_concentration_weight > 0:
+                ticker_loss = _ticker_exposure_concentration_loss(
+                    rank_loss_input,
+                    ticker_idx,
+                    date_ns,
+                    len(train_ticker_to_idx),
+                    min_date_batch_size,
+                    ticker_concentration_temperature,
+                )
+                loss = loss + float(ticker_concentration_weight) * ticker_loss
 
             amp_scaler.scale(loss).backward()
             amp_scaler.unscale_(opt)
@@ -542,6 +709,13 @@ def _train_one(
             "nll_weight": nll_weight,
             "corr_weight": corr_weight,
             "rank_weight": rank_weight,
+            "top_excess_weight": top_excess_weight,
+            "monotonic_weight": monotonic_weight,
+            "top_excess_temperature": top_excess_temperature,
+            "monotonic_quantiles": monotonic_quantiles,
+            "ticker_concentration_weight": ticker_concentration_weight,
+            "ticker_concentration_temperature": ticker_concentration_temperature,
+            "target_mode": target_mode,
             "aux_target_transform": aux_target_transform,
             "date_grouped_batches": date_grouped_batches,
             "min_date_batch_size": min_date_batch_size,
@@ -579,6 +753,13 @@ def _train_one(
         "nll_weight": nll_weight,
         "corr_weight": corr_weight,
         "rank_weight": rank_weight,
+        "top_excess_weight": top_excess_weight,
+        "monotonic_weight": monotonic_weight,
+        "top_excess_temperature": top_excess_temperature,
+        "monotonic_quantiles": monotonic_quantiles,
+        "ticker_concentration_weight": ticker_concentration_weight,
+        "ticker_concentration_temperature": ticker_concentration_temperature,
+        "target_mode": target_mode,
         "aux_target_transform": aux_target_transform,
         "rank_temperature": rank_temperature,
         "date_grouped_batches": date_grouped_batches,
@@ -646,6 +827,13 @@ def main() -> None:
     ap.add_argument("--nll-weights", default="0.5")
     ap.add_argument("--aux-target-transform", choices=["raw", "demean", "zscore"], default="zscore")
     ap.add_argument("--rank-temperature", type=float, default=0.02)
+    ap.add_argument("--top-excess-weight", type=float, default=0.0)
+    ap.add_argument("--top-excess-temperature", type=float, default=0.05)
+    ap.add_argument("--monotonic-weight", type=float, default=0.0)
+    ap.add_argument("--monotonic-quantiles", type=int, default=5)
+    ap.add_argument("--ticker-concentration-weight", type=float, default=0.0)
+    ap.add_argument("--ticker-concentration-temperature", type=float, default=0.05)
+    ap.add_argument("--target-mode", choices=["raw", "date_excess"], default="raw")
     ap.add_argument("--date-grouped-batches", action="store_true")
     ap.add_argument("--min-date-batch-size", type=int, default=2)
     ap.add_argument("--dates-per-batch", type=int, default=64)
@@ -731,6 +919,13 @@ def main() -> None:
                             selection_score_mode=args.selection_score_mode,
                             direction_min=float(args.direction_min),
                             daily_ic_weight=float(args.daily_ic_weight),
+                            top_excess_weight=float(args.top_excess_weight),
+                            monotonic_weight=float(args.monotonic_weight),
+                            top_excess_temperature=float(args.top_excess_temperature),
+                            monotonic_quantiles=int(args.monotonic_quantiles),
+                            ticker_concentration_weight=float(args.ticker_concentration_weight),
+                            ticker_concentration_temperature=float(args.ticker_concentration_temperature),
+                            target_mode=args.target_mode,
                             hard_gate=bool(args.hard_gate),
                             artifact_dir=args.artifact_dir,
                         )
@@ -774,6 +969,13 @@ def main() -> None:
                 "nll_weights": _parse_floats(args.nll_weights),
                 "corr_weights": _parse_floats(args.corr_weights),
                 "rank_weights": _parse_floats(args.rank_weights),
+                "top_excess_weight": float(args.top_excess_weight),
+                "top_excess_temperature": float(args.top_excess_temperature),
+                "monotonic_weight": float(args.monotonic_weight),
+                "monotonic_quantiles": int(args.monotonic_quantiles),
+                "ticker_concentration_weight": float(args.ticker_concentration_weight),
+                "ticker_concentration_temperature": float(args.ticker_concentration_temperature),
+                "target_mode": args.target_mode,
                 "aux_target_transform": args.aux_target_transform,
                 "hard_gate": bool(args.hard_gate),
                 "ic_min": float(args.ic_min),

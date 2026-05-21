@@ -76,14 +76,52 @@ if STATIC_DIR.exists():
 
 
 @app.middleware("http")
-async def add_cache_headers(request: Request, call_next):
+async def add_security_and_cache_headers(request: Request, call_next):
     response = await call_next(request)
     path = request.url.path
+    # Cache-Control
     if path.startswith('/static/'):
         response.headers.setdefault('Cache-Control', 'public, max-age=604800, immutable')
+    elif path.startswith(('/api/auth/', '/api/user/', '/api/chat')):
+        response.headers['Cache-Control'] = 'no-store'
     elif path.startswith('/api/'):
         response.headers.setdefault('Cache-Control', 'private, max-age=60')
+    # Security headers (applied to every response)
+    response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+    response.headers.setdefault('X-Frame-Options', 'SAMEORIGIN')
+    response.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
+    response.headers.setdefault(
+        'Content-Security-Policy',
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.plot.ly https://cdnjs.cloudflare.com; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; "
+        "font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; "
+        "img-src 'self' data: https:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none';"
+    )
+    # HSTS only over HTTPS (nginx handles TLS termination so we always set it)
+    response.headers.setdefault('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
     return response
+
+
+# ── Simple in-memory sliding-window rate limiter (no external deps) ──────────
+import time as _time
+from collections import defaultdict, deque as _deque
+
+_RL_STORE: dict[str, _deque] = defaultdict(_deque)
+
+
+def _rate_limited(key: str, max_requests: int, window_s: int) -> bool:
+    """Return True if key has exceeded max_requests within window_s seconds."""
+    now = _time.monotonic()
+    dq = _RL_STORE[key]
+    while dq and dq[0] < now - window_s:
+        dq.popleft()
+    if len(dq) >= max_requests:
+        return True
+    dq.append(now)
+    return False
 
 
 engine = TickerSnapshotEngine()
@@ -1068,7 +1106,9 @@ async def api_forgot_password(request: Request, body: ForgotPasswordRequest) -> 
 
 
 @app.post("/api/auth/reset-password")
-async def api_reset_password(body: ResetPasswordRequest) -> JSONResponse:
+async def api_reset_password(request: Request, body: ResetPasswordRequest) -> JSONResponse:
+    if _rate_limited(f"reset:{request.client.host}", max_requests=10, window_s=60):
+        raise HTTPException(status_code=429, detail="Too many requests. Try again later.")
     try:
         user_id = consume_reset_token(body.token.strip())
         reset_password(user_id, body.new_password)
@@ -1906,9 +1946,23 @@ def get_forecast_chart_data() -> dict:
 # AI Chat
 # ---------------------------------------------------------------------------
 
+def _council_is_running() -> bool:
+    """Return True if any deep-analysis job is currently running."""
+    jobs_dir = Path("data/jobs")
+    if not jobs_dir.exists():
+        return False
+    for f in jobs_dir.glob("*.json"):
+        try:
+            if json.loads(f.read_text()).get("status") == "running":
+                return True
+        except Exception:
+            pass
+    return False
+
+
 _CHAT_OLLAMA_HOST = os.getenv("LOCAL_OLLAMA_URL", "http://192.168.1.145:11434")
-_CHAT_OLLAMA_MODEL = os.getenv("LOCAL_OLLAMA_MODEL", "qwen2.5:14b")
-_CHAT_TIMEOUT = int(os.getenv("LOCAL_OLLAMA_TIMEOUT", "60"))
+_CHAT_OLLAMA_MODEL = os.getenv("CHAT_OLLAMA_MODEL", "qwen3.5:4b")
+_CHAT_TIMEOUT = int(os.getenv("LOCAL_OLLAMA_TIMEOUT", "120"))
 
 _CHAT_SYSTEM_PROMPT = """You are EPM Market Intelligence's AI assistant  a concise, professional market strategist.
 You help users understand market data, forecast models, fund metrics, and portfolio strategy.
@@ -2066,13 +2120,24 @@ class ChatRequest(BaseModel):
 
 
 @app.post("/api/chat")
-async def api_chat(body: ChatRequest) -> JSONResponse:
-    """AI market assistant  proxies to local Ollama with market context injected."""
+async def api_chat(request: Request, body: ChatRequest) -> JSONResponse:
+    """AI market assistant — proxies to local Ollama with market context injected."""
     import requests as _req
+
+    if _rate_limited(f"chat:{request.client.host}", max_requests=20, window_s=60):
+        raise HTTPException(status_code=429, detail="Too many requests. Please wait before sending another message.")
+
+    if _council_is_running():
+        raise HTTPException(
+            status_code=409,
+            detail="Investment Council deliberation in progress — chat is paused for ~20 min while the council deliberates. Please try again shortly.",
+        )
 
     message = body.message.strip()
     if not message:
         raise HTTPException(status_code=400, detail="Message is required.")
+    if len(message) > 2000:
+        raise HTTPException(status_code=400, detail="Message exceeds 2000 character limit.")
 
     context = _build_chat_context()
     system_content = _CHAT_SYSTEM_PROMPT.format(context=context)
@@ -2086,7 +2151,8 @@ async def api_chat(body: ChatRequest) -> JSONResponse:
     try:
         resp = _req.post(
             f"{_CHAT_OLLAMA_HOST}/api/chat",
-            json={"model": _CHAT_OLLAMA_MODEL, "messages": messages, "stream": False},
+            json={"model": _CHAT_OLLAMA_MODEL, "messages": messages, "stream": False,
+                  "options": {"num_ctx": 4096}},
             timeout=_CHAT_TIMEOUT,
         )
         resp.raise_for_status()
@@ -2278,6 +2344,13 @@ def deep_analysis_agents(job_id: str, request: Request) -> JSONResponse:
                 timeline.append({"agent": title, "content": body, "round": idx + 1})
 
     return JSONResponse({"ok": True, "agents": agents, "timeline": timeline})
+
+
+@app.get("/api/deep/active")
+def deep_active(request: Request) -> JSONResponse:
+    """Returns {busy: true} if a council analysis is currently running."""
+    _require_user(request)
+    return JSONResponse({"busy": _council_is_running()})
 
 
 if __name__ == "__main__":

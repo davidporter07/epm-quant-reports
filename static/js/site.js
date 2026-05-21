@@ -2995,6 +2995,21 @@ function mountAIChat() {
     const typing = appendTyping();
 
     try {
+      const activeCheck = await fetch('/api/deep/active');
+      if (activeCheck.ok) {
+        const { busy } = await activeCheck.json();
+        if (busy) {
+          typing._clearPhase && typing._clearPhase();
+          typing.remove();
+          appendMsg('assistant', 'Investment Council deliberation in progress — chat is paused for ~20 min while the council deliberates. Please try again shortly.');
+          input.disabled = false;
+          input.focus();
+          return;
+        }
+      }
+    } catch (_) {}
+
+    try {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

@@ -204,6 +204,16 @@ def _asset_table_html(title: str, data_dict: dict) -> tuple[str, list]:
             except Exception:
                 pct_str, color = '', '#6b7280'
             arrow = ''
+        elif is_yield:
+            # Yield daily moves are quoted in basis points, not percent-of-yield.
+            # Use bp_change if available (Treasury.gov path), else derive from change * 100.
+            try:
+                bp_val = float(d.get("bp_change") or float(chg) * 100)
+                pct_str = f'{bp_val:+.1f} bp'
+                color = '#16a34a' if bp_val >= 0 else '#dc2626'
+            except Exception:
+                pct_str, color = '', '#6b7280'
+            arrow = ''
         else:
             arrow = _arrow(pct)
             color = _pct_color(pct)
@@ -590,6 +600,61 @@ def _next_n_trading_days(start: date, n: int) -> list[date]:
     return days
 
 
+def _build_sector_heatmap(sector_perf: list) -> tuple[str, list]:
+    """Compact colored tile bar for 11 SPDR sector ETF daily returns."""
+    if not sector_perf:
+        return '', []
+
+    _short = {
+        "Technology": "Tech", "Financials": "Fin", "Health Care": "Health",
+        "Energy": "Energy", "Consumer Discr": "Disc", "Industrials": "Indus",
+        "Consumer Staples": "Stapl", "Utilities": "Util", "Materials": "Matrl",
+        "Real Estate": "RE", "Communication": "Comm",
+    }
+
+    cells = ''
+    text_parts = []
+    for s in sector_perf:
+        name = s.get('name', '')
+        pct  = s.get('pct_change')
+        short = _short.get(name, name[:5])
+        try:
+            pv = float(pct)
+            pct_str = f'{pv:+.1f}%'
+            if pv >= 1.0:
+                bg, fg = '#16a34a', '#ffffff'
+            elif pv >= 0:
+                bg, fg = '#dcfce7', '#15803d'
+            elif pv >= -1.0:
+                bg, fg = '#fee2e2', '#b91c1c'
+            else:
+                bg, fg = '#dc2626', '#ffffff'
+        except Exception:
+            pct_str = 'N/A'
+            bg, fg = '#f3f4f6', '#6b7280'
+
+        cells += (
+            f'<td style="padding:3px 2px;text-align:center;">'
+            f'<div style="background:{bg};border-radius:5px;padding:4px 3px;min-width:40px;">'
+            f'<div style="font-size:10px;font-weight:700;color:{fg};white-space:nowrap;">'
+            f'{html_lib.escape(short)}</div>'
+            f'<div style="font-size:10px;font-weight:600;color:{fg};">{pct_str}</div>'
+            f'</div></td>'
+        )
+        text_parts.append(f'{short} {pct_str}')
+
+    html_out = (
+        '<div style="margin:10px 0 14px 0;">'
+        '<p style="margin:0 0 5px 0;font-weight:700;color:#1e2a44;font-size:12px;'
+        'text-transform:uppercase;letter-spacing:0.05em;">Sector Performance</p>'
+        f'<table style="border-collapse:collapse;width:100%;">'
+        f'<tr>{cells}</tr>'
+        '</table>'
+        '</div>'
+    )
+    return html_out, text_parts
+
+
 def build_commentary_email_blocks(commentary):
     c = commentary or {}
     prev_day = _last_trading_day(date.today()).strftime('%A, %B %d')
@@ -625,6 +690,8 @@ def build_commentary_email_blocks(commentary):
     _snap_core = {k: _snap_raw[k] for k in _snap_core_order if _snap_raw.get(k)}
     snapshot_html, snap_lines = _asset_table_html('Market Snapshot', _snap_core)
 
+    # ── Sector heatmap ──────────────────────────────────────────────────────
+    sector_html, sector_text = _build_sector_heatmap(c.get('sector_performance') or [])
 
     # ── Pre-Market Look block ────────────────────────────────────────────────
     premarket_html, premarket_txt = _build_premarket_block(c)
@@ -737,6 +804,8 @@ def build_commentary_email_blocks(commentary):
 
     if snapshot_html:
         hp.append(snapshot_html)
+        if sector_html:
+            hp.append(sector_html)
         hp.append(
             f'<p style="margin:10px 0 0 0;font-size:12px;color:#6b7280;">'
             f'Full cross-asset data (Treasury curve, global equity, commodities, currencies &amp; crypto) '
@@ -767,6 +836,8 @@ def build_commentary_email_blocks(commentary):
         tp += scenarios_txt
     if snap_lines:
         tp += ['MARKET SNAPSHOT', ''] + snap_lines + ['']
+    if sector_text:
+        tp += ['SECTORS: ' + '  '.join(sector_text), '']
     tp += [f'Full cross-asset data (Treasury curve, global equity, commodities, currencies & crypto): {GITHUB_LINK}', '']
     tp += ['Full data and disclosures: see report site.', '']
 

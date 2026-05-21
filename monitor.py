@@ -52,7 +52,7 @@ if DEV_MODE:
     print("  DEV MODE: skipping YCharts scrape, charts, PDF, and server sync.")
 
 # ---------------------------------------------------------------------------
-# Background service pause — freeze MiroFish + Kronos during the pipeline so
+# Background service pause — freeze EPM Investment Intelligence Council (Ollama) + Kronos during the pipeline so
 # they don't compete for GPU/VRAM with DL training and commentary generation.
 # SIGSTOP freezes a process in-place (port stays bound, no restart needed).
 # SIGCONT resumes it. atexit ensures thaw runs even if the pipeline crashes.

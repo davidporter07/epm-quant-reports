@@ -12,7 +12,7 @@ Pipeline:
       7x R1  ->  7x R2  ->  7x R3  ->  synthesis
       -> {takes, takes_by_round, enhanced_markdown, raw_markdown}
 
-Runtime on qwen2.5:14b: ~20-25 min (22 Ollama calls).
+Runtime on deepseek-r1:8b: ~45-75 min (22 Ollama calls; model swap on first call ~60s).
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
@@ -28,8 +29,8 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-OLLAMA_URL   = os.environ.get("LOCAL_OLLAMA_URL",   "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("LOCAL_OLLAMA_MODEL", "qwen2.5:14b")
+OLLAMA_URL   = os.environ.get("LOCAL_OLLAMA_URL",    "http://localhost:11434")
+OLLAMA_MODEL = os.environ.get("COUNCIL_OLLAMA_MODEL", "deepseek-r1:8b")
 
 
 # ---------------------------------------------------------------------------
@@ -278,9 +279,9 @@ Synthesis task: identify the real crux of disagreement — do not average the op
 # Ollama and helpers
 # ---------------------------------------------------------------------------
 
-def _call_ollama(prompt: str, timeout: int = 240, mode: str = "factual") -> str:
+def _call_ollama(prompt: str, timeout: int = 600, mode: str = "factual") -> str:
     if mode == "synthesis":
-        options = {"temperature": 0.55, "top_p": 0.9, "top_k": 40, "repeat_penalty": 1.05, "num_ctx": 16384}
+        options = {"temperature": 0.55, "top_p": 0.9, "top_k": 40, "repeat_penalty": 1.05, "num_ctx": 8192}
     else:
         options = {"temperature": 0.2, "top_p": 0.85, "top_k": 20, "repeat_penalty": 1.05, "num_ctx": 8192}
     r = requests.post(
@@ -289,7 +290,12 @@ def _call_ollama(prompt: str, timeout: int = 240, mode: str = "factual") -> str:
         timeout=timeout,
     )
     r.raise_for_status()
-    return r.json().get("response", "").strip()
+    return _strip_reasoning(r.json().get("response", "").strip())
+
+
+def _strip_reasoning(text: str) -> str:
+    """Strip DeepSeek-R1 <think>...</think> blocks before storing analyst takes."""
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
 
 def _extract_section(seed_text: str, header_fragment: str) -> str:
@@ -376,7 +382,7 @@ def _run_persona(
     prompt = _persona_prompt(persona, ticker, key_facts, section)
     t0 = time.time()
     try:
-        take = _call_ollama(prompt, timeout=240)
+        take = _call_ollama(prompt, timeout=600)
     except Exception as exc:
         logger.warning("Persona %s R1 failed: %s", persona.name, exc)
         take = f"[{persona.title} unavailable — {exc}]"
@@ -465,7 +471,7 @@ def _run_debate(
     prompt = _debate_prompt(persona, ticker, key_facts, my_r1_take, others_r1)
     t0 = time.time()
     try:
-        take = _call_ollama(prompt, timeout=300)
+        take = _call_ollama(prompt, timeout=720)
     except Exception as exc:
         logger.warning("Persona %s R2 failed: %s", persona.name, exc)
         take = f"[{persona.title} R2 unavailable — {exc}]"
@@ -560,7 +566,7 @@ def _run_final_position(
     prompt = _final_position_prompt(persona, ticker, key_facts, my_r1_take, my_r2_take, all_r2)
     t0 = time.time()
     try:
-        take = _call_ollama(prompt, timeout=180)
+        take = _call_ollama(prompt, timeout=600)
     except Exception as exc:
         logger.warning("Persona %s R3 failed: %s", persona.name, exc)
         take = f"[{persona.title} R3 unavailable — {exc}]"
@@ -680,7 +686,7 @@ def _chief_analyst_prompt(
         "(volatility_regime).\n\n"
         f"{_FIELD_GLOSSARY}\n\n"
         "Rules: KEY_FACTS numbers override any conflicting number. No blockquotes. "
-        "No mention of MiroFish, swarm, ontology, panorama_search, or the council deliberation format. "
+        "No mention of the internal council deliberation format, swarm mechanics, or ontology processing. "
         "English only. NEVER invent analyst names, product version numbers, event dates, or any "
         "specifics not present in KEY_FACTS or RESEARCH TEAM FINDINGS. "
         "Start with ## Investment Thesis.\n"
@@ -746,7 +752,7 @@ def run_council(
     distill_p = _distill_prompt(ticker, key_facts, takes_by_round)
     t0 = time.time()
     try:
-        distilled_raw = _call_ollama(distill_p, timeout=180)
+        distilled_raw = _call_ollama(distill_p, timeout=480)
     except Exception as exc:
         print(f"[council] Distill Ollama call failed for {ticker}: {exc}", flush=True)
         logger.error("Distill pass failed: %s", exc)

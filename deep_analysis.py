@@ -1,11 +1,11 @@
 """
-deep_analysis.py — Seed document generator for the MiroFish deep analysis pipeline.
+deep_analysis.py — Seed document generator for the EPM Investment Intelligence Council.
 
-Seed doc is structured as labeled analytical perspective sections so MiroFish's
-ontology extractor builds agents from the right entities (Technical Analysis,
-Federal Reserve, Supply Chain Risk, etc.) rather than generic stakeholder roles.
+Seed doc is structured as labeled analytical perspective sections so each council
+analyst receives focused context (Technical Analysis, Federal Reserve, Supply Chain
+Risk, etc.) rather than a generic data dump.
 
-Each section header IS the entity name — agents reason from the data in their section.
+Each section header frames the analytical domain for the persona that reads it.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from earnings_refresh import load_recent_earnings_release, ticker_variants
 from news_store import load_news_store
 from universe_config import get_portfolio_tickers
 
-KRONOS_URL = "http://192.168.1.145:8100"
+KRONOS_URL = "http://127.0.0.1:8100"
 DATA_DIR = Path("data")
 
 _EPM_MODEL_FILES: Dict[str, Tuple[str, str]] = {
@@ -554,10 +554,10 @@ def _scenario_label(implied_move: float, scenarios: List[List[dict]], idx: int) 
 
 def build_seed_doc(ticker: str, pred_len: int = 5) -> Tuple[str, Dict[str, Any]]:
     """
-    Build a MiroFish seed document structured as analytical perspective sections.
+    Build an EPM Investment Intelligence Council seed document structured as analytical perspective sections.
 
-    Section headers act as entity names for MiroFish's ontology extractor, seeding
-    agents that reason from technical data, macro context, supply chain risk, etc.
+    Section headers frame the analytical domain for each council persona, ensuring
+    each analyst reasons from targeted data relevant to their specialty.
 
     Returns (seed_text, key_facts). key_facts is a flat dict of authoritative
     numbers for the downstream LLM post-processor to use as ground truth, so it
@@ -597,7 +597,7 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> Tuple[str, Dict[str, Any]]
     ]
 
     # ── SIMULATION PARTICIPANTS ───────────────────────────────────────────────
-    # Placed before content sections so MiroFish NER picks these up as the dominant named entities
+    # Placed before content sections so council personas recognize these as the primary discussion subjects
     lines.append("── SIMULATION PARTICIPANTS ──────────────────────────────────────────────────")
     lines.append("Seven specialist analysts provide perspectives on this stock:")
     lines.append(f"- TECHNICAL ANALYST: interprets price action, RSI, volatility regime, relative performance, and overnight flow data for {ticker}")

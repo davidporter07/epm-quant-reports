@@ -302,7 +302,23 @@ def _login(ctx, creds: dict) -> "Page":
     page.fill('input[name="password"], input[type="password"]',
               creds["password"])
     page.click('button[type="submit"], button:has-text("Sign In")')
-    page.wait_for_url("**/dashboard/**", timeout=15000)
+    # Wait for navigation away from login. The dashboard URL pattern changed — match
+    # any redirect that takes us off the login page rather than requiring "dashboard".
+    try:
+        page.wait_for_url("**/dashboard/**", timeout=8000)
+    except Exception:
+        try:
+            # Accept any URL that no longer contains "login"
+            page.wait_for_function(
+                "() => !window.location.href.includes('/login') && !window.location.href.includes('/accounts/')",
+                timeout=10000,
+            )
+        except Exception:
+            cur_url = page.url
+            if "login" in cur_url.lower() or "accounts" in cur_url.lower():
+                raise RuntimeError(f"YCharts login failed — still on login/accounts page: {cur_url}")
+            # URL looks clean — proceed anyway
+    print(f"[YCharts] Logged in, now at: {page.url}")
     return page
 
 
@@ -490,20 +506,28 @@ def run_scraper() -> dict:
                 try:
                     parsed = _scrape_indicator_page(page, slug)
                     results["yield_curve"][label] = parsed
-                    print(f"  {label:15s} {parsed.get('value','?')} ({parsed.get('date','?')})")
+                    v = parsed.get('value', '?')
+                    d = parsed.get('date', '?')
+                    status = f"{v} ({d})" if v != '?' else "[EMPTY — selector miss]"
+                    print(f"  {label:15s} {status}")
                 except Exception as e:
                     print(f"  [WARN] {label}: {e}")
                     results["yield_curve"][label] = {}
+                time.sleep(1.2)  # avoid triggering YCharts rate-limiting
 
             print("[YCharts] Scraping economic indicators...")
             for label, slug in ECONOMIC_INDICATORS.items():
                 try:
                     parsed = _scrape_indicator_page(page, slug)
                     results["economic"][label] = parsed
-                    print(f"  {label:25s} {parsed.get('value','?')} ({parsed.get('date','?')})")
+                    v = parsed.get('value', '?')
+                    d = parsed.get('date', '?')
+                    status = f"{v} ({d})" if v != '?' else "[EMPTY — selector miss]"
+                    print(f"  {label:25s} {status}")
                 except Exception as e:
                     print(f"  [WARN] {label}: {e}")
                     results["economic"][label] = {}
+                time.sleep(1.2)
         finally:
             try:
                 browser1.close()

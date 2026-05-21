@@ -51,6 +51,7 @@ httpx==0.28.1
 idna==3.10
 importlib_metadata==8.7.1
 itsdangerous==2.2.0
+json-repair==0.44.1
 Jinja2==3.1.4
 jiter==0.13.0
 joblib==1.5.1

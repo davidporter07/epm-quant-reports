@@ -65,7 +65,7 @@ def run(cmd: list[str]) -> int:
 
 
 # Files that live on the server and must not be overwritten from local.
-_SERVER_MANAGED = {"jwt_secret.key", "users.db"}
+_SERVER_MANAGED = {"jwt_secret.key", "users.db", "earnings_calendar.json"}
 
 
 def _scp_dir(local: Path, remote: str, key_args: list[str]) -> int:
@@ -85,7 +85,11 @@ def _scp_dir(local: Path, remote: str, key_args: list[str]) -> int:
         if not items:
             return 0
         cmd = ["scp", *key_args, "-r"] + [str(p) for p in items] + [f"{dest_user_host}:{dest_path}/"]
-        return subprocess.call(cmd)
+        try:
+            return subprocess.run(cmd, timeout=300).returncode
+        except subprocess.TimeoutExpired:
+            print(f"[WARN] scp timed out after 300s for {local} — skipping")
+            return 1
 
 
 def sync_to_server():
@@ -112,8 +116,11 @@ def sync_to_server():
         local = Path(fname)
         if not local.exists():
             continue
-        rc = subprocess.call(["scp", *key_args, str(local), f"{dest}:{SERVER_PATH}/{fname}"],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            rc = subprocess.run(["scp", *key_args, str(local), f"{dest}:{SERVER_PATH}/{fname}"],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60).returncode
+        except subprocess.TimeoutExpired:
+            rc = 1
         if rc == 0:
             print(f"[SYNC] {fname} -> server [OK]")
         else:
@@ -175,6 +182,27 @@ def main():
             print("[earnings_calendar] All watched ticker dates are current.")
     except Exception as e:
         print(f"[WARN] earnings_calendar refresh failed: {e}")
+
+    # Archive today's commentary for future QLoRA training data
+    _src = Path("data") / "latest_commentary.json"
+    if _src.exists():
+        try:
+            import json as _json
+            _c = _json.loads(_src.read_text(encoding="utf-8"))
+            _date_key = _c.get("report_date") or _c.get("narrative_source_date") or ""
+            if not _date_key:
+                from datetime import date as _dt
+                _date_key = _dt.today().isoformat()
+            _archive_dir = Path("data") / "commentary_archive"
+            _archive_dir.mkdir(exist_ok=True)
+            _dest = _archive_dir / f"{_date_key}.json"
+            if not _dest.exists():
+                _dest.write_text(_src.read_text(encoding="utf-8"), encoding="utf-8")
+                print(f"[commentary_archive] Archived {_date_key}.json")
+            else:
+                print(f"[commentary_archive] {_date_key}.json already exists, skipping.")
+        except Exception as _e:
+            print(f"[WARN] Commentary archive failed: {_e}")
 
     # Sync output to server
     sync_to_server()

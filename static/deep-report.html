@@ -173,11 +173,50 @@
     }
 
     @media print {
-      .report-actions, .back-link, .agent-tabs { display: none !important; }
-      #agentListWrap, #agentTimelineWrap, #debateMapWrap { display: block !important; }
+      /* ── Hide UI chrome ── */
+      .report-actions, .back-link, .agent-tabs,
+      #epmChrome, .site-nav, .site-header { display: none !important; }
+
+      /* ── Force light presentation ── */
+      *, *::before, *::after {
+        background: white !important;
+        color: #111 !important;
+        border-color: #ccc !important;
+        box-shadow: none !important;
+        text-shadow: none !important;
+      }
+
+      /* ── Restore semantic colors after blanket override ── */
+      .recommendation-chip--overweight { color: #1a7a3c !important; border-color: #1a7a3c !important; }
+      .recommendation-chip--underweight { color: #b91c1c !important; border-color: #b91c1c !important; }
+      .recommendation-chip--neutral { color: #444 !important; border-color: #888 !important; }
+
+      /* ── Layout ── */
+      body, .report-page { margin: 0; padding: 0; }
+      .memo-content, .md-content { font-size: 11pt; line-height: 1.6; }
+      .md-content h2 { font-size: 14pt; font-weight: 700; margin: 18pt 0 6pt; border-bottom: 1px solid #ccc; padding-bottom: 3pt; }
+      .md-content h3 { font-size: 12pt; font-weight: 700; margin: 12pt 0 4pt; }
+      .md-content p  { margin: 0 0 8pt; }
+      .md-content strong { font-weight: 700; }
+      .md-content code { font-family: monospace; font-size: 9.5pt; background: #f0f0f0 !important; padding: 0 3pt; }
+
+      /* ── Page breaks ── */
       .council-section-divider { break-before: page; }
-      #agentActivity { display: block !important; }
-      #councilDivider { display: block !important; }
+      #agentListWrap, #agentTimelineWrap, #debateMapWrap,
+      #agentActivity, #councilDivider { display: block !important; }
+
+      /* ── Section cards ── */
+      .section-card, .investment-memo-card {
+        border: 1px solid #ddd !important;
+        border-radius: 4px !important;
+        padding: 12pt !important;
+        margin-bottom: 12pt !important;
+        break-inside: avoid;
+      }
+
+      /* ── Council chat entries ── */
+      .dc-chat { border: 1px solid #ddd !important; }
+      .dc-msg-text { color: #111 !important; }
     }
   </style>
 </head>

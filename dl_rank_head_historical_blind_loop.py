@@ -198,12 +198,20 @@ def run_loop(args: argparse.Namespace) -> tuple[pd.DataFrame, dict]:
                     direction_min=0.5085,
                     hard_gate=True,
                     daily_ic_weight=0.75,
+                    top_excess_weight=float(args.top_excess_weight),
+                    monotonic_weight=float(args.monotonic_weight),
+                    top_excess_temperature=float(args.top_excess_temperature),
+                    monotonic_quantiles=int(args.monotonic_quantiles),
+                    ticker_concentration_weight=float(args.ticker_concentration_weight),
+                    ticker_concentration_temperature=float(args.ticker_concentration_temperature),
+                    target_mode=args.target_mode,
                     artifact_dir=artifact_dir,
                 )
             )
 
-        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-        result_path = RESULTS_DIR / f"{cycle_name}_results.json"
+        result_dir = RESULTS_DIR / args.output_stem
+        result_dir.mkdir(parents=True, exist_ok=True)
+        result_path = result_dir / f"{cycle_name}_results.json"
         with result_path.open("w", encoding="utf-8") as f:
             json.dump(
                 {
@@ -327,6 +335,13 @@ def main() -> None:
     ap.add_argument("--nll-weight", type=float, default=0.5)
     ap.add_argument("--aux-target-transform", choices=["raw", "demean", "zscore"], default="zscore")
     ap.add_argument("--rank-temperature", type=float, default=0.02)
+    ap.add_argument("--top-excess-weight", type=float, default=0.0)
+    ap.add_argument("--top-excess-temperature", type=float, default=0.05)
+    ap.add_argument("--monotonic-weight", type=float, default=0.0)
+    ap.add_argument("--monotonic-quantiles", type=int, default=5)
+    ap.add_argument("--ticker-concentration-weight", type=float, default=0.0)
+    ap.add_argument("--ticker-concentration-temperature", type=float, default=0.05)
+    ap.add_argument("--target-mode", choices=["raw", "date_excess"], default="raw")
     ap.add_argument("--daily-ic-min", type=float, default=-0.02)
     ap.add_argument("--spread-min", type=float, default=0.0)
     ap.add_argument("--spread-positive-rate-min", type=float, default=0.55)

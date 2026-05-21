@@ -326,8 +326,22 @@ def fetch_earnings_calendar() -> list[dict]:
                 "hour":            str(e.get("hour", "")),  # "bmo" | "amc" | ""
             })
         out.sort(key=lambda x: x["date"])
-        # Enrich with market cap so downstream can filter microcaps
-        _symbols = [e["symbol"] for e in out[:20] if e.get("symbol")]
+        # Enrich with market cap — prioritize known large-caps first so they
+        # aren't crowded out by microcaps that sort earlier alphabetically.
+        # Today's list can have 80+ entries; without this, out[:20] is all noise.
+        _LARGE_CAP_PRIORITY = {
+            "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA",
+            "AMD","INTC","QCOM","AVGO","TXN","MU","AMAT","ADI",
+            "JPM","BAC","GS","MS","V","MA","WFC","C","BLK",
+            "JNJ","UNH","XOM","CVX","WMT","HD","TGT","COST",
+            "LOW","TJX","INTU","CRM","ORCL","IBM","ADBE",
+            "DIS","NFLX","CMCSA","NKE","SBUX","MCD","PEP","KO","PG",
+            "ELF","ULTA",
+        }
+        _all_syms  = [e["symbol"] for e in out if e.get("symbol")]
+        _priority  = [s for s in _all_syms if s in _LARGE_CAP_PRIORITY]
+        _others    = [s for s in _all_syms if s not in _LARGE_CAP_PRIORITY]
+        _symbols   = (_priority + _others)[:40]
         if _symbols:
             try:
                 import yfinance as yf
@@ -838,9 +852,10 @@ def fetch_sec_insider_activity(
         "days_back":        days_back,
         "as_of":            _TODAY,
     }
+    _ratio_str = f"{buy_ratio:.2f}" if buy_ratio is not None else "N/A"
     print(
         f"[ENRICH] SEC insider: {len(buys)} buys / {len(sells)} sells "
-        f"(ratio {buy_ratio:.2f}) | net ${net_value:+.1f}M "
+        f"(ratio {_ratio_str}) | net ${net_value:+.1f}M "
         f"across {len(symbols)} companies in last {days_back}d"
     )
     return {"transactions": transactions, "summary": summary}

@@ -1,0 +1,51 @@
+{
+  "ticker": "SPY",
+  "lookback_years": 12,
+  "n_states": 4,
+  "feature_names": [
+    "rv_20",
+    "vol_ratio",
+    "ret_5d",
+    "range_ratio"
+  ],
+  "state_labels": {
+    "2": "bull_quiet",
+    "0": "bear_quiet",
+    "1": "bull_volatile",
+    "3": "bear_stress"
+  },
+  "means": {
+    "bear_quiet": {
+      "rv_20": 0.14558893286624527,
+      "vol_ratio": 0.886348565032993,
+      "ret_5d": 0.002986190795266092,
+      "range_ratio": 0.01103695099247099
+    },
+    "bull_volatile": {
+      "rv_20": 0.22926655852378303,
+      "vol_ratio": 1.3125794479451256,
+      "ret_5d": 0.0005079220918090465,
+      "range_ratio": 0.016807488038734254
+    },
+    "bull_quiet": {
+      "rv_20": 0.08693145836759537,
+      "vol_ratio": 0.647835721223596,
+      "ret_5d": 0.005154059706723428,
+      "range_ratio": 0.007135900569333876
+    },
+    "bear_stress": {
+      "rv_20": 0.4870010888735804,
+      "vol_ratio": 2.248743625902818,
+      "ret_5d": -0.020566587656360342,
+      "range_ratio": 0.034199963370763295
+    }
+  },
+  "fit_date": "2026-05-17",
+  "fit_days": 2785,
+  "converged": true,
+  "log_likelihood": 24329.4756572118,
+  "as_of_date": "2026-05-15",
+  "current_state": 2,
+  "current_label": "bull_quiet",
+  "is_stress": false
+}

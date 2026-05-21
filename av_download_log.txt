@@ -19,3 +19,17 @@
   AV daily limit exhausted at ticker 25/218 — stopping download. Re-run tomorrow.
   AV rate limit: We have detected your API key as [REDACTED] and our standard API rate limit is 2
   AV daily limit exhausted at ticker 25/194 — stopping download. Re-run tomorrow.
+  AV rate limit: We have detected your API key as [REDACTED] and our standard API rate limit is 2
+  AV daily limit exhausted at ticker 25/170 — stopping download. Re-run tomorrow.
+  AV rate limit: We have detected your API key as [REDACTED] and our standard API rate limit is 2
+  AV daily limit exhausted at ticker 26/146 — stopping download. Re-run tomorrow.
+  AV rate limit: We have detected your API key as [REDACTED] and our standard API rate limit is 2
+  AV daily limit exhausted at ticker 26/121 — stopping download. Re-run tomorrow.
+  AV rate limit: We have detected your API key as [REDACTED] and our standard API rate limit is 2
+  AV daily limit exhausted at ticker 25/96 — stopping download. Re-run tomorrow.
+  AV rate limit: We have detected your API key as [REDACTED] and our standard API rate limit is 2
+  AV daily limit exhausted at ticker 25/72 — stopping download. Re-run tomorrow.
+  AV rate limit: We have detected your API key as [REDACTED] and our standard API rate limit is 2
+  AV daily limit exhausted at ticker 26/48 — stopping download. Re-run tomorrow.
+  AV rate limit: We have detected your API key as [REDACTED] and our standard API rate limit is 2
+  AV daily limit exhausted at ticker 1/41 — stopping download. Re-run tomorrow.

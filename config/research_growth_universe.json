@@ -1,0 +1,37 @@
+{
+  "_comment": "DL-only large-growth/AI/semis/software research universe. This is not the published forecasting universe.",
+  "version": "1.0",
+  "created": "2026-05-11",
+  "tickers": [
+    "AAPL",
+    "MSFT",
+    "AMZN",
+    "NVDA",
+    "GOOG",
+    "META",
+    "TSLA",
+    "NFLX",
+    "AMD",
+    "AVGO",
+    "QCOM",
+    "TXN",
+    "CRM",
+    "ADBE",
+    "ORCL",
+    "CSCO",
+    "INTC",
+    "NOW",
+    "PANW",
+    "PLTR",
+    "MU",
+    "AMAT",
+    "LRCX",
+    "SNPS"
+  ],
+  "notes": {
+    "size": "24 tickers",
+    "scope": "MAG7 plus large liquid growth, AI, semiconductor, infrastructure, and software names.",
+    "purpose": "Broaden DL rank-head research without changing production forecasting page coverage.",
+    "published_universe": "Unchanged. This config is only for data/experiment panels and blind-loop tests."
+  }
+}

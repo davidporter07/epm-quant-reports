@@ -1,7 +1,7 @@
 """
 deep_analysis_worker.py — Sequential job queue for the deep analysis pipeline.
 
-Pipeline (post-MiroFish):
+Pipeline (EPM Investment Intelligence Council):
   Step 0: build_seed_doc  -> seed_text + key_facts
   Step 1: run_council     -> 7 persona Ollama calls + 1 synthesis call
 
