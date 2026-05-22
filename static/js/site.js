@@ -1577,6 +1577,33 @@ async function initMarketsPage() {
             </div>`;
         }
       }
+      if (data.ok && data.commentary?.topic_spotlight) {
+        const sp = data.commentary.topic_spotlight;
+        const spotlightWrap = document.getElementById('marketsTopicSpotlight');
+        const spotlightContent = document.getElementById('marketsTopicSpotlightContent');
+        if (spotlightWrap && spotlightContent && sp.title && sp.body) {
+          const bodyParas = sp.body.split(/\n\n+/).map(p =>
+            `<p class="market-copy">${escapeHtml(p.trim())}</p>`
+          ).join('');
+          const funds = Array.isArray(sp.funds) && sp.funds.length
+            ? `<div class="spotlight-funds">
+                <div class="briefing-col-title" style="margin-top:1rem;">Related Funds &amp; Vehicles</div>
+                ${sp.funds.map(f => `
+                  <div class="spotlight-fund-row">
+                    <span class="spotlight-fund-ticker">${escapeHtml(f.ticker || '')}</span>
+                    <span class="spotlight-fund-name">${escapeHtml(f.name || '')}</span>
+                    <span class="spotlight-fund-type">${escapeHtml(f.type || '')}</span>
+                    <span class="spotlight-fund-note">${escapeHtml(f.exposure_note || '')}</span>
+                  </div>`).join('')}
+              </div>`
+            : '';
+          spotlightContent.innerHTML = `
+            <div class="briefing-col-title">${escapeHtml(sp.title)}</div>
+            ${bodyParas}
+            ${funds}`;
+          spotlightWrap.style.display = '';
+        }
+      }
     }
   } catch (_) {}
 

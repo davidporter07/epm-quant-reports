@@ -1191,6 +1191,35 @@ def build_synthesis_html(commentary: dict) -> str:
 <p class="commentary-p synthesis-p">{esc(text)}</p>"""
 
 
+def build_topic_spotlight_html(commentary: dict) -> str:
+    sp = commentary.get("topic_spotlight")
+    if not sp or not sp.get("title") or not sp.get("body"):
+        return ""
+    title = esc(str(sp.get("title", "")))
+    paras = "".join(
+        f'<p class="commentary-p">{esc(p.strip())}</p>'
+        for p in str(sp.get("body", "")).split("\n\n")
+        if p.strip()
+    )
+    funds = sp.get("funds") or []
+    fund_rows = "".join(
+        f'<tr><td class="fund-ticker"><strong>{esc(str(f.get("ticker",""))).upper()}</strong></td>'
+        f'<td>{esc(str(f.get("name","")) )}</td>'
+        f'<td>{esc(str(f.get("type","")) )}</td>'
+        f'<td>{esc(str(f.get("exposure_note","")) )}</td></tr>'
+        for f in funds if isinstance(f, dict)
+    )
+    fund_block = f"""
+<div class="sec-header" style="margin-top:1rem;">Related Funds &amp; Vehicles</div>
+<table class="data-tbl"><thead><tr>
+  <th>Ticker</th><th>Name</th><th>Type</th><th>Exposure</th>
+</tr></thead><tbody>{fund_rows}</tbody></table>""" if fund_rows else ""
+    return f"""
+<div class="sec-header">Market Spotlight</div>
+<div class="sec-subheader">{title}</div>
+{paras}{fund_block}"""
+
+
 def build_page3_html(logo_b64: str, commentary: dict) -> str:
     def para(key: str) -> str:
         text = str(commentary.get(key, "") or "").strip()
@@ -1229,6 +1258,7 @@ def build_page3_html(logo_b64: str, commentary: dict) -> str:
 </div>
 
 {build_synthesis_html(commentary)}
+{build_topic_spotlight_html(commentary)}
 """
 
 

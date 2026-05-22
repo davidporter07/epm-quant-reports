@@ -61,6 +61,13 @@ OLLAMA_HOST    = os.getenv("LOCAL_OLLAMA_URL",     "http://100.101.63.65:11434")
 OLLAMA_MODEL   = os.getenv("COMMENTARY_OLLAMA_MODEL", "qwen3.5:9b")
 OLLAMA_TIMEOUT = int(os.getenv("LOCAL_OLLAMA_TIMEOUT", "900"))
 
+# Topic spotlight: detect dominant news theme, write grounded story with fund tie-ins
+TOPIC_SPOTLIGHT_ENABLED = True
+MIN_TOPIC_HEADLINES     = 4   # min distinct matching headlines to gate the spotlight in
+MIN_TOPIC_SOURCES       = 2   # min distinct sources required
+MAX_CRAWL_ARTICLES      = 5   # max article URLs to crawl for fund grounding
+MAX_SPOTLIGHT_FUNDS     = 5   # max verified funds to cite
+
 ROOT             = Path(__file__).resolve().parent
 DATA_DIR         = ROOT / "data"
 COMMENTARY_PATH  = DATA_DIR / "latest_commentary.json"
@@ -1569,6 +1576,67 @@ JSON template:
 {"scenarios":[{"label":"Hot (...)","thesis":"...","rates":"...","equities":"...","commodities":"...","tickers":["...","...","..."]},{"label":"In Line (...)","thesis":"...","rates":"...","equities":"...","commodities":"...","tickers":["...","...","..."]},{"label":"Cold (...)","thesis":"...","rates":"...","equities":"...","commodities":"...","tickers":["...","...","..."]}],"levels_to_watch":[{"asset":"...","level":0.0,"significance":"..."},{"asset":"...","level":0.0,"significance":"..."},{"asset":"...","level":0.0,"significance":"..."}]}"""
 
 
+# Call 6: Trending-topic spotlight — optional, fires only when one topic dominates the day's news
+SYSTEM_PROMPT_TOPIC_SCAN = """
+You are a financial news editor. Scan today's headlines and decide whether ONE financial topic dominates with unusual market significance.
+
+Return JSON with EXACTLY these 6 keys (no others):
+{"has_spotlight":false,"topic":"","topic_keywords":[],"category":"","why_now":"","candidate_funds":[]}
+
+has_spotlight: true ONLY when a single topic appears in 4 or more headlines from multiple outlets.
+topic: concise name, e.g. "SpaceX IPO Filing", "U.S.-Iran Ceasefire", "NVIDIA Earnings Beat".
+topic_keywords: 2-4 lowercase keywords that uniquely identify this topic, e.g. ["spacex","ipo","spcx"].
+category: exactly one of: ipo, geopolitical, sector_catalyst, macro, earnings.
+why_now: one sentence — what happened today that made this topic financially significant.
+candidate_funds: 2-5 REAL fund or ETF tickers with meaningful exposure to this topic. Only use tickers you are confident exist. Common examples: ARKVX, DXYZ, XOVR for private-company exposure; XLE, USO for oil/energy; SHLD, ITA for defense.
+
+Rules:
+- has_spotlight=false for generic broad-market moves (routine S&P daily move, standard Fed statement, typical earnings).
+- Topics must have direct investment implications: an IPO filing, geopolitical event affecting energy/trade/rates, sector breakthrough, macro regime shift.
+- If no single dominant topic, set has_spotlight=false and all other fields to empty strings or empty arrays.
+
+ONE-SHOT EXAMPLE:
+Input headlines include 6 articles about SpaceX filing an IPO prospectus.
+{"has_spotlight":true,"topic":"SpaceX IPO Filing","topic_keywords":["spacex","ipo","spcx"],"category":"ipo","why_now":"SpaceX formally filed its prospectus targeting NASDAQ at a $1.75T valuation, triggering broad financial media coverage.","candidate_funds":["ARKVX","DXYZ","XOVR","BPTRX"]}
+"""
+
+SYSTEM_PROMPT_TOPIC_SPOTLIGHT = """
+You are a financial analyst writing a sharp spotlight story for a daily market intelligence report. The topic is today's confirmed dominant financial theme.
+
+Return JSON with EXACTLY these 4 keys (no others):
+{"title":"","body":"","funds":[],"category":""}
+
+title: Punchy headline, max 12 words. No filler openers like "Here's What" or "Everything You Need to Know".
+body: 2-3 analytical paragraphs as a SINGLE string. Separate paragraphs with two spaces.
+  Paragraph 1 (required): What happened today and why it matters to markets — cite specific numbers from the headlines.
+  Paragraph 2 (required): Cross-asset or sector implications — which assets, sectors, or funds benefit or face headwinds.
+  Paragraph 3 (optional): One specific near-term catalyst or level for investors to watch.
+funds: Array of fund objects using ONLY tickers from the verified_funds input list. If verified_funds is empty, set funds=[].
+  Each fund object has exactly: ticker, name, type, exposure_note.
+  exposure_note: one qualitative sentence on how the fund relates to the topic. No fabricated percentages or AUM figures.
+category: carry through the category from the input.
+
+Rules:
+- Cite ONLY tickers from verified_funds. Never invent a ticker.
+- Commit to a view. No hedge phrases: "investors should watch", "uncertainty remains", "markets face headwinds" are forbidden.
+- For geopolitical topics: market-impact framing only (energy prices, currency flows, supply chains, rate path implications).
+- Active voice, present tense. No preamble or conclusion. Start body with the event, not with "Today" or "Yesterday".
+
+ONE-SHOT EXAMPLE:
+BAD: "The SpaceX IPO has generated significant interest. Investors should watch how markets react amid uncertainty around valuation."
+GOOD: "SpaceX's formal $1.75T IPO filing places the largest private equity event in history on a mid-June timeline, forcing index inclusion decisions at every major ETF provider and creating a structural buyer base that did not exist at prior mega-cap listings.  The immediate read-through is positive for innovation-focused closed-end and interval funds already holding pre-IPO stakes — secondary pricing in DXYZ and ARKVX has front-run the filing, and advisors seeking exposure before SPCX hits public markets have a shrinking window.  The key variable is index fast-track timing: S&P 500 inclusion requires profitability, which SpaceX demonstrated in 2023; a same-quarter add would force passive funds to absorb an estimated $15B+ in shares."
+
+{"title":"SpaceX Files $1.75T IPO — Pre-Market Exposure Plays Now","body":"SpaceX's formal...","funds":[{"ticker":"DXYZ","name":"Destiny Tech100","type":"CEF","exposure_note":"Closed-end fund with significant pre-IPO SpaceX exposure as its largest portfolio holding."}],"category":"ipo"}
+"""
+
+# Sensational escalation phrases that are stripped from spotlight text.
+# Much narrower than BANNED_PHRASES — factual geopolitical nouns (war, conflict, ceasefire) are allowed.
+SPOTLIGHT_ESCALATION_PHRASES: list[str] = [
+    "all-out war", "world war", "nuclear strike", "nuclear attack", "nuclear war",
+    "apocalyptic", "catastrophic conflict", "total collapse", "economic collapse",
+    "financial armageddon", "global meltdown",
+]
+
 BANNED_PHRASES = [
     "geopolitical tensions", "geopolitical risks", "global uncertainties",
     "global instability", "amid uncertainty", "amid concerns", "amid heightened",
@@ -2164,6 +2232,8 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
         "cross_asset_synthesis",
         # Phase 4: scenario framework
         "scenarios", "levels_to_watch", "scenario_event", "scenario_consensus",
+        # Phase 6: trending-topic spotlight (generated outside call_ollama, listed for documentation)
+        "topic_spotlight",
     }
     unexpected = set(merged) - _ALLOWED_LLM_KEYS
     if unexpected:
@@ -2966,6 +3036,255 @@ def enrich_with_historical_returns(
 
 
 # ---------------------------------------------------------------------------
+# Topic Spotlight helpers
+# ---------------------------------------------------------------------------
+
+def _topic_matches_text(keywords: list[str], text: str) -> bool:
+    lower = text.lower()
+    return any(kw in lower for kw in keywords)
+
+
+def _crawl_article_body(url: str, timeout: int = 8) -> str:
+    """Fetch and extract plain text from a news article URL. Returns empty string on any failure."""
+    if not url or not url.startswith("http"):
+        return ""
+    try:
+        from bs4 import BeautifulSoup
+        r = requests.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+            timeout=timeout,
+        )
+        if r.status_code != 200:
+            return ""
+        content = r.content[:204800]  # cap at 200KB
+        soup = BeautifulSoup(content, "html.parser")
+        for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
+            tag.decompose()
+        return soup.get_text(separator=" ", strip=True)[:8000]
+    except Exception:
+        return ""
+
+
+def _extract_ticker_candidates(text: str) -> list[str]:
+    """Extract potential fund/ETF tickers from article body text."""
+    import re
+    candidates: list[str] = []
+    # Parenthetical groups: (XOVR), (BPTRX, BPTIX)
+    for match in re.findall(r'\(([A-Z]{2,6}(?:,\s*[A-Z]{2,6})*)\)', text):
+        for t in match.split(","):
+            t = t.strip()
+            if 2 <= len(t) <= 6:
+                candidates.append(t)
+    # Uppercase tokens immediately before "ETF", "Fund", or "Trust"
+    for m in re.finditer(r'\b([A-Z]{2,6})\b\s+(?:ETF|Fund|Trust)', text):
+        candidates.append(m.group(1))
+    # Deduplicate preserving order
+    seen: set[str] = set()
+    result: list[str] = []
+    for t in candidates:
+        if t not in seen and not t.isdigit():
+            seen.add(t)
+            result.append(t)
+    return result
+
+
+def _verify_spotlight_fund(ticker: str) -> dict | None:
+    """Verify a ticker resolves to a real fund via OpenBBProvider. Returns None on failure."""
+    try:
+        from providers.openbb_provider import OpenBBProvider
+        profile = OpenBBProvider().get_profile(ticker)
+        if not profile:
+            return None
+        name = str(profile.get("name") or "").strip()
+        if not name or name.upper() == ticker.upper():
+            return None
+        issue_type = str(profile.get("issue_type") or "").upper()
+        long_desc  = str(profile.get("long_description") or profile.get("short_description") or "")
+        # Reject plain equities that aren't fund-like
+        if issue_type in {"EQUITY", "COMMONSTOCK", "STOCK"} and "fund" not in name.lower() and "trust" not in name.lower():
+            return None
+        return {
+            "ticker":      ticker,
+            "name":        name,
+            "type":        issue_type or "Fund",
+            "aum":         profile.get("market_cap"),
+            "description": long_desc[:300],
+        }
+    except Exception:
+        return None
+
+
+def _scrub_spotlight_text(text: str) -> str:
+    """Strip sensational escalation phrases from spotlight text (narrower than BANNED_PHRASES)."""
+    import re
+    for phrase in SPOTLIGHT_ESCALATION_PHRASES:
+        text = re.sub(re.escape(phrase), "", text, flags=re.IGNORECASE)
+    text = re.sub(r"  +", " ", text).strip()
+    return text
+
+
+def generate_topic_spotlight(
+    payload: dict,
+    world_news: list[dict],
+    enrich_news: dict,
+    enrich_co_news: list[dict],
+) -> dict | None:
+    """Detect a trending financial topic and write a grounded spotlight story with verified fund tie-ins.
+
+    Returns the topic_spotlight dict or None when the gate does not fire.
+    """
+    # ── Build headline corpus with source + URL ───────────────────────────────
+    headline_corpus: list[dict] = []
+    for a in (world_news or []):
+        title = str(a.get("title") or "").strip()
+        if title:
+            headline_corpus.append({
+                "text":   title + ("  " + str(a.get("summary") or ""))[:200],
+                "source": str(a.get("source") or "world"),
+                "url":    str(a.get("url") or ""),
+            })
+    for articles in (enrich_news if isinstance(enrich_news, dict) else {}).values():
+        for a in (articles or []):
+            hl = str(a.get("headline") or "").strip()
+            if hl:
+                headline_corpus.append({
+                    "text":   hl + ("  " + str(a.get("summary") or ""))[:200],
+                    "source": str(a.get("source") or "finnhub"),
+                    "url":    str(a.get("url") or ""),
+                })
+    for a in (enrich_co_news if isinstance(enrich_co_news, list) else []):
+        hl = str(a.get("headline") or "").strip()
+        if hl:
+            headline_corpus.append({
+                "text":   hl,
+                "source": str(a.get("source") or "finnhub"),
+                "url":    str(a.get("url") or ""),
+            })
+    if not headline_corpus:
+        return None
+
+    # ── LLM topic scan ────────────────────────────────────────────────────────
+    scan_payload = {
+        "headlines": [{"index": i, "text": h["text"][:300]} for i, h in enumerate(headline_corpus[:40])],
+        "date": payload.get("date", ""),
+    }
+    scan_result: dict = {}
+    try:
+        print("  [SPOTLIGHT] Scanning headlines for dominant topic...")
+        scan_result = _call_ollama_raw(SYSTEM_PROMPT_TOPIC_SCAN, scan_payload)
+    except Exception as exc:
+        print(f"  [SPOTLIGHT] Scan failed: {exc}")
+        return None
+
+    if not scan_result.get("has_spotlight"):
+        print("  [SPOTLIGHT] No dominant topic detected.")
+        return None
+
+    topic          = str(scan_result.get("topic") or "").strip()
+    topic_keywords = [str(k).lower().strip() for k in (scan_result.get("topic_keywords") or []) if k]
+    why_now        = str(scan_result.get("why_now") or "").strip()
+    category       = str(scan_result.get("category") or "").strip()
+    scan_funds     = [str(t).upper().strip() for t in (scan_result.get("candidate_funds") or []) if t]
+
+    if not topic or not topic_keywords:
+        return None
+
+    # ── Deterministic gate ────────────────────────────────────────────────────
+    matching       = [h for h in headline_corpus if _topic_matches_text(topic_keywords, h["text"])]
+    distinct_src   = {h["source"] for h in matching}
+    print(f"  [SPOTLIGHT] '{topic}': {len(matching)} matching headlines, {len(distinct_src)} sources.")
+
+    if len(matching) < MIN_TOPIC_HEADLINES or len(distinct_src) < MIN_TOPIC_SOURCES:
+        print(f"  [SPOTLIGHT] Gate failed (need >={MIN_TOPIC_HEADLINES} headlines, >={MIN_TOPIC_SOURCES} sources).")
+        return None
+
+    # ── Fund grounding: crawl topic articles + verify tickers ─────────────────
+    candidate_tickers = list(scan_funds)
+    crawl_targets = [h["url"] for h in matching if h.get("url", "").startswith("http")]
+    crawled = 0
+    for url in crawl_targets[:MAX_CRAWL_ARTICLES]:
+        print(f"  [SPOTLIGHT] Crawling {url[:80]}...")
+        body = _crawl_article_body(url)
+        if body:
+            candidate_tickers.extend(_extract_ticker_candidates(body))
+            crawled += 1
+    print(f"  [SPOTLIGHT] Crawled {crawled} articles; {len(set(candidate_tickers))} raw candidates.")
+
+    seen_t: set[str] = set()
+    deduped: list[str] = []
+    for t in candidate_tickers:
+        if t not in seen_t and len(t) >= 2:
+            seen_t.add(t)
+            deduped.append(t)
+
+    verified_funds: list[dict] = []
+    for ticker in deduped:
+        if len(verified_funds) >= MAX_SPOTLIGHT_FUNDS:
+            break
+        result = _verify_spotlight_fund(ticker)
+        if result:
+            verified_funds.append(result)
+            print(f"  [SPOTLIGHT] Verified: {ticker} ({result['name']})")
+        else:
+            print(f"  [SPOTLIGHT] Dropped: {ticker}")
+
+    # ── LLM story writing (Call 6) ─────────────────────────────────────────────
+    writer_payload = {
+        "topic":               topic,
+        "category":            category,
+        "why_now":             why_now,
+        "supporting_headlines": [
+            {"headline": h["text"][:300], "source": h["source"]} for h in matching[:10]
+        ],
+        "verified_funds": [
+            {"ticker": f["ticker"], "name": f["name"], "type": f["type"], "description": f["description"]}
+            for f in verified_funds
+        ],
+        "date": payload.get("date", ""),
+    }
+    print(f"  [LLM Call 6] Writing topic spotlight: '{topic}'...")
+    story: dict = {}
+    for attempt in range(3):
+        try:
+            story = _call_ollama_raw(SYSTEM_PROMPT_TOPIC_SPOTLIGHT, writer_payload)
+            if str(story.get("title") or "").strip() and len(str(story.get("body") or "")) > 80:
+                break
+            print(f"  [SPOTLIGHT] Attempt {attempt + 1}: incomplete output, retrying...")
+            story = {}
+        except Exception as exc:
+            print(f"  [SPOTLIGHT] Writer attempt {attempt + 1} failed: {exc}")
+            story = {}
+
+    if not story.get("title") or not story.get("body"):
+        print("  [SPOTLIGHT] No usable story produced — skipping spotlight.")
+        return None
+
+    # ── Validate + scrub ──────────────────────────────────────────────────────
+    title = _scrub_spotlight_text(str(story.get("title") or "").strip())
+    body  = _scrub_spotlight_text(str(story.get("body") or "").strip())
+
+    verified_tickers = {f["ticker"] for f in verified_funds}
+    raw_funds = story.get("funds") or []
+    clean_funds: list[dict] = []
+    for f in (raw_funds if isinstance(raw_funds, list) else []):
+        if not isinstance(f, dict):
+            continue
+        t = str(f.get("ticker") or "").upper().strip()
+        if t in verified_tickers:
+            clean_funds.append({
+                "ticker":       t,
+                "name":         str(f.get("name") or ""),
+                "type":         str(f.get("type") or ""),
+                "exposure_note": _scrub_spotlight_text(str(f.get("exposure_note") or "")),
+            })
+
+    result = {"title": title, "body": body, "funds": clean_funds, "category": category, "topic": topic}
+    print(f"  [SPOTLIGHT] Done: '{title}' ({len(clean_funds)} verified funds).")
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main() -> int:
@@ -3310,6 +3629,7 @@ def main() -> int:
         "session_recap", "watch_today", "international_section",
         "narrative_generated_at", "narrative_source_date", "narrative_source",
         "scenarios", "levels_to_watch", "scenario_event", "scenario_consensus",
+        "topic_spotlight",
     ]:
         existing.pop(_k, None)
 
@@ -3339,8 +3659,25 @@ def main() -> int:
     except Exception as exc:
         print(f"[WARN] Ollama call failed ({exc}) — falling back to deterministic prose.")
 
+    # Topic spotlight — detect dominant news theme (fires regardless of LLM commentary path)
+    _spotlight: dict | None = None
+    if TOPIC_SPOTLIGHT_ENABLED:
+        try:
+            _spotlight = generate_topic_spotlight(
+                payload,
+                world_news=world_news,
+                enrich_news=enrich_news,
+                enrich_co_news=enrich_co_news,
+            )
+        except Exception as _exc:
+            print(f"[WARN] Topic spotlight generation failed: {_exc}")
+
     if llm_ok and commentary:
         existing.update(commentary)
+        if _spotlight:
+            existing["topic_spotlight"] = _spotlight
+        else:
+            existing.pop("topic_spotlight", None)
         existing["narrative_generated_at"] = datetime.now(timezone.utc).isoformat()
         existing["narrative_source_date"]  = today
         existing["narrative_source"]       = "llm"
@@ -3354,6 +3691,10 @@ def main() -> int:
         det = _build_deterministic_market_commentary(snapshot, commodities_tbl, currencies_tbl, bonds_tbl)
         if validate_commentary(det, snapshot=None):
             existing.update(det)
+            if _spotlight:
+                existing["topic_spotlight"] = _spotlight
+            else:
+                existing.pop("topic_spotlight", None)
             existing["narrative_generated_at"] = datetime.now(timezone.utc).isoformat()
             existing["narrative_source_date"]  = today
             existing["narrative_source"]       = "deterministic"
