@@ -14,7 +14,7 @@ from deep_learning_model import TARGET_COL, _ensure_panel_schema, read_panel
 from dl_rank_head_shadow_forecast import HORIZON
 
 
-DEFAULT_PANEL = Path("data/experiment/dl_research_panels/research_growth_24_price_panel.parquet")
+DEFAULT_PANEL = Path("data/experiment/dl_research_panels/research_growth_24_price_earnings_av_panel.parquet")
 DEFAULT_OUT_DIR = Path("data/experiment/growth24_shadow_paper")
 DEFAULT_PLAN_LOG = DEFAULT_OUT_DIR / "growth24_paper_plan_log.csv"
 DEFAULT_FORECAST_LOG = DEFAULT_OUT_DIR / "growth24_shadow_forecast_log.parquet"
