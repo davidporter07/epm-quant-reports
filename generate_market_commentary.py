@@ -936,8 +936,12 @@ def _fetch_fed_speakers_json(today_str: str) -> list[dict]:
         )
         if not _is_speaker or len(title) < 4:
             continue
+        # Titles read "Speech - Governor Lisa D. Cook" / "Discussion - Vice Chair Philip
+        # N. Jefferson". Strip the leading event-kind so the render shows just the role +
+        # name (the topic field already conveys what kind of appearance it is).
+        speaker = title.split(" - ", 1)[1].strip() if " - " in title else title
         out.append({
-            "speaker": title,                                   # "Speech - Governor Lisa D. Cook"
+            "speaker": speaker,                                 # e.g. "Governor Lisa D. Cook"
             "time_et": str(ev.get("time", "")).strip(),
             "venue":   str(ev.get("location", "")).strip()[:160],
             "topic":   str(ev.get("description", "")).strip()[:200],
