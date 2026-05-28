@@ -900,9 +900,56 @@ def fetch_world_news() -> list[dict]:
     return result
 
 
+def _fetch_fed_speakers_json(today_str: str) -> list[dict]:
+    """Today's Fed speaker events from the Fed's structured calendar JSON feed.
+
+    federalreserve.gov/json/calendar.json is the official data behind the HTML calendar —
+    2,500+ events, each with title (e.g. "Speech - Governor Lisa D. Cook"), description
+    (topic), time, month (YYYY-MM), days, type, location. Far more reliable than scraping
+    the rendered HTML (the CSS-selector scrape silently missed Cook & Jefferson on 5/27).
+    Returns [] on any failure so the caller can fall back.
+    """
+    import urllib.request as _ur
+    req = _ur.Request("https://www.federalreserve.gov/json/calendar.json",
+                      headers={"User-Agent": "Mozilla/5.0"})
+    with _ur.urlopen(req, timeout=14) as _resp:
+        raw = _resp.read().decode("utf-8-sig", errors="replace")  # strip BOM
+    events = json.loads(raw)
+    if isinstance(events, dict):
+        events = events.get("events") or events.get("days") or []
+    out: list[dict] = []
+    for ev in (events if isinstance(events, list) else []):
+        # Date = month (YYYY-MM) + zero-padded day.
+        month = str(ev.get("month", "")).strip()
+        day   = str(ev.get("days", "")).strip()
+        if not (month and day):
+            continue
+        ev_date = f"{month}-{int(day):02d}" if day.isdigit() else ""
+        if ev_date != today_str:
+            continue
+        title = str(ev.get("title", "")).strip()
+        etype = str(ev.get("type", "")).strip().lower()
+        # Speaker events: type "Speeches"/"Testimony", or a title naming an official role.
+        _is_speaker = (
+            etype in ("speeches", "testimony")
+            or any(r in title for r in ("Chair", "Governor", "President", "Vice Chair"))
+        )
+        if not _is_speaker or len(title) < 4:
+            continue
+        out.append({
+            "speaker": title,                                   # "Speech - Governor Lisa D. Cook"
+            "time_et": str(ev.get("time", "")).strip(),
+            "venue":   str(ev.get("location", "")).strip()[:160],
+            "topic":   str(ev.get("description", "")).strip()[:200],
+        })
+    return out
+
+
 def fetch_fed_speakers() -> list[dict]:
-    """Return today's Fed speaker events by scraping the Federal Reserve event calendar.
-    Falls back to data/fed_speakers_2026.json if the scrape fails or returns nothing.
+    """Return today's Fed speaker events.
+
+    Primary: the Fed's structured calendar JSON feed (reliable, official). Fallbacks, in
+    order: scraping the HTML calendar, then data/fed_speakers_2026.json.
     Output: list of {"speaker": str, "time_et": str, "venue": str, "topic": str}
     """
     today_str = datetime.today().strftime("%Y-%m-%d")
@@ -919,6 +966,16 @@ def fetch_fed_speakers() -> list[dict]:
         except Exception:
             return []
 
+    # ── Primary: structured JSON feed ─────────────────────────────────────────
+    try:
+        _json_speakers = _fetch_fed_speakers_json(today_str)
+        if _json_speakers:
+            print(f"[FED] {len(_json_speakers)} Fed speaker event(s) today (source: calendar.json).")
+            return _json_speakers
+    except Exception as _exc:
+        print(f"[FED] calendar.json feed failed ({_exc}); trying HTML scrape.")
+
+    # ── Fallback 1: HTML calendar scrape ──────────────────────────────────────
     try:
         import urllib.request as _ur
         from bs4 import BeautifulSoup
@@ -1064,6 +1121,8 @@ def fetch_economic_calendar() -> list[dict]:
         "nonmanufacturing business outlook":           ("ISM Non-Manufacturing",                   "medium"),
         "manufacturing business outlook survey":       ("Philly Fed Manufacturing Index",          "medium"),
         "empire state manufacturing survey":           ("Empire State Manufacturing",              "medium"),
+        "texas manufacturing outlook":                 ("Dallas Fed Manufacturing",                "medium"),
+        "survey of regional conditions and expectations": ("Richmond Fed Survey (SORCE)",          "medium"),
         "harmonized indices of consumer prices":       ("EU CPI / HICP",                          "medium"),
         "national accounts - gdp (eurostat)":          ("Eurozone GDP",                           "medium"),
         "gross domestic product":                      ("GDP Report",                             "high"),
