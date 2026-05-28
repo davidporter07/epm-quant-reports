@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -33,6 +34,7 @@ from dl_growth24_paper_outcome import (
 )
 from dl_rank_head_shadow_forecast import HORIZON
 from refresh_growth24_price_cache import _download_ohlcv, _load_tickers, _merge_cache, FIELD_TO_CACHE
+from quant_cup.earnings_av import download_earnings
 
 
 DEFAULT_STATUS_OUTPUT = Path("data/experiment/growth24_shadow_paper/growth24_paper_maturity_status.json")
@@ -90,6 +92,32 @@ def _refresh_price_cache(ticker_config: Path, start: date, end: date) -> None:
     for field, cache_file in FIELD_TO_CACHE.items():
         values, min_date, max_date = _merge_cache(cache_file, downloaded[field], tickers)
         print(f"Patched {field:<6} values={values:,} cache_range={min_date.date()} -> {max_date.date()}")
+
+
+def _load_env_key(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if value:
+        return value
+    env_path = Path(".env")
+    if not env_path.exists():
+        return ""
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, raw = line.split("=", 1)
+        if key.strip() == name:
+            return raw.strip().strip('"').strip("'")
+    return ""
+
+
+def _refresh_earnings_cache(ticker_config: Path, force_refresh: bool) -> None:
+    tickers = _load_tickers(ticker_config)
+    api_key = _load_env_key("AV_API_KEY")
+    if not api_key:
+        raise RuntimeError("AV_API_KEY is required to refresh Growth24 AV earnings cache.")
+    print(f"Refreshing AV earnings cache for {len(tickers)} Growth24 tickers.")
+    download_earnings(tickers, api_key, force_refresh=bool(force_refresh))
 
 
 def _refresh_panel(ticker_config: Path, panel_output: Path, end: date) -> None:
@@ -232,12 +260,16 @@ def main() -> int:
     ap.add_argument("--alert-output", type=Path, default=DEFAULT_ALERT_OUTPUT)
     ap.add_argument("--ticker-config", type=Path, default=DEFAULT_TICKER_CONFIG)
     ap.add_argument("--refresh-data", action="store_true", help="Refresh yfinance cache and rebuild the AV earnings panel first.")
+    ap.add_argument("--refresh-earnings", action="store_true", help="Refresh stale/missing Growth24 Alpha Vantage earnings cache before panel rebuild.")
+    ap.add_argument("--force-refresh-earnings", action="store_true", help="Force-download Growth24 earnings even when cache files are still fresh.")
     ap.add_argument("--refresh-start", default=None, help="Override price refresh start date.")
     ap.add_argument("--today", default=None, help="Override today's date for checks/tests.")
     ap.add_argument("--strict", action="store_true", help="Exit non-zero when a plan is due/overdue and still pending.")
     args = ap.parse_args()
 
     today = _parse_today(args.today)
+    if args.refresh_earnings:
+        _refresh_earnings_cache(args.ticker_config, bool(args.force_refresh_earnings))
     if args.refresh_data:
         refresh_start = pd.Timestamp(args.refresh_start).date() if args.refresh_start else today
         _refresh_price_cache(args.ticker_config, refresh_start, today)
