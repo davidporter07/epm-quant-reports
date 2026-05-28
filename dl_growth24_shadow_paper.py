@@ -31,19 +31,21 @@ from dl_rank_head_shadow_forecast import HORIZON
 from dl_sign_regularized_experiment import _parse_ints, _resolve_device
 
 
-DEFAULT_PANEL = Path("data/experiment/dl_research_panels/research_growth_24_price_panel.parquet")
+DEFAULT_PANEL = Path("data/experiment/dl_research_panels/research_growth_24_price_earnings_av_panel.parquet")
 DEFAULT_OUT_DIR = Path("data/experiment/growth24_shadow_paper")
 DEFAULT_MODEL_DIR = Path("models/experiment/growth24_shadow_paper")
-DEFAULT_STEM = "growth24_current_8e_date_excess_topmono"
-MODEL_LABEL = "Growth24RankHeadShadowTop3"
-VALIDATED_RESEARCH_ARTIFACT_STEM = "growth24_36c_8e_date_excess_topmono_refreshed"
+DEFAULT_STEM = "growth24_current_8e_stress_drawdown20_w2_seedrobust_2seed"
+MODEL_LABEL = "Growth24RankHeadShadowTop2StressW2"
+VALIDATED_RESEARCH_ARTIFACT_STEM = "growth24_36c_8e_feature_probe_stress_drawdown20_w2_seedrobust_2seed"
 GROWTH24_POLICY_BASIS = {
     "validated_research_artifact_stem": VALIDATED_RESEARCH_ARTIFACT_STEM,
-    "diagnostic_top3_excess": 0.0562,
-    "diagnostic_top3_hit_rate": 0.8056,
-    "cap_aware_top3_cap50_excess": 0.0606,
-    "cap_aware_top3_cap50_coverage": 0.8611,
-    "cap_aware_top3_cap50_max_slot_share": 0.2903,
+    "diagnostic_top2_excess": 0.0614,
+    "diagnostic_top2_hit_rate": 0.7500,
+    "cap_aware_top2_cap50_excess": 0.0626,
+    "cap_aware_top2_cap50_coverage": 0.8611,
+    "cap_aware_top2_cap50_max_slot_share": 0.4194,
+    "final4_top2_stress_spread": 0.0990,
+    "final4_top2_worst_drawdown": -0.0454,
 }
 DEFAULT_GROWTH24_EXTRA_FEATURES = (
     "momentum_12_1,momentum_6_1,momentum_3_1,"
@@ -54,7 +56,12 @@ DEFAULT_GROWTH24_EXTRA_FEATURES = (
     "Market_Ret_5D,Market_Ret_21D,Market_Ret_63D,"
     "Market_Vol_21D,Market_Vol_63D,"
     "Market_Drawdown_63D,Market_Drawdown_252D,Market_Stress_Regime,"
-    "Rel_Ret_5D,Rel_Ret_21D,Rel_Ret_63D"
+    "Rel_Ret_5D,Rel_Ret_21D,Rel_Ret_63D,"
+    "RSI_14,MA_20,MA_50,MA_200,Volume,"
+    "earnings_surprise_last,earnings_beat_rate_4q,days_since_earnings,"
+    "post_earnings_window_active,earnings_surprise_direction,earnings_abs_surprise,"
+    "post_earnings_positive_drift_window,post_earnings_negative_drift_window,"
+    "earnings_surprise_x_atr_regime,earnings_surprise_x_gap_count"
 )
 
 
@@ -207,11 +214,13 @@ def _build_plan_row(
         "ValidationSpreadPositiveRate": float(metrics.get("ValidationSpreadPositiveRate", float("nan"))),
         "RiskGateMaxDrawdown": float(args.risk_gate_max_drawdown),
         "ValidatedResearchArtifactStem": VALIDATED_RESEARCH_ARTIFACT_STEM,
-        "DiagnosticTop3Excess": float(GROWTH24_POLICY_BASIS["diagnostic_top3_excess"]),
-        "DiagnosticTop3HitRate": float(GROWTH24_POLICY_BASIS["diagnostic_top3_hit_rate"]),
-        "CapAwareTop3Cap50Excess": float(GROWTH24_POLICY_BASIS["cap_aware_top3_cap50_excess"]),
-        "CapAwareTop3Cap50Coverage": float(GROWTH24_POLICY_BASIS["cap_aware_top3_cap50_coverage"]),
-        "CapAwareTop3Cap50MaxSlotShare": float(GROWTH24_POLICY_BASIS["cap_aware_top3_cap50_max_slot_share"]),
+        "DiagnosticTop2Excess": float(GROWTH24_POLICY_BASIS["diagnostic_top2_excess"]),
+        "DiagnosticTop2HitRate": float(GROWTH24_POLICY_BASIS["diagnostic_top2_hit_rate"]),
+        "CapAwareTop2Cap50Excess": float(GROWTH24_POLICY_BASIS["cap_aware_top2_cap50_excess"]),
+        "CapAwareTop2Cap50Coverage": float(GROWTH24_POLICY_BASIS["cap_aware_top2_cap50_coverage"]),
+        "CapAwareTop2Cap50MaxSlotShare": float(GROWTH24_POLICY_BASIS["cap_aware_top2_cap50_max_slot_share"]),
+        "Final4Top2StressSpread": float(GROWTH24_POLICY_BASIS["final4_top2_stress_spread"]),
+        "Final4Top2WorstDrawdown": float(GROWTH24_POLICY_BASIS["final4_top2_worst_drawdown"]),
         "GateFailures": "; ".join(failures),
         "SourceResults": str(result_path),
     }
@@ -289,6 +298,10 @@ def run_shadow_paper(args: argparse.Namespace) -> tuple[pd.DataFrame, pd.DataFra
                 ticker_concentration_weight=0.0,
                 ticker_concentration_temperature=0.05,
                 target_mode=args.target_mode,
+                stress_loss_weight=float(args.stress_loss_weight),
+                stress_feature_column=args.stress_feature_column,
+                stress_feature_min=float(args.stress_feature_min),
+                stress_drawdown_threshold=float(args.stress_drawdown_threshold),
                 artifact_dir=artifact_dir,
             )
         )
@@ -304,6 +317,10 @@ def run_shadow_paper(args: argparse.Namespace) -> tuple[pd.DataFrame, pd.DataFra
                 "max_ticker_share": float(args.max_ticker_share),
                 "risk_gate_max_drawdown": float(args.risk_gate_max_drawdown),
                 "min_coverage_research_gate": float(args.research_min_coverage),
+                "stress_loss_weight": float(args.stress_loss_weight),
+                "stress_feature_column": args.stress_feature_column,
+                "stress_feature_min": float(args.stress_feature_min),
+                "stress_drawdown_threshold": float(args.stress_drawdown_threshold),
                 **GROWTH24_POLICY_BASIS,
             },
             "results": result_rows,
@@ -371,6 +388,10 @@ def run_shadow_paper(args: argparse.Namespace) -> tuple[pd.DataFrame, pd.DataFra
             "paper_top_n": int(args.paper_top_n),
             "max_ticker_share": float(args.max_ticker_share),
             "risk_gate_max_drawdown": float(args.risk_gate_max_drawdown),
+            "stress_loss_weight": float(args.stress_loss_weight),
+            "stress_feature_column": args.stress_feature_column,
+            "stress_feature_min": float(args.stress_feature_min),
+            "stress_drawdown_threshold": float(args.stress_drawdown_threshold),
             **GROWTH24_POLICY_BASIS,
         },
     }
@@ -392,7 +413,7 @@ def main() -> None:
     ap.add_argument("--paper-plan-log", type=Path, default=DEFAULT_OUT_DIR / "growth24_paper_plan_log.csv")
     ap.add_argument("--summary-output", type=Path, default=DEFAULT_OUT_DIR / "growth24_current_shadow_summary.json")
     ap.add_argument("--top-n", type=int, default=1)
-    ap.add_argument("--paper-top-n", type=int, default=3)
+    ap.add_argument("--paper-top-n", type=int, default=2)
     ap.add_argument("--max-ticker-share", type=float, default=0.50)
     ap.add_argument("--risk-gate-max-drawdown", type=float, default=-0.35)
     ap.add_argument("--research-min-coverage", type=float, default=0.50)
@@ -402,7 +423,7 @@ def main() -> None:
     ap.add_argument("--min-validation-daily-ic", type=float, default=-0.05)
     ap.add_argument("--min-validation-spread", type=float, default=0.02)
     ap.add_argument("--min-validation-spread-positive-rate", type=float, default=0.45)
-    ap.add_argument("--seeds", default="20260505")
+    ap.add_argument("--seeds", default="20260506,20260507")
     ap.add_argument("--epochs", type=int, default=8)
     ap.add_argument("--batch-size", type=int, default=256)
     ap.add_argument("--val-days", type=int, default=126)
@@ -426,6 +447,10 @@ def main() -> None:
     ap.add_argument("--monotonic-weight", type=float, default=0.05)
     ap.add_argument("--monotonic-quantiles", type=int, default=5)
     ap.add_argument("--target-mode", choices=["raw", "date_excess"], default="date_excess")
+    ap.add_argument("--stress-loss-weight", type=float, default=2.0)
+    ap.add_argument("--stress-feature-column", default="Market_Stress_Regime")
+    ap.add_argument("--stress-feature-min", type=float, default=2.0)
+    ap.add_argument("--stress-drawdown-threshold", type=float, default=-0.20)
     ap.add_argument("--daily-ic-min", type=float, default=-0.02)
     ap.add_argument("--spread-min", type=float, default=0.0)
     ap.add_argument("--spread-positive-rate-min", type=float, default=0.55)
