@@ -573,10 +573,13 @@ def fetch_technical_levels() -> dict[str, dict]:
                         continue
                     grouped.append({"level": lvl, "tag": tag, "recency": idx})
                 # Pick closest 2 support (< current) and 2 resistance (> current),
-                # excluding any further than 15% from current (off the radar).
+                # excluding any further than 15% from current (off the radar) AND any
+                # within 0.25% of current (trivially close — visually looks like an
+                # error e.g. "support 4.48" when the current print is 4.48).
                 _floor, _ceil = current * 0.85, current * 1.15
-                below = [g for g in grouped if _floor <= g["level"] < current]
-                above = [g for g in grouped if current < g["level"] <= _ceil]
+                _near = abs(current) * 0.0025
+                below = [g for g in grouped if _floor <= g["level"] <= current - _near]
+                above = [g for g in grouped if current + _near <= g["level"] <= _ceil]
                 below.sort(key=lambda g: current - g["level"])    # closest first
                 above.sort(key=lambda g: g["level"] - current)
                 support    = [{"level": round(g["level"], 2), "tag": g["tag"]} for g in below[:2]]
