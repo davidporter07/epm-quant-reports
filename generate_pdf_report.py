@@ -1584,6 +1584,65 @@ def build_technical_perspectives_html(commentary: dict) -> str:
 </table>"""
 
 
+def build_support_resistance_html(commentary: dict) -> str:
+    """Pillar 3 — render the deterministic key support/resistance table.
+
+    Reads the `support` and `resistance` arrays populated by fetch_technical_levels.
+    All-numeric, no LLM — matches Sevens-style "key support X / resistance Y" rigor.
+    Returns empty string when the upstream compute is absent so the page just shows
+    the MA table by itself if anything went wrong.
+    """
+    tech = commentary.get("technical_levels") or {}
+    if not tech:
+        return ""
+    display_order = ["S&P 500", "Nasdaq 100", "Gold", "WTI Crude", "10-Yr Yield", "VIX"]
+    rows = ""
+    have_any = False
+    for name in display_order:
+        d = tech.get(name) or {}
+        sup = d.get("support") or []
+        res = d.get("resistance") or []
+        if not sup and not res:
+            continue
+        have_any = True
+
+        def _fmt(entry: dict) -> str:
+            try:
+                lvl = float(entry.get("level"))
+                tag = str(entry.get("tag", ""))
+                # 10-Yr Yield is a percent (e.g. 4.50); everything else gets thousands sep.
+                if name == "10-Yr Yield":
+                    return f"{lvl:.2f}% <span style='color:#6b7280;font-size:9pt;'>({esc(tag)})</span>"
+                return f"{lvl:,.2f} <span style='color:#6b7280;font-size:9pt;'>({esc(tag)})</span>"
+            except Exception:
+                return "—"
+
+        sup_cells = " · ".join(_fmt(s) for s in sup) or "—"
+        res_cells = " · ".join(_fmt(r) for r in res) or "—"
+        rows += f"""
+    <tr>
+      <td class="l">{esc(name)}</td>
+      <td class="r" style="color:#16a34a;">{sup_cells}</td>
+      <td class="r" style="color:#dc2626;">{res_cells}</td>
+    </tr>"""
+
+    if not have_any:
+        return ""
+    return f"""
+<div class="sec-header" style="margin-top:8px;">Key Support &amp; Resistance Levels</div>
+<table class="tech-table">
+  <thead>
+    <tr>
+      <th class="l">Asset</th>
+      <th class="r">Key Support (closest below)</th>
+      <th class="r">Key Resistance (closest above)</th>
+    </tr>
+  </thead>
+  <tbody>{rows}</tbody>
+</table>
+<p class="footnote" style="margin-top:2px;">Levels computed from 90-day price action: swing extrema clustered with MAs and 52-week levels, then filtered to the closest 1-2 above/below the current price. Numeric, not LLM-derived.</p>"""
+
+
 def build_market_outlook_html(commentary: dict) -> str:
     label       = str(commentary.get("market_outlook_label") or "Neutral").strip()
     rationale   = str(commentary.get("market_outlook_rationale") or "").strip()
@@ -1653,6 +1712,92 @@ def build_market_outlook_html(commentary: dict) -> str:
 </table>
 <p class="footnote">Outlook updated {TODAY_LONG}. Near-term outlook covers 4-6 weeks. Long-term outlook reflects 3-6 month fundamental view.
 This page is for informational use and does not constitute investment advice.</p>"""
+
+
+def build_tactical_positioning_html(commentary: dict) -> str:
+    """Pillar 2 — render the deterministic tactical-positioning block.
+
+    Reads `tactical_positioning` (computed in generate_market_commentary.main from the
+    30-fund book + sector tilt + VIX). Returns empty string if absent, so the section
+    silently degrades if the upstream compute failed. Inline-styled to avoid coupling
+    to new CSS classes.
+    """
+    tp = commentary.get("tactical_positioning") or {}
+    stance = str(tp.get("stance") or "").strip()
+    if not stance:
+        return ""
+    detail   = str(tp.get("stance_detail") or "").strip()
+    factor   = str(tp.get("factor_read")   or "").strip()
+    take     = str(tp.get("takeaway")      or "").strip()
+    tops     = tp.get("top_funds")    or []
+    bots     = tp.get("bottom_funds") or []
+
+    # Colour the stance badge from its lead word.
+    low = stance.lower()
+    if low.startswith("risk-on") or low.startswith("pro-cyclical"):
+        badge_cls = "badge-bull"
+    elif low.startswith("risk-off") or low.startswith("defensive"):
+        badge_cls = "badge-caut"
+    else:
+        badge_cls = "badge-neut"
+
+    def _fund_li(f: dict) -> str:
+        tkr = esc(str(f.get("ticker", "")).upper())
+        ret = f.get("ret_1m")
+        try:
+            ret_s = f"{float(ret):+.1f}% 1M"
+        except Exception:
+            ret_s = ""
+        beta = f.get("beta")
+        sharpe = f.get("sharpe")
+        bits = []
+        if sharpe is not None:
+            try:    bits.append(f"Sharpe {float(sharpe):.2f}")
+            except Exception: pass
+        if beta is not None:
+            try:    bits.append(f"β {float(beta):.2f}")
+            except Exception: pass
+        meta = " · ".join(bits)
+        tag  = esc(str(f.get("tag", ""))[:64])
+        meta_html = f'<span style="color:#6b7280;font-size:10pt;"> ({esc(meta)})</span>' if meta else ""
+        tag_html  = f'<span style="color:#374151;font-size:10pt;"> — {tag}</span>' if tag else ""
+        return (f'<li style="margin:2px 0;font-size:11pt;">'
+                f'<strong>{tkr}</strong> <span style="color:#1d4ed8;font-weight:700;">{esc(ret_s)}</span>'
+                f'{meta_html}{tag_html}</li>')
+
+    top_html = "".join(_fund_li(f) for f in tops)
+    bot_html = "".join(_fund_li(f) for f in bots)
+    cols = ""
+    if top_html or bot_html:
+        cols = f"""
+<div style="display:flex;margin-top:6px;">
+  <div style="flex:1;padding-right:8px;">
+    <div style="font-size:10pt;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#16a34a;margin-bottom:3px;">Best-Positioned</div>
+    <ul style="margin:0;padding-left:18px;">{top_html}</ul>
+  </div>
+  <div style="flex:1;padding-left:8px;border-left:1px solid #e5e7eb;">
+    <div style="font-size:10pt;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#dc2626;margin-bottom:3px;">Lagging</div>
+    <ul style="margin:0;padding-left:18px;">{bot_html}</ul>
+  </div>
+</div>"""
+
+    factor_html = f'<div style="margin-top:6px;font-size:10pt;color:#374151;font-style:italic;">{esc(factor)}</div>' if factor else ""
+    take_html   = f'<div style="margin-top:4px;font-size:11pt;color:#111827;"><strong>Takeaway:</strong> {esc(take)}</div>' if take else ""
+
+    return f"""
+<div class="sec-header" style="margin-top:10px;">Quantitative Tactical Positioning</div>
+<div class="outlook-box" style="padding:8px 10px;">
+  <div class="outlook-body" style="padding:0;">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+      <span class="badge {badge_cls}" style="font-size:11pt;padding:3px 10px;">{esc(stance)}</span>
+      <span style="font-size:10pt;color:#6b7280;">{esc(detail)}</span>
+    </div>
+    {cols}
+    {factor_html}
+    {take_html}
+  </div>
+</div>
+<p class="footnote" style="margin-top:2px;">Quant signals derived from the EPM portfolio book ({len(tops)+len(bots)} funds shown of {len(tops)+len(bots)}+ tracked) + sector tilt + VIX. Deterministic, not LLM-generated.</p>"""
 
 
 def build_spotlight_html(commentary: dict) -> str:
@@ -1829,11 +1974,15 @@ def build_page5_html(logo_b64: str, commentary: dict, features_df: pd.DataFrame)
 <div class="sec-header first">Technical Perspectives  Key Asset Moving Averages</div>
 {build_technical_perspectives_html(commentary)}
 
+{build_support_resistance_html(commentary)}
+
 {build_market_outlook_html(commentary) if fresh else ""}
 
 <div class="rule"></div>
 
 {build_spotlight_html(commentary) if fresh else ""}
+
+{build_tactical_positioning_html(commentary)}
 
 <div class="sec-header">Portfolio Fund Metrics</div>
 {build_metrics_table_html(features_df)}

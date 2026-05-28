@@ -522,6 +522,68 @@ def fetch_technical_levels() -> dict[str, dict]:
             ma50    = float(closes.tail(50).mean())  if len(arr) >= 50  else None
             ma200   = float(closes.tail(200).mean()) if len(arr) >= 200 else None
 
+            # ── Pillar 3: deterministic key support / resistance ────────────
+            # Combine swing extrema in the last ~90 trading days with MAs and 52w
+            # levels, cluster nearby candidates, and pick the closest 1-2 above
+            # (resistance) and below (support) the current price. All numeric, no
+            # LLM — Sevens-style "key support X / resistance Y" with zero hallucination
+            # risk. Wrapped so a numeric error never blocks the technicals table.
+            support: list[dict] = []
+            resistance: list[dict] = []
+            try:
+                import numpy as _np
+                arr_recent = arr[-min(90, len(arr)):]
+                # Simple symmetric-window local extrema (window radius 5 days).
+                W = 5
+                peaks: list[tuple[float, int]] = []
+                troughs: list[tuple[float, int]] = []
+                for i in range(W, len(arr_recent) - W):
+                    seg = arr_recent[i - W : i + W + 1]
+                    if arr_recent[i] >= seg.max():
+                        peaks.append((float(arr_recent[i]), i))
+                    if arr_recent[i] <= seg.min():
+                        troughs.append((float(arr_recent[i]), i))
+                # Tag candidates with their origin.
+                cand: list[tuple[float, str, int]] = []  # (level, tag, recency_idx)
+                for lvl, idx in peaks:
+                    cand.append((lvl, "swing high", idx))
+                for lvl, idx in troughs:
+                    cand.append((lvl, "swing low", idx))
+                _N = len(arr_recent)
+                if ma20:   cand.append((ma20,   "20d MA",   _N))
+                if ma50:   cand.append((ma50,   "50d MA",   _N))
+                if ma200:  cand.append((ma200,  "200d MA",  _N))
+                cand.append((high52, "52w high", _N))
+                cand.append((low52,  "52w low",  _N))
+                # Cluster within 0.8% of current — keep the strongest tag (prefer
+                # MA/52w label over generic swing) per cluster, AND keep the level
+                # closest to the cluster centroid. For ties prefer the more recent.
+                _tol = max(abs(current) * 0.008, 1e-9)
+                _CAND_RANK = {"52w high": 3, "52w low": 3, "200d MA": 3, "50d MA": 2,
+                              "20d MA": 2, "swing high": 1, "swing low": 1}
+                grouped: list[dict] = []
+                for lvl, tag, idx in sorted(cand, key=lambda x: x[0]):
+                    if grouped and abs(lvl - grouped[-1]["level"]) <= _tol:
+                        # Merge into the current cluster — upgrade tag if better.
+                        if _CAND_RANK.get(tag, 0) > _CAND_RANK.get(grouped[-1]["tag"], 0):
+                            grouped[-1]["tag"] = tag
+                            grouped[-1]["level"] = lvl
+                        elif idx > grouped[-1]["recency"]:
+                            grouped[-1]["recency"] = idx
+                        continue
+                    grouped.append({"level": lvl, "tag": tag, "recency": idx})
+                # Pick closest 2 support (< current) and 2 resistance (> current),
+                # excluding any further than 15% from current (off the radar).
+                _floor, _ceil = current * 0.85, current * 1.15
+                below = [g for g in grouped if _floor <= g["level"] < current]
+                above = [g for g in grouped if current < g["level"] <= _ceil]
+                below.sort(key=lambda g: current - g["level"])    # closest first
+                above.sort(key=lambda g: g["level"] - current)
+                support    = [{"level": round(g["level"], 2), "tag": g["tag"]} for g in below[:2]]
+                resistance = [{"level": round(g["level"], 2), "tag": g["tag"]} for g in above[:2]]
+            except Exception as _sr_exc:
+                print(f"[WARN] support/resistance compute failed for {name}: {_sr_exc}")
+
             result[name] = {
                 "current": round(current, 2),
                 "52w_high": round(high52, 2),
@@ -529,6 +591,8 @@ def fetch_technical_levels() -> dict[str, dict]:
                 "ma20":  round(ma20,  2) if ma20  else None,
                 "ma50":  round(ma50,  2) if ma50  else None,
                 "ma200": round(ma200, 2) if ma200 else None,
+                "support":    support,
+                "resistance": resistance,
             }
         except Exception:
             pass
@@ -690,6 +754,135 @@ def build_portfolio_spotlight(df: pd.DataFrame) -> tuple[list, list]:
     winners = [to_dict(r) for _, r in funds.head(3).iterrows()]
     watch   = [to_dict(r) for _, r in funds.tail(2).iterrows()]
     return winners, watch
+
+
+# Cyclical/growth proxies vs defensives — used to classify the sector tilt for the
+# tactical-positioning stance. These are sector ETF tickers, not single stocks.
+_CYC_SECTORS: frozenset[str] = frozenset({"XLK", "XLY", "XLI", "XLC", "XLF", "XLB"})
+_DEF_SECTORS: frozenset[str] = frozenset({"XLP", "XLU", "XLV", "XLRE"})
+
+
+def build_tactical_positioning(
+    df: "pd.DataFrame | None",
+    sector_perf: list[dict] | None,
+    vix_level: float | None,
+) -> dict:
+    """Compute a DETERMINISTIC tactical-positioning snapshot from the 30-fund book +
+    sector tilt + VIX. EPM's structural edge over the Sevens: the Sevens uses SPHB/SPLV
+    qualitatively; we synthesize a *quantitative* stance from the actual portfolio.
+
+    Returns {} on insufficient data so renderers can omit the section gracefully — this
+    new section is wrapped in try/except so a failure here NEVER kills the pipeline.
+    Output keys: stance, stance_detail, top_funds[], bottom_funds[], factor_read, takeaway.
+    """
+    try:
+        import pandas as _pd
+        # ── 1. Stance from sector tilt ────────────────────────────────────────
+        sp = [s for s in (sector_perf or [])
+              if s.get("ticker") and s.get("pct_change") is not None]
+        if not sp:
+            return {}
+        sp_sorted = sorted(sp, key=lambda s: float(s["pct_change"]), reverse=True)
+        top3, bot3 = sp_sorted[:3], sp_sorted[-3:]
+        cyc_top = sum(1 for s in top3 if s["ticker"] in _CYC_SECTORS)
+        def_top = sum(1 for s in top3 if s["ticker"] in _DEF_SECTORS)
+        cyc_bot = sum(1 for s in bot3 if s["ticker"] in _CYC_SECTORS)
+        def_bot = sum(1 for s in bot3 if s["ticker"] in _DEF_SECTORS)
+        if cyc_top >= 2 and def_bot >= 1:
+            stance = "Risk-on, pro-cyclical"
+        elif def_top >= 2 and cyc_bot >= 1:
+            stance = "Risk-off, defensive bid"
+        elif cyc_top >= 2:
+            stance = "Pro-cyclical lean"
+        elif def_top >= 2:
+            stance = "Defensive lean"
+        else:
+            stance = "Mixed signals"
+        if vix_level is not None:
+            try:
+                v = float(vix_level)
+                if v < 14:
+                    stance += " (calm tape)"
+                elif v >= 25:
+                    stance += " (elevated vol)"
+            except Exception:
+                pass
+        stance_detail = (
+            "Leading: " + ", ".join(f"{s['name']} {s['pct_change']:+.1f}%" for s in top3)
+            + ". Lagging: " + ", ".join(f"{s['name']} {s['pct_change']:+.1f}%" for s in bot3) + "."
+        )
+
+        # ── 2. Top / bottom portfolio funds by 1M return ──────────────────────
+        top_funds: list[dict] = []
+        bot_funds: list[dict] = []
+        factor_read = ""
+        if df is not None and not df.empty and "1M Return" in df.columns:
+            try:
+                from universe_config import get_portfolio_tickers, get_mag7
+                _mag7 = set(get_mag7())
+                _port = [t for t in get_portfolio_tickers() if t not in _mag7]
+                funds = df[df["Ticker"].isin(_port)].copy()
+                funds["_1m_num"] = _pd.to_numeric(funds["1M Return"], errors="coerce")
+                funds = funds.dropna(subset=["_1m_num"])
+                # Normalize: some rows store decimals (0.087), others percent (8.7).
+                funds["_1m_pct"] = funds["_1m_num"].apply(
+                    lambda v: float(v) * 100 if abs(float(v)) < 1 else float(v)
+                )
+                funds = funds.sort_values("_1m_pct", ascending=False)
+
+                def _row(r: "_pd.Series") -> dict:
+                    d: dict[str, Any] = {
+                        "ticker":  str(r["Ticker"]),
+                        "ret_1m":  float(r["_1m_pct"]),
+                        "tag":     FUND_DESCRIPTIONS.get(str(r["Ticker"]), "")[:80],
+                    }
+                    for col, k in [("Sharpe (3Y)", "sharpe"), ("Alpha (3Y)", "alpha"),
+                                   ("Beta (3Y)", "beta"), ("Max Drawdown 3Y", "max_dd")]:
+                        if col in r.index and _pd.notna(r[col]):
+                            try:
+                                d[k] = float(r[col])
+                            except Exception:
+                                pass
+                    return d
+
+                top_funds = [_row(r) for _, r in funds.head(3).iterrows()]
+                bot_funds = [_row(r) for _, r in funds.tail(2).iterrows()]
+
+                # Factor read — compare avg beta of leaders vs laggards.
+                tb = [f["beta"] for f in top_funds if f.get("beta") is not None]
+                bb = [f["beta"] for f in bot_funds if f.get("beta") is not None]
+                if tb and bb:
+                    at, ab = sum(tb)/len(tb), sum(bb)/len(bb)
+                    if at - ab > 0.2:
+                        factor_read = (f"High-beta leading — leaders carry avg β {at:.2f} vs laggards {ab:.2f}; "
+                                       f"consistent with risk-on positioning.")
+                    elif ab - at > 0.2:
+                        factor_read = (f"Low-vol bid — laggards carry higher avg β ({ab:.2f}) than leaders "
+                                       f"({at:.2f}); defensive rotation under way.")
+                    else:
+                        factor_read = f"No clear beta tilt — leaders β {at:.2f} vs laggards β {ab:.2f}."
+            except Exception as _exc:
+                print(f"[WARN] Tactical fund ranking failed: {_exc}")
+
+        # ── 3. Takeaway sentence ─────────────────────────────────────────────
+        bits: list[str] = []
+        if top_funds:
+            bits.append("Lean into " + ", ".join(f["ticker"] for f in top_funds[:3]))
+        if bot_funds:
+            bits.append("trim " + ", ".join(f["ticker"] for f in bot_funds))
+        takeaway = "; ".join(bits) + "." if bits else ""
+        return {
+            "stance":         stance,
+            "stance_detail":  stance_detail,
+            "top_funds":      top_funds,
+            "bottom_funds":   bot_funds,
+            "factor_read":    factor_read,
+            "takeaway":       takeaway,
+        }
+    except Exception as _exc:
+        # Never fail the pipeline because of this new section.
+        print(f"[WARN] Tactical positioning compute failed: {_exc}")
+        return {}
 
 
 def build_mag7_consensus(df: pd.DataFrame) -> dict[str, dict]:
@@ -3980,6 +4173,15 @@ def main() -> int:
     existing["today_earnings"]     = _today_earnings
     existing["technical_levels"]   = tech_levels
     existing["sector_performance"] = sector_perf
+    # Pillar 2: deterministic tactical-positioning snapshot from the 30-fund book +
+    # sector tilt + VIX. EPM-unique synthesis the Sevens structurally cannot replicate.
+    # Wrapped so a failure can never block the pipeline.
+    try:
+        _vix_lvl = (tech_levels.get("VIX") or {}).get("current")
+        existing["tactical_positioning"] = build_tactical_positioning(df, sector_perf, _vix_lvl)
+    except Exception as _tp_exc:
+        print(f"[WARN] tactical_positioning skipped: {_tp_exc}")
+        existing["tactical_positioning"] = {}
     existing["report_date"]        = today
     existing["generated_at"]       = datetime.now(timezone.utc).isoformat()
     existing["data_source"]        = "yfinance:daily-bar"
