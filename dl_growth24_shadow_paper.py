@@ -17,9 +17,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from deep_learning_model import TARGET_COL, _ensure_panel_schema, read_panel
+from deep_learning_model import TARGET_COL, TrainConfig, _ensure_panel_schema, read_panel
 from dl_cap_aware_replay_report import _load_validation_metrics
 from dl_directional_loss_experiment import _parse_features
+from dl_panel_diagnostics import assert_decision_date_panel
 from dl_rank_head_experiment import _train_one
 from dl_rank_head_historical_blind_loop import (
     _date_list,
@@ -28,7 +29,7 @@ from dl_rank_head_historical_blind_loop import (
     _write_panel,
 )
 from dl_rank_head_shadow_forecast import HORIZON
-from dl_sign_regularized_experiment import _parse_ints, _resolve_device
+from dl_sign_regularized_experiment import _feature_cols, _parse_ints, _resolve_device
 
 
 DEFAULT_PANEL = Path("data/experiment/dl_research_panels/research_growth_24_price_earnings_av_panel.parquet")
@@ -140,10 +141,14 @@ def _signal_metrics(forecasts: pd.DataFrame, result_path: Path, top_n: int) -> d
     ordered = forecasts.sort_values(["Rank", "ShadowRankScore"], ascending=[True, False]).copy()
     top = ordered.head(int(top_n))
     metrics = _load_validation_metrics(str(result_path))
+    rank_std = pd.to_numeric(top["RankScoreStd"], errors="coerce").mean() if "RankScoreStd" in top.columns else 0.0
+    raw_std = pd.to_numeric(top["RawForecastStd"], errors="coerce").mean() if "RawForecastStd" in top.columns else 0.0
     metrics.update(
         {
             "ScoreGap": float(top["ShadowRankScore"].mean() - ordered["ShadowRankScore"].mean()),
             "ForecastGapPct": float(top["RawForecastPct"].mean() - ordered["RawForecastPct"].mean()),
+            "RankScoreStdTop": float(rank_std),
+            "RawForecastStdTop": float(raw_std),
         }
     )
     return metrics
@@ -151,22 +156,29 @@ def _signal_metrics(forecasts: pd.DataFrame, result_path: Path, top_n: int) -> d
 
 def _gate_failures(metrics: dict[str, float], args: argparse.Namespace) -> list[str]:
     checks = [
-        ("ScoreGap", float(args.min_score_gap), "score gap"),
-        ("ForecastGapPct", float(args.min_forecast_gap), "forecast gap"),
-        ("ValidationSelectionScore", float(args.min_validation_score), "validation score"),
-        ("ValidationDailyIC", float(args.min_validation_daily_ic), "validation daily IC"),
-        ("ValidationSpread", float(args.min_validation_spread), "validation spread"),
+        ("ScoreGap", float(args.min_score_gap), "score gap", "min"),
+        ("ForecastGapPct", float(args.min_forecast_gap), "forecast gap", "min"),
+        ("ValidationSelectionScore", float(args.min_validation_score), "validation score", "min"),
+        ("ValidationDailyIC", float(args.min_validation_daily_ic), "validation daily IC", "min"),
+        ("ValidationSpread", float(args.min_validation_spread), "validation spread", "min"),
         (
             "ValidationSpreadPositiveRate",
             float(args.min_validation_spread_positive_rate),
             "validation spread positive rate",
+            "min",
         ),
+        ("RankScoreStdTop", float(args.max_rank_score_std), "rank-score ensemble dispersion", "max"),
+        ("RawForecastStdTop", float(args.max_raw_forecast_std), "raw-forecast ensemble dispersion", "max"),
     ]
     failures = []
-    for key, threshold, label in checks:
+    for key, threshold, label, mode in checks:
         value = float(metrics.get(key, float("nan")))
-        if not np.isfinite(value) or value < threshold:
+        if not np.isfinite(value):
+            failures.append(f"{label} is not finite")
+        elif mode == "min" and value < threshold:
             failures.append(f"{label} {value:.6f} < {threshold:.6f}")
+        elif mode == "max" and value > threshold:
+            failures.append(f"{label} {value:.6f} > {threshold:.6f}")
     return failures
 
 
@@ -208,6 +220,8 @@ def _build_plan_row(
         "SelectedAvgForecastPct": float(selected["RawForecastPct"].mean()) if not selected.empty else float("nan"),
         "ScoreGap": float(metrics.get("ScoreGap", float("nan"))),
         "ForecastGapPct": float(metrics.get("ForecastGapPct", float("nan"))),
+        "RankScoreStdTop": float(metrics.get("RankScoreStdTop", float("nan"))),
+        "RawForecastStdTop": float(metrics.get("RawForecastStdTop", float("nan"))),
         "ValidationSelectionScore": float(metrics.get("ValidationSelectionScore", float("nan"))),
         "ValidationDailyIC": float(metrics.get("ValidationDailyIC", float("nan"))),
         "ValidationSpread": float(metrics.get("ValidationSpread", float("nan"))),
@@ -240,6 +254,16 @@ def run_shadow_paper(args: argparse.Namespace) -> tuple[pd.DataFrame, pd.DataFra
     decision_date = _latest_decision_date(panel, args.asof_date)
     matured = _matured_cutoff(all_dates, decision_date, HORIZON)
     extra_features = _parse_features(args.extra_features)
+    feature_cols = _feature_cols(args.panel, extra_features)
+    panel_gate = assert_decision_date_panel(
+        panel=panel,
+        decision_date=decision_date,
+        feature_cols=feature_cols,
+        seq_len=TrainConfig().seq_len,
+        expected_universe_count=int(args.expected_universe_count),
+        output_path=args.panel_diagnostic_output,
+        allow_gaps=bool(args.allow_panel_gaps),
+    )
 
     train_panel = panel[
         (panel["Date"] <= matured) & pd.to_numeric(panel[TARGET_COL], errors="coerce").notna()
@@ -292,8 +316,10 @@ def run_shadow_paper(args: argparse.Namespace) -> tuple[pd.DataFrame, pd.DataFra
                 hard_gate=True,
                 daily_ic_weight=0.75,
                 top_excess_weight=float(args.top_excess_weight),
+                spread_loss_weight=float(args.spread_loss_weight),
                 monotonic_weight=float(args.monotonic_weight),
                 top_excess_temperature=float(args.top_excess_temperature),
+                spread_loss_temperature=float(args.spread_loss_temperature),
                 monotonic_quantiles=int(args.monotonic_quantiles),
                 ticker_concentration_weight=0.0,
                 ticker_concentration_temperature=0.05,
@@ -312,11 +338,13 @@ def run_shadow_paper(args: argparse.Namespace) -> tuple[pd.DataFrame, pd.DataFra
             "run_name": run_name,
             "decision_date": decision_date.date().isoformat(),
             "train_label_through": matured.date().isoformat(),
+            "panel_gate": panel_gate,
             "growth24_shadow_policy": {
                 "paper_top_n": int(args.paper_top_n),
                 "max_ticker_share": float(args.max_ticker_share),
                 "risk_gate_max_drawdown": float(args.risk_gate_max_drawdown),
                 "min_coverage_research_gate": float(args.research_min_coverage),
+                "expected_universe_count": int(args.expected_universe_count),
                 "stress_loss_weight": float(args.stress_loss_weight),
                 "stress_feature_column": args.stress_feature_column,
                 "stress_feature_min": float(args.stress_feature_min),
@@ -344,6 +372,8 @@ def run_shadow_paper(args: argparse.Namespace) -> tuple[pd.DataFrame, pd.DataFra
             "RankPercentile",
             "ShadowRankScore",
             "RawForecastPct",
+            "RankScoreStd",
+            "RawForecastStd",
             "CandidateBucket",
             "MemberCount",
             "MeanMemberSelectionScore",
@@ -384,10 +414,12 @@ def run_shadow_paper(args: argparse.Namespace) -> tuple[pd.DataFrame, pd.DataFra
         "result_path": str(result_path),
         "selected_tickers": plan_row["LongTickers"],
         "gate_failures": plan_row["GateFailures"],
+        "panel_gate": panel_gate,
         "policy": {
             "paper_top_n": int(args.paper_top_n),
             "max_ticker_share": float(args.max_ticker_share),
             "risk_gate_max_drawdown": float(args.risk_gate_max_drawdown),
+            "expected_universe_count": int(args.expected_universe_count),
             "stress_loss_weight": float(args.stress_loss_weight),
             "stress_feature_column": args.stress_feature_column,
             "stress_feature_min": float(args.stress_feature_min),
@@ -423,6 +455,15 @@ def main() -> None:
     ap.add_argument("--min-validation-daily-ic", type=float, default=-0.05)
     ap.add_argument("--min-validation-spread", type=float, default=0.02)
     ap.add_argument("--min-validation-spread-positive-rate", type=float, default=0.45)
+    ap.add_argument("--max-rank-score-std", type=float, default=999.0)
+    ap.add_argument("--max-raw-forecast-std", type=float, default=999.0)
+    ap.add_argument("--expected-universe-count", type=int, default=24)
+    ap.add_argument("--allow-panel-gaps", action="store_true")
+    ap.add_argument(
+        "--panel-diagnostic-output",
+        type=Path,
+        default=DEFAULT_OUT_DIR / "growth24_current_panel_diagnostics.json",
+    )
     ap.add_argument("--seeds", default="20260506,20260507")
     ap.add_argument("--epochs", type=int, default=8)
     ap.add_argument("--batch-size", type=int, default=256)
@@ -444,6 +485,8 @@ def main() -> None:
     ap.add_argument("--rank-temperature", type=float, default=0.02)
     ap.add_argument("--top-excess-weight", type=float, default=0.5)
     ap.add_argument("--top-excess-temperature", type=float, default=0.05)
+    ap.add_argument("--spread-loss-weight", type=float, default=0.0)
+    ap.add_argument("--spread-loss-temperature", type=float, default=0.05)
     ap.add_argument("--monotonic-weight", type=float, default=0.05)
     ap.add_argument("--monotonic-quantiles", type=int, default=5)
     ap.add_argument("--target-mode", choices=["raw", "date_excess"], default="date_excess")

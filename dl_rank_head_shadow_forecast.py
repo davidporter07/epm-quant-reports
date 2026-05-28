@@ -133,12 +133,16 @@ def _build_ensemble(member_preds: pd.DataFrame, model_label: str, results_path: 
         .agg(
             ShadowRankScore=("CenteredRankScore", "mean"),
             RawForecastPct=("RawForecastPct", "mean"),
+            RankScoreStd=("CenteredRankScore", "std"),
+            RawForecastStd=("RawForecastPct", "std"),
             MemberCount=("Member", "nunique"),
             MeanMemberSelectionScore=("SelectionScore", "mean"),
         )
         .sort_values("ShadowRankScore", ascending=False)
         .reset_index(drop=True)
     )
+    grouped["RankScoreStd"] = grouped["RankScoreStd"].fillna(0.0)
+    grouped["RawForecastStd"] = grouped["RawForecastStd"].fillna(0.0)
     n = len(grouped)
     grouped["RunDate"] = date.today().isoformat()
     grouped["Model"] = model_label
@@ -160,6 +164,8 @@ def _build_ensemble(member_preds: pd.DataFrame, model_label: str, results_path: 
             "RankPercentile",
             "ShadowRankScore",
             "RawForecastPct",
+            "RankScoreStd",
+            "RawForecastStd",
             "CandidateBucket",
             "MemberCount",
             "MeanMemberSelectionScore",

@@ -111,12 +111,16 @@ def _predict_decision_date(
         .agg(
             ShadowRankScore=("CenteredRankScore", "mean"),
             RawForecastPct=("RawForecastPct", "mean"),
+            RankScoreStd=("CenteredRankScore", "std"),
+            RawForecastStd=("RawForecastPct", "std"),
             MemberCount=("Member", "nunique"),
             MeanMemberSelectionScore=("SelectionScore", "mean"),
         )
         .sort_values("ShadowRankScore", ascending=False)
         .reset_index(drop=True)
     )
+    grouped["RankScoreStd"] = grouped["RankScoreStd"].fillna(0.0)
+    grouped["RawForecastStd"] = grouped["RawForecastStd"].fillna(0.0)
     n = len(grouped)
     grouped["Rank"] = np.arange(1, n + 1, dtype=int)
     grouped["RankPercentile"] = 1.0 - ((grouped["Rank"] - 1) / max(1, n - 1))
@@ -199,8 +203,10 @@ def run_loop(args: argparse.Namespace) -> tuple[pd.DataFrame, dict]:
                     hard_gate=True,
                     daily_ic_weight=0.75,
                     top_excess_weight=float(args.top_excess_weight),
+                    spread_loss_weight=float(args.spread_loss_weight),
                     monotonic_weight=float(args.monotonic_weight),
                     top_excess_temperature=float(args.top_excess_temperature),
+                    spread_loss_temperature=float(args.spread_loss_temperature),
                     monotonic_quantiles=int(args.monotonic_quantiles),
                     ticker_concentration_weight=float(args.ticker_concentration_weight),
                     ticker_concentration_temperature=float(args.ticker_concentration_temperature),
@@ -269,6 +275,8 @@ def run_loop(args: argparse.Namespace) -> tuple[pd.DataFrame, dict]:
         "RankPercentile",
         "ShadowRankScore",
         "RawForecastPct",
+        "RankScoreStd",
+        "RawForecastStd",
         "CandidateBucket",
         "MemberCount",
         "MeanMemberSelectionScore",
@@ -301,6 +309,8 @@ def run_loop(args: argparse.Namespace) -> tuple[pd.DataFrame, dict]:
         "paper_ledger": str(paper_ledger_path),
         "paper_summary": str(paper_summary_path),
         "stress_loss_weight": float(args.stress_loss_weight),
+        "spread_loss_weight": float(args.spread_loss_weight),
+        "spread_loss_temperature": float(args.spread_loss_temperature),
         "stress_feature_column": args.stress_feature_column,
         "stress_feature_min": float(args.stress_feature_min),
         "stress_drawdown_threshold": float(args.stress_drawdown_threshold),
@@ -345,6 +355,8 @@ def main() -> None:
     ap.add_argument("--rank-temperature", type=float, default=0.02)
     ap.add_argument("--top-excess-weight", type=float, default=0.0)
     ap.add_argument("--top-excess-temperature", type=float, default=0.05)
+    ap.add_argument("--spread-loss-weight", type=float, default=0.0)
+    ap.add_argument("--spread-loss-temperature", type=float, default=0.05)
     ap.add_argument("--monotonic-weight", type=float, default=0.0)
     ap.add_argument("--monotonic-quantiles", type=int, default=5)
     ap.add_argument("--ticker-concentration-weight", type=float, default=0.0)

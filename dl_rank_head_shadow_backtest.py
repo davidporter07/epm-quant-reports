@@ -98,6 +98,8 @@ def _build_shadow_log(member_preds: pd.DataFrame, model_label: str, source_resul
         .agg(
             ShadowRankScore=("CenteredRankScore", "mean"),
             RawForecastPct=("RawForecastPct", "mean"),
+            RankScoreStd=("CenteredRankScore", "std"),
+            RawForecastStd=("RawForecastPct", "std"),
             RealizedForwardReturn=("RealizedForwardReturn", "mean"),
             MemberCount=("Member", "nunique"),
             MeanMemberSelectionScore=("SelectionScore", "mean"),
@@ -105,6 +107,8 @@ def _build_shadow_log(member_preds: pd.DataFrame, model_label: str, source_resul
         .sort_values(["AsOfDate", "ShadowRankScore"], ascending=[True, False])
         .reset_index(drop=True)
     )
+    grouped["RankScoreStd"] = grouped["RankScoreStd"].fillna(0.0)
+    grouped["RawForecastStd"] = grouped["RawForecastStd"].fillna(0.0)
 
     pieces = []
     for _, day in grouped.groupby("AsOfDate", sort=True):
@@ -133,6 +137,8 @@ def _build_shadow_log(member_preds: pd.DataFrame, model_label: str, source_resul
             "RankPercentile",
             "ShadowRankScore",
             "RawForecastPct",
+            "RankScoreStd",
+            "RawForecastStd",
             "CandidateBucket",
             "MemberCount",
             "MeanMemberSelectionScore",

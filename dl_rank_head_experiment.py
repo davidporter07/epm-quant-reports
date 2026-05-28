@@ -143,6 +143,20 @@ def _top_excess_loss(pred: torch.Tensor, target: torch.Tensor, temperature: floa
     return -(top_return - universe_return)
 
 
+def _long_short_spread_loss(pred: torch.Tensor, target: torch.Tensor, temperature: float) -> torch.Tensor:
+    p = pred.view(-1)
+    y = target.view(-1)
+    if p.numel() < 2:
+        return p.sum() * 0.0
+    temp = max(float(temperature), 1e-4)
+    centered = p - p.mean()
+    long_weights = torch.softmax(centered / temp, dim=0)
+    short_weights = torch.softmax((-centered) / temp, dim=0)
+    long_return = torch.sum(long_weights * y)
+    short_return = torch.sum(short_weights * y)
+    return -(long_return - short_return)
+
+
 def _monotonic_rank_loss(pred: torch.Tensor, target: torch.Tensor, quantiles: int) -> torch.Tensor:
     p = pred.view(-1)
     y = target.view(-1)
@@ -285,6 +299,46 @@ def _grouped_top_excess_loss_weighted(
         if int(mask.sum().item()) < int(min_batch_size):
             continue
         losses.append(_top_excess_loss(pred[mask], target[mask], temperature))
+        weights.append(flat_weights[mask].mean())
+    return _weighted_group_mean(losses, weights, pred)
+
+
+def _grouped_long_short_spread_loss(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    dates_ns: torch.Tensor,
+    min_batch_size: int,
+    temperature: float,
+) -> torch.Tensor:
+    losses = []
+    flat_dates = dates_ns.view(-1)
+    for date_ns in torch.unique(flat_dates):
+        mask = flat_dates == date_ns
+        if int(mask.sum().item()) < int(min_batch_size):
+            continue
+        losses.append(_long_short_spread_loss(pred[mask], target[mask], temperature))
+    if not losses:
+        return pred.sum() * 0.0
+    return torch.stack(losses).mean()
+
+
+def _grouped_long_short_spread_loss_weighted(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    dates_ns: torch.Tensor,
+    sample_weights: torch.Tensor,
+    min_batch_size: int,
+    temperature: float,
+) -> torch.Tensor:
+    losses = []
+    weights = []
+    flat_dates = dates_ns.view(-1)
+    flat_weights = sample_weights.view(-1)
+    for date_ns in torch.unique(flat_dates):
+        mask = flat_dates == date_ns
+        if int(mask.sum().item()) < int(min_batch_size):
+            continue
+        losses.append(_long_short_spread_loss(pred[mask], target[mask], temperature))
         weights.append(flat_weights[mask].mean())
     return _weighted_group_mean(losses, weights, pred)
 
@@ -541,8 +595,10 @@ def _train_one(
     hard_gate: bool,
     daily_ic_weight: float,
     top_excess_weight: float = 0.0,
+    spread_loss_weight: float = 0.0,
     monotonic_weight: float = 0.0,
     top_excess_temperature: float = 0.05,
+    spread_loss_temperature: float = 0.05,
     monotonic_quantiles: int = 5,
     ticker_concentration_weight: float = 0.0,
     ticker_concentration_temperature: float = 0.05,
@@ -641,6 +697,8 @@ def _train_one(
     )
     if top_excess_weight > 0:
         variant = f"{variant}_tew{str(top_excess_weight).replace('.', 'p')}"
+    if spread_loss_weight > 0:
+        variant = f"{variant}_lsw{str(spread_loss_weight).replace('.', 'p')}"
     if monotonic_weight > 0:
         variant = f"{variant}_mw{str(monotonic_weight).replace('.', 'p')}"
     if ticker_concentration_weight > 0:
@@ -783,6 +841,28 @@ def _train_one(
                     else _top_excess_loss(rank_loss_input, yb_loss, top_excess_temperature)
                 )
                 loss = loss + float(top_excess_weight) * top_loss
+            if spread_loss_weight > 0:
+                spread_loss = (
+                    _grouped_long_short_spread_loss_weighted(
+                        rank_loss_input,
+                        yb_loss,
+                        date_ns,
+                        sample_weights,
+                        min_date_batch_size,
+                        spread_loss_temperature,
+                    )
+                    if date_grouped_batches and stress_weight_enabled
+                    else _grouped_long_short_spread_loss(
+                        rank_loss_input,
+                        yb_loss,
+                        date_ns,
+                        min_date_batch_size,
+                        spread_loss_temperature,
+                    )
+                    if date_grouped_batches
+                    else _long_short_spread_loss(rank_loss_input, yb_loss, spread_loss_temperature)
+                )
+                loss = loss + float(spread_loss_weight) * spread_loss
             if monotonic_weight > 0:
                 mono_loss = (
                     _grouped_monotonic_rank_loss_weighted(
@@ -893,8 +973,10 @@ def _train_one(
             "corr_weight": corr_weight,
             "rank_weight": rank_weight,
             "top_excess_weight": top_excess_weight,
+            "spread_loss_weight": spread_loss_weight,
             "monotonic_weight": monotonic_weight,
             "top_excess_temperature": top_excess_temperature,
+            "spread_loss_temperature": spread_loss_temperature,
             "monotonic_quantiles": monotonic_quantiles,
             "ticker_concentration_weight": ticker_concentration_weight,
             "ticker_concentration_temperature": ticker_concentration_temperature,
@@ -942,8 +1024,10 @@ def _train_one(
         "corr_weight": corr_weight,
         "rank_weight": rank_weight,
         "top_excess_weight": top_excess_weight,
+        "spread_loss_weight": spread_loss_weight,
         "monotonic_weight": monotonic_weight,
         "top_excess_temperature": top_excess_temperature,
+        "spread_loss_temperature": spread_loss_temperature,
         "monotonic_quantiles": monotonic_quantiles,
         "ticker_concentration_weight": ticker_concentration_weight,
         "ticker_concentration_temperature": ticker_concentration_temperature,
@@ -1022,6 +1106,8 @@ def main() -> None:
     ap.add_argument("--rank-temperature", type=float, default=0.02)
     ap.add_argument("--top-excess-weight", type=float, default=0.0)
     ap.add_argument("--top-excess-temperature", type=float, default=0.05)
+    ap.add_argument("--spread-loss-weight", type=float, default=0.0)
+    ap.add_argument("--spread-loss-temperature", type=float, default=0.05)
     ap.add_argument("--monotonic-weight", type=float, default=0.0)
     ap.add_argument("--monotonic-quantiles", type=int, default=5)
     ap.add_argument("--ticker-concentration-weight", type=float, default=0.0)
@@ -1117,8 +1203,10 @@ def main() -> None:
                             direction_min=float(args.direction_min),
                             daily_ic_weight=float(args.daily_ic_weight),
                             top_excess_weight=float(args.top_excess_weight),
+                            spread_loss_weight=float(args.spread_loss_weight),
                             monotonic_weight=float(args.monotonic_weight),
                             top_excess_temperature=float(args.top_excess_temperature),
+                            spread_loss_temperature=float(args.spread_loss_temperature),
                             monotonic_quantiles=int(args.monotonic_quantiles),
                             ticker_concentration_weight=float(args.ticker_concentration_weight),
                             ticker_concentration_temperature=float(args.ticker_concentration_temperature),
@@ -1172,6 +1260,8 @@ def main() -> None:
                 "rank_weights": _parse_floats(args.rank_weights),
                 "top_excess_weight": float(args.top_excess_weight),
                 "top_excess_temperature": float(args.top_excess_temperature),
+                "spread_loss_weight": float(args.spread_loss_weight),
+                "spread_loss_temperature": float(args.spread_loss_temperature),
                 "monotonic_weight": float(args.monotonic_weight),
                 "monotonic_quantiles": int(args.monotonic_quantiles),
                 "ticker_concentration_weight": float(args.ticker_concentration_weight),
