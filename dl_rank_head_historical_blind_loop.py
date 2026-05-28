@@ -204,6 +204,10 @@ def run_loop(args: argparse.Namespace) -> tuple[pd.DataFrame, dict]:
                     monotonic_quantiles=int(args.monotonic_quantiles),
                     ticker_concentration_weight=float(args.ticker_concentration_weight),
                     ticker_concentration_temperature=float(args.ticker_concentration_temperature),
+                    stress_loss_weight=float(args.stress_loss_weight),
+                    stress_feature_column=args.stress_feature_column,
+                    stress_feature_min=float(args.stress_feature_min),
+                    stress_drawdown_threshold=float(args.stress_drawdown_threshold),
                     target_mode=args.target_mode,
                     artifact_dir=artifact_dir,
                 )
@@ -296,6 +300,10 @@ def run_loop(args: argparse.Namespace) -> tuple[pd.DataFrame, dict]:
         "csv_output": str(args.csv_output),
         "paper_ledger": str(paper_ledger_path),
         "paper_summary": str(paper_summary_path),
+        "stress_loss_weight": float(args.stress_loss_weight),
+        "stress_feature_column": args.stress_feature_column,
+        "stress_feature_min": float(args.stress_feature_min),
+        "stress_drawdown_threshold": float(args.stress_drawdown_threshold),
         "cycle_summaries": cycle_summaries,
         "paper_metrics": paper_summary,
     }
@@ -341,6 +349,10 @@ def main() -> None:
     ap.add_argument("--monotonic-quantiles", type=int, default=5)
     ap.add_argument("--ticker-concentration-weight", type=float, default=0.0)
     ap.add_argument("--ticker-concentration-temperature", type=float, default=0.05)
+    ap.add_argument("--stress-loss-weight", type=float, default=1.0)
+    ap.add_argument("--stress-feature-column", default="Market_Stress_Regime")
+    ap.add_argument("--stress-feature-min", type=float, default=0.5)
+    ap.add_argument("--stress-drawdown-threshold", type=float, default=-0.10)
     ap.add_argument("--target-mode", choices=["raw", "date_excess"], default="raw")
     ap.add_argument("--daily-ic-min", type=float, default=-0.02)
     ap.add_argument("--spread-min", type=float, default=0.0)

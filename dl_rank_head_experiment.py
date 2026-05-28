@@ -170,6 +170,49 @@ def _ungrouped_aux_loss(
     raise ValueError(f"Unknown auxiliary loss: {loss_name}")
 
 
+def _weighted_gaussian_nll(
+    mu: torch.Tensor,
+    log_sigma: torch.Tensor,
+    y: torch.Tensor,
+    weights: torch.Tensor,
+) -> torch.Tensor:
+    inv_var = torch.exp(-2.0 * log_sigma)
+    raw = log_sigma + 0.5 * (y - mu) ** 2 * inv_var
+    w = weights.view_as(raw).to(dtype=raw.dtype, device=raw.device)
+    return torch.sum(raw * w) / torch.sum(w).clamp_min(1e-6)
+
+
+def _weighted_group_mean(losses: list[torch.Tensor], weights: list[torch.Tensor], fallback: torch.Tensor) -> torch.Tensor:
+    if not losses:
+        return fallback.sum() * 0.0
+    loss_t = torch.stack(losses)
+    weight_t = torch.stack(weights).to(dtype=loss_t.dtype, device=loss_t.device)
+    return torch.sum(loss_t * weight_t) / torch.sum(weight_t).clamp_min(1e-6)
+
+
+def _grouped_aux_loss_weighted(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    dates_ns: torch.Tensor,
+    sample_weights: torch.Tensor,
+    loss_name: str,
+    temperature: float,
+    min_batch_size: int,
+    target_transform: str,
+) -> torch.Tensor:
+    losses = []
+    weights = []
+    flat_dates = dates_ns.view(-1)
+    flat_weights = sample_weights.view(-1)
+    for date_ns in torch.unique(flat_dates):
+        mask = flat_dates == date_ns
+        if int(mask.sum().item()) < int(min_batch_size):
+            continue
+        losses.append(_ungrouped_aux_loss(pred[mask], target[mask], loss_name, temperature, target_transform))
+        weights.append(flat_weights[mask].mean())
+    return _weighted_group_mean(losses, weights, pred)
+
+
 def _apply_target_mode(panel: pd.DataFrame, target_mode: str) -> pd.DataFrame:
     mode = str(target_mode).strip().lower()
     if mode == "raw":
@@ -181,6 +224,29 @@ def _apply_target_mode(panel: pd.DataFrame, target_mode: str) -> pd.DataFrame:
         out[TARGET_COL] = (target - date_mean).astype(np.float32)
         return out
     raise ValueError(f"Unknown target mode: {target_mode}")
+
+
+def _stress_date_ns(
+    panel: pd.DataFrame,
+    stress_feature_column: str,
+    stress_feature_min: float,
+    stress_drawdown_threshold: float,
+) -> set[int]:
+    if panel.empty:
+        return set()
+    stress = pd.Series(False, index=panel.index)
+    feature_col = str(stress_feature_column).strip()
+    if feature_col and feature_col in panel.columns:
+        feature = pd.to_numeric(panel[feature_col], errors="coerce").fillna(0.0)
+        stress = stress | (feature >= float(stress_feature_min))
+    for col in ("Market_Drawdown_63D", "Market_Drawdown_252D"):
+        if col in panel.columns:
+            dd = pd.to_numeric(panel[col], errors="coerce")
+            stress = stress | (dd <= float(stress_drawdown_threshold))
+    dates = pd.to_datetime(panel.loc[stress, "Date"], errors="coerce").dropna().drop_duplicates()
+    if dates.empty:
+        return set()
+    return set(dates.astype("datetime64[ns]").to_numpy().astype(np.int64).tolist())
 
 
 def _grouped_top_excess_loss(
@@ -202,6 +268,27 @@ def _grouped_top_excess_loss(
     return torch.stack(losses).mean()
 
 
+def _grouped_top_excess_loss_weighted(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    dates_ns: torch.Tensor,
+    sample_weights: torch.Tensor,
+    min_batch_size: int,
+    temperature: float,
+) -> torch.Tensor:
+    losses = []
+    weights = []
+    flat_dates = dates_ns.view(-1)
+    flat_weights = sample_weights.view(-1)
+    for date_ns in torch.unique(flat_dates):
+        mask = flat_dates == date_ns
+        if int(mask.sum().item()) < int(min_batch_size):
+            continue
+        losses.append(_top_excess_loss(pred[mask], target[mask], temperature))
+        weights.append(flat_weights[mask].mean())
+    return _weighted_group_mean(losses, weights, pred)
+
+
 def _grouped_monotonic_rank_loss(
     pred: torch.Tensor,
     target: torch.Tensor,
@@ -219,6 +306,27 @@ def _grouped_monotonic_rank_loss(
     if not losses:
         return pred.sum() * 0.0
     return torch.stack(losses).mean()
+
+
+def _grouped_monotonic_rank_loss_weighted(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    dates_ns: torch.Tensor,
+    sample_weights: torch.Tensor,
+    min_batch_size: int,
+    quantiles: int,
+) -> torch.Tensor:
+    losses = []
+    weights = []
+    flat_dates = dates_ns.view(-1)
+    flat_weights = sample_weights.view(-1)
+    for date_ns in torch.unique(flat_dates):
+        mask = flat_dates == date_ns
+        if int(mask.sum().item()) < int(min_batch_size):
+            continue
+        losses.append(_monotonic_rank_loss(pred[mask], target[mask], quantiles))
+        weights.append(flat_weights[mask].mean())
+    return _weighted_group_mean(losses, weights, pred)
 
 
 def _ticker_exposure_concentration_loss(
@@ -438,6 +546,10 @@ def _train_one(
     monotonic_quantiles: int = 5,
     ticker_concentration_weight: float = 0.0,
     ticker_concentration_temperature: float = 0.05,
+    stress_loss_weight: float = 1.0,
+    stress_feature_column: str = "Market_Stress_Regime",
+    stress_feature_min: float = 0.5,
+    stress_drawdown_threshold: float = -0.10,
     target_mode: str = "raw",
     artifact_dir: Path | None = None,
 ) -> dict:
@@ -452,6 +564,13 @@ def _train_one(
     cutoff, _ = time_split(panel, val_days)
     train_panel = panel[panel["Date"] < cutoff]
     val_panel = panel[panel["Date"] >= cutoff]
+    stress_dates = _stress_date_ns(
+        train_panel,
+        stress_feature_column=stress_feature_column,
+        stress_feature_min=stress_feature_min,
+        stress_drawdown_threshold=stress_drawdown_threshold,
+    )
+    stress_weight_enabled = float(stress_loss_weight) > 1.0 and bool(stress_dates)
 
     feature_cols = _feature_cols(panel_path, extra_features)
     cfg = TrainConfig(seq_len=60, batch_size=batch_size, epochs=epochs, lr=lr, val_days=val_days)
@@ -505,6 +624,15 @@ def _train_one(
     else:
         raise ValueError(f"Unknown scheduler: {scheduler_name}")
     amp_scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+    stress_date_tensor = (
+        torch.tensor(sorted(stress_dates), dtype=torch.long, device=device) if stress_weight_enabled else None
+    )
+    if float(stress_loss_weight) > 1.0:
+        print(
+            f"stress-weighted training dates={len(stress_dates)} "
+            f"weight={float(stress_loss_weight):.2f} "
+            f"feature={stress_feature_column} drawdown<={float(stress_drawdown_threshold):.2%}"
+        )
 
     variant = (
         f"rankhead_seed{seed}_cw{str(corr_weight).replace('.', 'p')}"
@@ -517,6 +645,8 @@ def _train_one(
         variant = f"{variant}_mw{str(monotonic_weight).replace('.', 'p')}"
     if ticker_concentration_weight > 0:
         variant = f"{variant}_tcw{str(ticker_concentration_weight).replace('.', 'p')}"
+    if stress_weight_enabled:
+        variant = f"{variant}_sw{str(stress_loss_weight).replace('.', 'p')}"
     if str(target_mode).strip().lower() != "raw":
         variant = f"{variant}_tm{str(target_mode).strip().lower()}"
     if date_grouped_batches:
@@ -540,6 +670,15 @@ def _train_one(
             xb = xb.to(device, non_blocking=pin)
             yb = yb.to(device, non_blocking=pin)
             date_ns = date_ns.to(device, non_blocking=pin)
+            if stress_weight_enabled and stress_date_tensor is not None:
+                stress_mask = torch.isin(date_ns.view(-1).long(), stress_date_tensor)
+                sample_weights = torch.where(
+                    stress_mask,
+                    torch.full_like(yb.view(-1), float(stress_loss_weight)),
+                    torch.ones_like(yb.view(-1)),
+                ).view_as(yb)
+            else:
+                sample_weights = torch.ones_like(yb)
             if ticker_concentration_weight > 0:
                 ticker_idx = torch.tensor(
                     [train_ticker_to_idx[str(ticker)] for ticker in tickers],
@@ -553,10 +692,25 @@ def _train_one(
             mu_loss = mu.float()
             rank_loss_input = rank_score.float()
             yb_loss = yb.float()
-            loss = float(nll_weight) * gaussian_nll(mu_loss, log_sigma.float(), yb_loss)
+            loss = float(nll_weight) * (
+                _weighted_gaussian_nll(mu_loss, log_sigma.float(), yb_loss, sample_weights)
+                if stress_weight_enabled
+                else gaussian_nll(mu_loss, log_sigma.float(), yb_loss)
+            )
             if corr_weight > 0:
                 corr_loss = (
-                    _grouped_aux_loss(
+                    _grouped_aux_loss_weighted(
+                        rank_loss_input,
+                        yb_loss,
+                        date_ns,
+                        sample_weights,
+                        "corr",
+                        rank_temperature,
+                        min_date_batch_size,
+                        aux_target_transform,
+                    )
+                    if date_grouped_batches and stress_weight_enabled
+                    else _grouped_aux_loss(
                         rank_loss_input,
                         yb_loss,
                         date_ns,
@@ -577,7 +731,18 @@ def _train_one(
                 loss = loss + float(corr_weight) * corr_loss
             if rank_weight > 0:
                 pair_loss = (
-                    _grouped_aux_loss(
+                    _grouped_aux_loss_weighted(
+                        rank_loss_input,
+                        yb_loss,
+                        date_ns,
+                        sample_weights,
+                        "rank",
+                        rank_temperature,
+                        min_date_batch_size,
+                        aux_target_transform,
+                    )
+                    if date_grouped_batches and stress_weight_enabled
+                    else _grouped_aux_loss(
                         rank_loss_input,
                         yb_loss,
                         date_ns,
@@ -598,7 +763,16 @@ def _train_one(
                 loss = loss + float(rank_weight) * pair_loss
             if top_excess_weight > 0:
                 top_loss = (
-                    _grouped_top_excess_loss(
+                    _grouped_top_excess_loss_weighted(
+                        rank_loss_input,
+                        yb_loss,
+                        date_ns,
+                        sample_weights,
+                        min_date_batch_size,
+                        top_excess_temperature,
+                    )
+                    if date_grouped_batches and stress_weight_enabled
+                    else _grouped_top_excess_loss(
                         rank_loss_input,
                         yb_loss,
                         date_ns,
@@ -611,7 +785,16 @@ def _train_one(
                 loss = loss + float(top_excess_weight) * top_loss
             if monotonic_weight > 0:
                 mono_loss = (
-                    _grouped_monotonic_rank_loss(
+                    _grouped_monotonic_rank_loss_weighted(
+                        rank_loss_input,
+                        yb_loss,
+                        date_ns,
+                        sample_weights,
+                        min_date_batch_size,
+                        monotonic_quantiles,
+                    )
+                    if date_grouped_batches and stress_weight_enabled
+                    else _grouped_monotonic_rank_loss(
                         rank_loss_input,
                         yb_loss,
                         date_ns,
@@ -715,6 +898,11 @@ def _train_one(
             "monotonic_quantiles": monotonic_quantiles,
             "ticker_concentration_weight": ticker_concentration_weight,
             "ticker_concentration_temperature": ticker_concentration_temperature,
+            "stress_loss_weight": stress_loss_weight,
+            "stress_feature_column": stress_feature_column,
+            "stress_feature_min": stress_feature_min,
+            "stress_drawdown_threshold": stress_drawdown_threshold,
+            "stress_training_date_count": len(stress_dates),
             "target_mode": target_mode,
             "aux_target_transform": aux_target_transform,
             "date_grouped_batches": date_grouped_batches,
@@ -759,6 +947,11 @@ def _train_one(
         "monotonic_quantiles": monotonic_quantiles,
         "ticker_concentration_weight": ticker_concentration_weight,
         "ticker_concentration_temperature": ticker_concentration_temperature,
+        "stress_loss_weight": stress_loss_weight,
+        "stress_feature_column": stress_feature_column,
+        "stress_feature_min": stress_feature_min,
+        "stress_drawdown_threshold": stress_drawdown_threshold,
+        "stress_training_date_count": len(stress_dates),
         "target_mode": target_mode,
         "aux_target_transform": aux_target_transform,
         "rank_temperature": rank_temperature,
@@ -833,6 +1026,10 @@ def main() -> None:
     ap.add_argument("--monotonic-quantiles", type=int, default=5)
     ap.add_argument("--ticker-concentration-weight", type=float, default=0.0)
     ap.add_argument("--ticker-concentration-temperature", type=float, default=0.05)
+    ap.add_argument("--stress-loss-weight", type=float, default=1.0)
+    ap.add_argument("--stress-feature-column", default="Market_Stress_Regime")
+    ap.add_argument("--stress-feature-min", type=float, default=0.5)
+    ap.add_argument("--stress-drawdown-threshold", type=float, default=-0.10)
     ap.add_argument("--target-mode", choices=["raw", "date_excess"], default="raw")
     ap.add_argument("--date-grouped-batches", action="store_true")
     ap.add_argument("--min-date-batch-size", type=int, default=2)
@@ -925,6 +1122,10 @@ def main() -> None:
                             monotonic_quantiles=int(args.monotonic_quantiles),
                             ticker_concentration_weight=float(args.ticker_concentration_weight),
                             ticker_concentration_temperature=float(args.ticker_concentration_temperature),
+                            stress_loss_weight=float(args.stress_loss_weight),
+                            stress_feature_column=args.stress_feature_column,
+                            stress_feature_min=float(args.stress_feature_min),
+                            stress_drawdown_threshold=float(args.stress_drawdown_threshold),
                             target_mode=args.target_mode,
                             hard_gate=bool(args.hard_gate),
                             artifact_dir=args.artifact_dir,
@@ -975,6 +1176,10 @@ def main() -> None:
                 "monotonic_quantiles": int(args.monotonic_quantiles),
                 "ticker_concentration_weight": float(args.ticker_concentration_weight),
                 "ticker_concentration_temperature": float(args.ticker_concentration_temperature),
+                "stress_loss_weight": float(args.stress_loss_weight),
+                "stress_feature_column": args.stress_feature_column,
+                "stress_feature_min": float(args.stress_feature_min),
+                "stress_drawdown_threshold": float(args.stress_drawdown_threshold),
                 "target_mode": args.target_mode,
                 "aux_target_transform": args.aux_target_transform,
                 "hard_gate": bool(args.hard_gate),
