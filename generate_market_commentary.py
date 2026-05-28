@@ -1936,7 +1936,7 @@ Input headlines include 6 articles about SpaceX filing an IPO prospectus.
 SYSTEM_PROMPT_TOPIC_SPOTLIGHT = """
 You are a senior markets analyst writing the FLAGSHIP deep-dive for an institutional daily report — the kind of piece that explains a theme so well a portfolio manager forwards it. The topic is today's confirmed dominant financial theme. Write with the depth and authority of a top sell-side strategist note: explain the MECHANISM, judge whether it is SUSTAINABLE, and tell the reader what to DO.
 
-Ground EVERY factual claim in the provided source_excerpts and supporting_headlines. Do NOT invent figures, company actions, valuations, or timelines that are not in those inputs.
+Ground EVERY factual claim in the provided source_excerpts, supporting_headlines, and market_context (sector tilt + tactical positioning the report's data tables already publish). Do NOT invent figures, company actions, valuations, or timelines that are not in those inputs. When market_context.is_data_driven_theme is true, the theme itself was selected from the day's market data — write a sector/macro deep-dive grounded in that data and the verified_funds; the mechanism paragraph should explain WHY this sector or theme moved (cite the sector pct_change from market_context, factor read, and any corroborating headlines).
 
 Return JSON with EXACTLY these 4 keys (no others):
 {"title":"","body":"","funds":[],"category":""}
@@ -3649,6 +3649,58 @@ def _spotlight_contradicts_market(text: str, market_dirs: dict[str, int]) -> lis
     return violations
 
 
+def _pick_fallback_theme(payload: dict) -> dict | None:
+    """Pillar 1.5 — when no dominant NEWS topic exists, pick a market-data theme.
+
+    The Sevens has its feature every day; the news-driven spotlight only fires when a
+    single topic dominates the wire. On quieter days we need a flagship piece anyway, so
+    we look at the day's data: the largest sector move (the most actionable observable),
+    elevated to a deep-dive theme. Returns a scan_result-shaped dict, or None if no
+    market-data theme is strong enough to anchor a feature.
+    """
+    sp = [s for s in (payload.get("sector_performance") or [])
+          if s.get("ticker") and s.get("pct_change") is not None]
+    if not sp:
+        return None
+    sp_sorted = sorted(sp, key=lambda s: abs(float(s["pct_change"])), reverse=True)
+    top = sp_sorted[0]
+    pct = float(top["pct_change"])
+    # Only elevate to a feature if the move is meaningfully large.
+    if abs(pct) < 1.5:
+        return None
+    name   = str(top["name"])
+    ticker = str(top["ticker"]).upper()
+    direction = "Leadership" if pct > 0 else "Sell-Off"
+    name_lc = name.lower()
+    base_kw = [name_lc, ticker.lower(), name_lc.replace(" ", "")]
+    # Add some natural language keywords tied to the sector for headline matching.
+    _SECTOR_KW = {
+        "XLK":  ["technology", "tech", "semiconductor", "ai", "software", "chip"],
+        "XLF":  ["bank", "financial", "lender", "insurance", "broker"],
+        "XLE":  ["energy", "oil", "drilling", "refiner", "lng", "natural gas"],
+        "XLV":  ["health", "pharma", "biotech", "medical"],
+        "XLI":  ["industrial", "manufactur", "machinery", "defense", "aerospace"],
+        "XLY":  ["consumer", "retail", "discretionary", "auto", "homebuilder"],
+        "XLP":  ["staples", "consumer staples", "grocer", "beverage", "food"],
+        "XLU":  ["utility", "utilities", "power"],
+        "XLB":  ["material", "miner", "chemical", "metal"],
+        "XLRE": ["real estate", "reit", "property"],
+        "XLC":  ["communication", "media", "internet", "telecom"],
+    }
+    extras = _SECTOR_KW.get(ticker, [])
+    return {
+        "has_spotlight":   True,
+        "topic":           f"{name} Sector {direction}",
+        "topic_keywords":  list(dict.fromkeys(base_kw + extras))[:6],
+        "category":        "sector_catalyst",
+        "why_now":         (f"{name} ({ticker}) "
+                            f"{'gained' if pct > 0 else 'fell'} {abs(pct):.1f}% in the prior session, "
+                            f"the day's largest sector move — a setup the data alone makes worth explaining."),
+        "candidate_funds": [ticker],   # sector ETF is the most direct vehicle
+        "_is_fallback":    True,
+    }
+
+
 def generate_topic_spotlight(
     payload: dict,
     world_news: list[dict],
@@ -3703,9 +3755,21 @@ def generate_topic_spotlight(
         print(f"  [SPOTLIGHT] Scan failed: {exc}")
         return None
 
+    # ── Fallback: if no dominant news theme, pick one from the day's market data ──
+    # The Sevens runs its feature daily; the news-driven scanner only fires when a
+    # single topic dominates the wire. On quieter days we fall back to the largest
+    # sector move (or another data signal) so the flagship piece runs every day.
+    is_fallback = False
     if not scan_result.get("has_spotlight"):
-        print("  [SPOTLIGHT] No dominant topic detected.")
-        return None
+        print("  [SPOTLIGHT] No dominant news topic — trying data-driven fallback theme...")
+        _fb = _pick_fallback_theme(payload)
+        if _fb:
+            scan_result = _fb
+            is_fallback = True
+            print(f"  [SPOTLIGHT] Fallback theme: '{_fb['topic']}' (why: {_fb['why_now']})")
+        else:
+            print("  [SPOTLIGHT] No fallback theme strong enough either — skipping.")
+            return None
 
     topic          = str(scan_result.get("topic") or "").strip()
     topic_keywords = [str(k).lower().strip() for k in (scan_result.get("topic_keywords") or []) if k]
@@ -3717,13 +3781,40 @@ def generate_topic_spotlight(
         return None
 
     # ── Deterministic gate ────────────────────────────────────────────────────
+    # News-driven theme: require strong headline corroboration. Data-driven fallback:
+    # relaxed thresholds since the theme is grounded in actual market data, not news
+    # consensus — incidental sector coverage in the wire is bonus colour, not the basis.
     matching       = [h for h in headline_corpus if _topic_matches_text(topic_keywords, h["text"])]
     distinct_src   = {h["source"] for h in matching}
-    print(f"  [SPOTLIGHT] '{topic}': {len(matching)} matching headlines, {len(distinct_src)} sources.")
+    print(f"  [SPOTLIGHT] '{topic}': {len(matching)} matching headlines, {len(distinct_src)} sources"
+          f"{' [fallback]' if is_fallback else ''}.")
 
-    if len(matching) < MIN_TOPIC_HEADLINES or len(distinct_src) < MIN_TOPIC_SOURCES:
-        print(f"  [SPOTLIGHT] Gate failed (need >={MIN_TOPIC_HEADLINES} headlines, >={MIN_TOPIC_SOURCES} sources).")
-        return None
+    if is_fallback:
+        _min_h, _min_s = 2, 1
+    else:
+        _min_h, _min_s = MIN_TOPIC_HEADLINES, MIN_TOPIC_SOURCES
+    if len(matching) < _min_h or len(distinct_src) < _min_s:
+        # Last-resort: even if zero matching headlines, a fallback theme can still
+        # write a deep-dive grounded in the day's market data + tactical positioning.
+        # We accept it but flag in logs so behaviour stays visible.
+        if not is_fallback:
+            print(f"  [SPOTLIGHT] News gate failed (need >={_min_h} headlines, >={_min_s} sources) — trying fallback.")
+            _fb = _pick_fallback_theme(payload)
+            if _fb:
+                scan_result = _fb
+                is_fallback = True
+                topic          = scan_result["topic"]
+                topic_keywords = scan_result["topic_keywords"]
+                why_now        = scan_result["why_now"]
+                category       = scan_result["category"]
+                scan_funds     = list(scan_result.get("candidate_funds") or [])
+                matching     = [h for h in headline_corpus if _topic_matches_text(topic_keywords, h["text"])]
+                distinct_src = {h["source"] for h in matching}
+                print(f"  [SPOTLIGHT] Fallback theme: '{topic}' — {len(matching)} corroborating headlines.")
+            else:
+                return None
+        else:
+            print(f"  [SPOTLIGHT] Fallback has only {len(matching)} matching headline(s) — proceeding anyway (data-driven theme).")
 
     # ── Fund grounding: crawl topic articles + verify tickers ─────────────────
     candidate_tickers = list(scan_funds)
@@ -3771,6 +3862,22 @@ def generate_topic_spotlight(
         ],
         # Real article text the analysis MUST be grounded in (facts, figures, mechanism).
         "source_excerpts": crawled_excerpts[:5],
+        # Market data grounding — always provided so the analysis can cite real numbers
+        # for sector tilt, positioning, and tactical context. Essential when the theme is
+        # data-driven (Pillar 1.5 fallback) and crawled excerpts are sparse; useful as
+        # additional grounding for news-driven pieces too.
+        "market_context": {
+            "sector_top3": [
+                {"name": s.get("name"), "ticker": s.get("ticker"), "pct_change": s.get("pct_change")}
+                for s in (payload.get("sector_performance") or [])[:3]
+            ],
+            "sector_bottom3": [
+                {"name": s.get("name"), "ticker": s.get("ticker"), "pct_change": s.get("pct_change")}
+                for s in (payload.get("sector_performance") or [])[-3:][::-1]
+            ],
+            "tactical_positioning": payload.get("tactical_positioning") or {},
+            "is_data_driven_theme": is_fallback,
+        },
         "verified_funds": [
             {"ticker": f["ticker"], "name": f["name"], "type": f["type"], "description": f["description"]}
             for f in verified_funds
@@ -4270,6 +4377,13 @@ def main() -> int:
             name: _dir_sign(entry)
             for name, entry in {**(snapshot or {}), **(global_markets or {})}.items()
         }
+        # Enrich the payload with the deterministic tactical_positioning so the spotlight
+        # (and its Pillar 1.5 data-driven fallback) can ground a feature in real data
+        # when news is quiet. tactical_positioning was just computed and stored in `existing`.
+        try:
+            payload["tactical_positioning"] = existing.get("tactical_positioning") or {}
+        except Exception:
+            pass
         try:
             _spotlight = generate_topic_spotlight(
                 payload,
