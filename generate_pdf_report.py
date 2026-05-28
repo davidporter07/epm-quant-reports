@@ -1206,9 +1206,16 @@ def build_topic_spotlight_html(commentary: dict) -> str:
     if not sp or not sp.get("title") or not sp.get("body"):
         return ""
     title = esc(str(sp.get("title", "")))
+    # Split paragraphs on double-newline; fall back to runs of 2+ spaces so the deep-dive
+    # never collapses into one blob if the model used spaces instead of newlines.
+    import re as _re
+    _body = str(sp.get("body", ""))
+    _parts = _re.split(r"\n\n+", _body)
+    if len(_parts) < 2:
+        _parts = _re.split(r" {2,}", _body)
     paras = "".join(
         f'<p class="commentary-p">{esc(p.strip())}</p>'
-        for p in str(sp.get("body", "")).split("\n\n")
+        for p in _parts
         if p.strip()
     )
     funds = sp.get("funds") or []

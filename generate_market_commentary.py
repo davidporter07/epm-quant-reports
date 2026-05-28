@@ -65,7 +65,7 @@ OLLAMA_TIMEOUT = int(os.getenv("LOCAL_OLLAMA_TIMEOUT", "900"))
 TOPIC_SPOTLIGHT_ENABLED = True
 MIN_TOPIC_HEADLINES     = 4   # min distinct matching headlines to gate the spotlight in
 MIN_TOPIC_SOURCES       = 2   # min distinct sources required
-MAX_CRAWL_ARTICLES      = 5   # max article URLs to crawl for fund grounding
+MAX_CRAWL_ARTICLES      = 6   # max article URLs to crawl for fund grounding + analysis excerpts
 MAX_SPOTLIGHT_FUNDS     = 5   # max verified funds to cite
 
 ROOT             = Path(__file__).resolve().parent
@@ -1738,35 +1738,32 @@ Input headlines include 6 articles about SpaceX filing an IPO prospectus.
 """
 
 SYSTEM_PROMPT_TOPIC_SPOTLIGHT = """
-You are a financial analyst writing a sharp spotlight story for a daily market intelligence report. The topic is today's confirmed dominant financial theme.
+You are a senior markets analyst writing the FLAGSHIP deep-dive for an institutional daily report — the kind of piece that explains a theme so well a portfolio manager forwards it. The topic is today's confirmed dominant financial theme. Write with the depth and authority of a top sell-side strategist note: explain the MECHANISM, judge whether it is SUSTAINABLE, and tell the reader what to DO.
+
+Ground EVERY factual claim in the provided source_excerpts and supporting_headlines. Do NOT invent figures, company actions, valuations, or timelines that are not in those inputs.
 
 Return JSON with EXACTLY these 4 keys (no others):
 {"title":"","body":"","funds":[],"category":""}
 
-title: Punchy headline, max 12 words. No filler openers like "Here's What" or "Everything You Need to Know".
-  Headline the TOPIC, not a fabricated index move. Do NOT assert a daily price direction, point move,
-  or level for any index/asset (no "Dow Surges 250 Points", "Oil Crashes", "S&P Soars") unless that exact
-  move is present in the supporting headlines — the report's own data tables already report the close.
-body: 2-3 analytical paragraphs as a SINGLE string. Separate paragraphs with two spaces.
-  Paragraph 1 (required): What happened today and why it matters to markets — cite specific numbers from the headlines.
-  Paragraph 2 (required): Cross-asset or sector implications — which assets, sectors, or funds benefit or face headwinds.
-  Paragraph 3 (optional): One specific near-term catalyst or level for investors to watch.
-funds: Array of fund objects using ONLY tickers from the verified_funds input list. If verified_funds is empty, set funds=[].
-  Each fund object has exactly: ticker, name, type, exposure_note.
-  exposure_note: one qualitative sentence on how the fund relates to the topic. No fabricated percentages or AUM figures.
+title: Punchy, specific headline, max 12 words. Headline the THEME and its stakes (e.g. "The Memory Shortage Powering the Next Leg of the AI Trade"). Do NOT assert a daily index move/level ("Dow Surges 250 Points", "Oil Crashes") unless that exact move appears in the inputs — the report's data tables already report the close.
+
+body: A genuine analytical deep-dive of 4-6 paragraphs as a SINGLE string, with paragraphs separated by a DOUBLE NEWLINE (\\n\\n). Each paragraph 3-5 sentences. Follow this arc:
+  Paragraph 1 — WHAT & WHY IT MATTERS: the development and the specific numbers behind it (from source_excerpts). Establish the stakes.
+  Paragraph 2 — THE MECHANISM: explain WHY this is happening — the underlying driver, the chain of cause and effect. Teach the reader the thing they did not already know. This is the paragraph that separates a deep-dive from a blurb.
+  Paragraph 3 — IS IT SUSTAINABLE / VALUATION & DATA CONTEXT: the analytical judgment. Supply/demand, earnings, valuation, positioning, the bear case vs the bull case — grounded in the excerpts. Take a side.
+  Paragraph 4 — WHAT TO DO NOW: concrete positioning. Which exposures benefit or face headwinds, how an investor would express the view using the verified_funds, and the SPECIFIC near-term catalyst or price level that confirms or breaks the thesis.
+funds: Array of fund objects using ONLY tickers from the verified_funds input. If verified_funds is empty, set funds=[].
+  Each object has exactly: ticker, name, type, exposure_note (one sentence on how it relates to the theme; no fabricated %/AUM).
 category: carry through the category from the input.
 
 Rules:
-- Cite ONLY tickers from verified_funds. Never invent a ticker.
-- Commit to a view. No hedge phrases: "investors should watch", "uncertainty remains", "markets face headwinds" are forbidden.
-- For geopolitical topics: market-impact framing only (energy prices, currency flows, supply chains, rate path implications).
-- Active voice, present tense. No preamble or conclusion. Start body with the event, not with "Today" or "Yesterday".
+- GROUNDED: cite specifics only from source_excerpts/supporting_headlines. No invented numbers. Cite ONLY verified_funds tickers — never invent a ticker.
+- TEACH, then CONCLUDE: the mechanism paragraph must explain a cause-and-effect a smart non-expert would not already know. Commit to a view — forbidden hedges: "investors should watch", "uncertainty remains", "markets face headwinds", "time will tell", "remains to be seen".
+- Active voice, present tense. No preamble, no summary sentence, no "in conclusion". Start the body with the development itself.
+- Geopolitical themes: market-impact framing only (energy, currencies, supply chains, rate path).
 
-ONE-SHOT EXAMPLE:
-BAD: "The SpaceX IPO has generated significant interest. Investors should watch how markets react amid uncertainty around valuation."
-GOOD: "SpaceX's formal $1.75T IPO filing places the largest private equity event in history on a mid-June timeline, forcing index inclusion decisions at every major ETF provider and creating a structural buyer base that did not exist at prior mega-cap listings.  The immediate read-through is positive for innovation-focused closed-end and interval funds already holding pre-IPO stakes — secondary pricing in DXYZ and ARKVX has front-run the filing, and advisors seeking exposure before SPCX hits public markets have a shrinking window.  The key variable is index fast-track timing: S&P 500 inclusion requires profitability, which SpaceX demonstrated in 2023; a same-quarter add would force passive funds to absorb an estimated $15B+ in shares."
-
-{"title":"SpaceX Files $1.75T IPO — Pre-Market Exposure Plays Now","body":"SpaceX's formal...","funds":[{"ticker":"DXYZ","name":"Destiny Tech100","type":"CEF","exposure_note":"Closed-end fund with significant pre-IPO SpaceX exposure as its largest portfolio holding."}],"category":"ipo"}
+ONE-SHOT EXAMPLE (abbreviated — yours must be 4-6 full paragraphs):
+{"title":"The Memory Shortage Powering the Next Leg of the AI Trade","body":"Large-cap memory makers have become the market's best performers, with Micron, SanDisk and Western Digital up roughly 115%, 145% and 87% over two months as the entire tech sector re-rates higher on their backs.\\n\\nThe driver is physical, not sentiment: AI processors can execute trillions of operations per second, but performance was capped by how fast memory could feed them data — the 'memory wall.' Stacking high-bandwidth memory directly atop the processor shattered that ceiling, and in doing so multiplied the number of memory chips a single AI server needs from eight to roughly ninety-six.\\n\\nThat demand shock is durable on a multi-year horizon. Micron's 2026 capacity is already sold out, new clean-room supply is years away, and trailing free cash flow is inflecting from under $2B to an expected $10B — which is why valuations have stayed near 10x forward earnings despite triple-digit rallies; earnings are outrunning the share price.\\n\\nThe cleanest expression is direct memory exposure, which most tech ETFs are structurally underweight. The thesis breaks only if hyperscalers cut data-center capex — the order book to watch into next quarter.","funds":[{"ticker":"SMH","name":"VanEck Semiconductor ETF","type":"ETF","exposure_note":"Holds the large-cap memory names driving the move, though weighted toward logic chipmakers."}],"category":"sector_catalyst"}
 """
 
 # Sensational escalation phrases that are stripped from spotlight text.
@@ -3536,12 +3533,18 @@ def generate_topic_spotlight(
     candidate_tickers = list(scan_funds)
     crawl_targets = [h["url"] for h in matching if h.get("url", "").startswith("http")]
     crawled = 0
+    crawled_excerpts: list[dict] = []
     for url in crawl_targets[:MAX_CRAWL_ARTICLES]:
         print(f"  [SPOTLIGHT] Crawling {url[:80]}...")
         body = _crawl_article_body(url)
         if body:
             candidate_tickers.extend(_extract_ticker_candidates(body))
             crawled += 1
+            # Keep a clean excerpt to GROUND the analysis in actual reporting rather than
+            # headlines alone — this is what lifts the spotlight from a blurb to a genuine
+            # deep-dive (the mechanism/sustainability paragraphs need real source material).
+            _src = url.split("/")[2] if "//" in url else url
+            crawled_excerpts.append({"source": _src, "text": body[:1400]})
     print(f"  [SPOTLIGHT] Crawled {crawled} articles; {len(set(candidate_tickers))} raw candidates.")
 
     seen_t: set[str] = set()
@@ -3570,6 +3573,8 @@ def generate_topic_spotlight(
         "supporting_headlines": [
             {"headline": h["text"][:300], "source": h["source"]} for h in matching[:10]
         ],
+        # Real article text the analysis MUST be grounded in (facts, figures, mechanism).
+        "source_excerpts": crawled_excerpts[:5],
         "verified_funds": [
             {"ticker": f["ticker"], "name": f["name"], "type": f["type"], "description": f["description"]}
             for f in verified_funds
@@ -3592,15 +3597,20 @@ def generate_topic_spotlight(
     title = ""
     body  = ""
     story: dict = {}
-    for attempt in range(3):
+    for attempt in range(4):
         try:
-            story = _call_ollama_raw(SYSTEM_PROMPT_TOPIC_SPOTLIGHT, writer_payload)
+            story = _call_ollama_raw(SYSTEM_PROMPT_TOPIC_SPOTLIGHT, writer_payload, num_ctx=16384)
         except Exception as exc:
             print(f"  [SPOTLIGHT] Writer attempt {attempt + 1} failed: {exc}")
             story = {}
             continue
-        if not (str(story.get("title") or "").strip() and len(str(story.get("body") or "")) > 80):
-            print(f"  [SPOTLIGHT] Attempt {attempt + 1}: incomplete output, retrying...")
+        # Depth gate: a flagship deep-dive must be substantive (>=3 paragraphs, >=600 chars).
+        # A thin blurb triggers a retry; an exhausted loop drops it (quality over presence).
+        _body_raw = str(story.get("body") or "").strip()
+        _para_ct = len([p for p in _body_raw.split("\n\n") if p.strip()])
+        if not (str(story.get("title") or "").strip() and len(_body_raw) >= 600 and _para_ct >= 3):
+            print(f"  [SPOTLIGHT] Attempt {attempt + 1}: too thin "
+                  f"({len(_body_raw)} chars, {_para_ct} paras) — retrying for depth.")
             story = {}
             continue
         # ── Scrub, then run the directional guard before accepting ─────────────

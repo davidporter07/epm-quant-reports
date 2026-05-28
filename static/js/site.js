@@ -1583,7 +1583,10 @@ async function initMarketsPage() {
         const spotlightContent = document.getElementById('marketsTopicSpotlightContent');
         if (spotlightWrap && spotlightContent && sp.title && sp.body) {
           let html = '<div class="briefing-col-title">' + escapeHtml(sp.title) + '</div>';
-          const paras = String(sp.body).split(/\n\n+/);
+          // Split on double-newline; fall back to runs of 2+ spaces so the deep-dive
+          // never renders as one blob if the model used spaces instead of newlines.
+          let paras = String(sp.body).split(/\n\n+/);
+          if (paras.length < 2) paras = String(sp.body).split(/ {2,}/);
           for (let i = 0; i < paras.length; i++) {
             const t = paras[i].trim();
             if (t) html += '<p class="market-copy">' + escapeHtml(t) + '</p>';
