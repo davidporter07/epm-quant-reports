@@ -1702,6 +1702,9 @@ ONE-SHOT CALIBRATION — geopolitical tone (follow this pattern exactly):
   GOOD: "Markets are pricing a higher risk premium after reports of expanded strikes near Iranian facilities; diplomatic talks remain unresolved."
   Rule: mirror the payload's exact language — do not upgrade 'strikes' to 'war', do not assert fiscal or political consequences as fact, do not name a conflict as an ongoing war unless the payload explicitly uses that word.
 Do NOT cite foreign central banks (BoE, ECB, BoJ, PBoC, RBA, BoC, SNB) or foreign sovereign yields (Gilts, Bunds, JGBs) as drivers of US asset moves unless a US-asset headline in the payload explicitly names that institution. Foreign monetary policy may move foreign assets in the international section; for US equities, US bonds, and US dollar commentary, drivers must come from the US payload.
+COMMITTED VOICE: take a side. The reader pays to know what YOU think, not which way it could go. Forbidden: "investors should watch", "remains to be seen", "wait-and-see", "could go either way", "markets face headwinds", "cautious optimism", "the outlook is mixed", "uncertainty persists". State the directional view, then the conditions that would invalidate it.
+CAUSAL LINKAGE: every commentary section must name a cause and effect, not just describe a level. Wrong: "the 10-year yield fell 6 bp to 4.50%." Right: "the 10-year yield fell 6 bp to 4.50% as falling oil prices eased the inflation impulse, providing relief to growth-name multiples." Connect at least one named driver and one downstream effect.
+FORWARD HOOK: each commentary section's closing sentence must name a specific price level, threshold, or catalyst the reader is watching next — never generic ("traders will be watching" is banned).
 Return ONLY valid JSON  no markdown fences, no explanation."""
 
 # Call 1: Market narrative sections
@@ -1976,6 +1979,14 @@ BANNED_PHRASES = [
     "uncertain environment", "uncertain outlook", "it is worth noting",
     "it should be noted", "importantly,", "in conclusion", "overall,",
     "needless to say", "at the end of the day", "moving forward",
+    # Pillar 4: hedges that dilute a committed analytical voice. The report's job is to
+    # take a side based on the data, not survey possibilities. These all force retries.
+    "investors should watch", "investors will watch", "remains to be seen",
+    "time will tell", "wait-and-see", "wait and see", "could go either way",
+    "markets face headwinds", "cautious optimism", "exercise caution",
+    "the outlook is mixed", "outlook remains mixed", "uncertainty persists",
+    "uncertainty remains", "risk remains elevated", "risk remains skewed",
+    "remain on the sidelines", "stay on the sidelines",
 ]
 
 # Alias map at module level so retry loops can remap keys before scrubbing.
