@@ -19,6 +19,7 @@ import pandas as pd
 from pandas.tseries.holiday import USFederalHolidayCalendar
 from pandas.tseries.offsets import CustomBusinessDay
 
+from build_directional_feature_panel import EARNINGS_TICKER_ALIASES
 from build_quantcup_price_dl_panel import build_panel
 from deep_learning_model import _ensure_panel_schema, read_panel
 from dl_growth24_paper_outcome import (
@@ -113,11 +114,12 @@ def _load_env_key(name: str) -> str:
 
 def _refresh_earnings_cache(ticker_config: Path, force_refresh: bool) -> None:
     tickers = _load_tickers(ticker_config)
+    earnings_tickers = list(dict.fromkeys(EARNINGS_TICKER_ALIASES.get(ticker, ticker) for ticker in tickers))
     api_key = _load_env_key("AV_API_KEY")
     if not api_key:
         raise RuntimeError("AV_API_KEY is required to refresh Growth24 AV earnings cache.")
-    print(f"Refreshing AV earnings cache for {len(tickers)} Growth24 tickers.")
-    download_earnings(tickers, api_key, force_refresh=bool(force_refresh))
+    print(f"Refreshing AV earnings cache for {len(earnings_tickers)} Growth24 earnings tickers.")
+    download_earnings(earnings_tickers, api_key, force_refresh=bool(force_refresh))
 
 
 def _refresh_panel(ticker_config: Path, panel_output: Path, end: date) -> None:
