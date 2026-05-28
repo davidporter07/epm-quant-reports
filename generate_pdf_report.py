@@ -276,6 +276,23 @@ def pct_display(val: Any) -> str:
         return "N/A"
 
 
+def _signed(val: Any, decimals: int = 2, suffix: str = "", thousands: bool = False) -> str:
+    """Format a number with an explicit +/- sign, normalizing values that round to
+    zero so a near-zero or negative-zero input never renders as '-0.00' or '+-0.00'.
+    Each field derives its own sign (callers must NOT share one sign across change/pct).
+    Returns the em-dash placeholder on non-numeric input.
+    """
+    try:
+        r = round(float(val) + 0.0, decimals)
+        if r == 0:
+            r = 0.0  # collapse negative zero
+        sign = "+" if r >= 0 else "-"
+        body = f"{abs(r):,.{decimals}f}" if thousands else f"{abs(r):.{decimals}f}"
+        return f"{sign}{body}{suffix}"
+    except (TypeError, ValueError):
+        return "—"
+
+
 # ---------------------------------------------------------------------------
 # CSS
 # ---------------------------------------------------------------------------
@@ -880,11 +897,10 @@ def build_snapshot_table(snapshot: dict, title: str = "U.S. Markets", show_dolla
 
         if change is not None and pct is not None:
             try:
-                sign    = "+" if float(change) >= 0 else ""
-                chg_str = (f"{sign}{float(change):.3f}" if is_yield
-                           else f"{sign}{float(change):,.2f}")
-                pct_str = f"{sign}{float(pct):.2f}%"
-                cls     = "pos" if float(change) >= 0 else "neg"
+                _cv     = round(float(change) + 0.0, 3 if is_yield else 2)
+                chg_str = _signed(change, 3) if is_yield else _signed(change, 2, thousands=True)
+                pct_str = _signed(pct, 2, suffix="%")
+                cls     = "flat" if _cv == 0 else ("pos" if _cv > 0 else "neg")
             except Exception:
                 chg_str = pct_str = "\u2014"
                 cls = "flat"
@@ -897,19 +913,15 @@ def build_snapshot_table(snapshot: dict, title: str = "U.S. Markets", show_dolla
             if is_yield:
                 _bpw = data.get("bp_change_1w"); _bpy = data.get("bp_change_ytd")
                 if _bpw is not None:
-                    _sgn = "+" if float(_bpw) >= 0 else ""
-                    _sub.append(f"1W: {_sgn}{float(_bpw):.0f}bp")
+                    _sub.append(f"1W: {_signed(_bpw, 0, suffix='bp')}")
                 if _bpy is not None:
-                    _sgn = "+" if float(_bpy) >= 0 else ""
-                    _sub.append(f"YTD: {_sgn}{float(_bpy):.0f}bp")
+                    _sub.append(f"YTD: {_signed(_bpy, 0, suffix='bp')}")
             else:
                 _pw = data.get("pct_change_1w"); _py = data.get("pct_change_ytd")
                 if _pw is not None:
-                    _sgn = "+" if float(_pw) >= 0 else ""
-                    _sub.append(f"1W: {_sgn}{float(_pw):.1f}%")
+                    _sub.append(f"1W: {_signed(_pw, 1, suffix='%')}")
                 if _py is not None:
-                    _sgn = "+" if float(_py) >= 0 else ""
-                    _sub.append(f"YTD: {_sgn}{float(_py):.1f}%")
+                    _sub.append(f"YTD: {_signed(_py, 1, suffix='%')}")
         except Exception:
             pass
         sub_html = (
@@ -1094,8 +1106,6 @@ def build_page2_html(logo_b64: str, commentary: dict) -> str:
   <div class="two-col-r">
     <div class="sub-label">U.S. Treasury Yields</div>
     {bonds_tbl}
-    <div class="sub-label">Economics</div>
-    {para("economics_commentary")}
   </div>
 </div>
 """
@@ -1256,6 +1266,9 @@ def build_page3_html(logo_b64: str, commentary: dict) -> str:
     {fx_tbl}
   </div>
 </div>
+
+<div class="sec-header">Economics</div>
+{para("economics_commentary")}
 
 {build_synthesis_html(commentary)}
 {build_topic_spotlight_html(commentary)}

@@ -326,9 +326,12 @@ def fetch_earnings_calendar() -> list[dict]:
                 "hour":            str(e.get("hour", "")),  # "bmo" | "amc" | ""
             })
         out.sort(key=lambda x: x["date"])
-        # Enrich with market cap — prioritize known large-caps first so they
-        # aren't crowded out by microcaps that sort earlier alphabetically.
-        # Today's list can have 80+ entries; without this, out[:20] is all noise.
+        # Enrich with market cap so the downstream $2B gate can size names correctly.
+        # Priority order: (1) analyst-COVERED names (non-null eps_estimate — Finnhub's
+        # own signal that a name is real and report-worthy), near-dated first since `out`
+        # is date-sorted; (2) the static large-cap set; (3) everything else. Covered names
+        # go first so today's reporters (e.g. AZO, ZS) aren't crowded out of the lookup
+        # budget by a 14-day backlog of microcaps and end up with market_cap=None.
         _LARGE_CAP_PRIORITY = {
             "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA",
             "AMD","INTC","QCOM","AVGO","TXN","MU","AMAT","ADI",
@@ -338,21 +341,34 @@ def fetch_earnings_calendar() -> list[dict]:
             "DIS","NFLX","CMCSA","NKE","SBUX","MCD","PEP","KO","PG",
             "ELF","ULTA",
         }
-        _all_syms  = [e["symbol"] for e in out if e.get("symbol")]
-        _priority  = [s for s in _all_syms if s in _LARGE_CAP_PRIORITY]
-        _others    = [s for s in _all_syms if s not in _LARGE_CAP_PRIORITY]
-        _symbols   = (_priority + _others)[:40]
+        _covered  = [e["symbol"] for e in out if e.get("symbol") and e.get("eps_estimate") is not None]
+        _priority = [e["symbol"] for e in out if e.get("symbol") in _LARGE_CAP_PRIORITY]
+        _rest     = [e["symbol"] for e in out if e.get("symbol")]
+        _seen: set[str] = set()
+        _symbols: list[str] = []
+        for s in _covered + _priority + _rest:
+            if s not in _seen:
+                _seen.add(s)
+                _symbols.append(s)
+        _symbols = _symbols[:60]
         if _symbols:
             try:
                 import yfinance as yf
                 batch = yf.Tickers(" ".join(_symbols))
+                _lookup = set(_symbols)
                 for e in out:
                     sym = e.get("symbol", "")
-                    t = batch.tickers.get(sym)
-                    mc = (t.fast_info.get("marketCap") if t else None) or 0
-                    e["market_cap"] = mc
+                    if sym not in _lookup:
+                        continue
+                    # Per-ticker guard: a single fast_info failure must NOT abort the
+                    # whole loop and strand every later name with market_cap=None.
+                    try:
+                        t = batch.tickers.get(sym)
+                        e["market_cap"] = (t.fast_info.get("marketCap") if t else None) or 0
+                    except Exception:
+                        e["market_cap"] = 0
             except Exception:
-                pass  # leave market_cap absent; downstream passes through
+                pass  # batch construction failed; leave market_cap absent
         print(f"[ENRICH] Earnings calendar: {len(out)} events in next 14 days")
         return out
     except Exception as exc:

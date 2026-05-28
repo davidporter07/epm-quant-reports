@@ -467,8 +467,18 @@ def _build_scenarios_block(c: dict) -> tuple[str, list]:
     levels_watch = c.get('levels_to_watch') or []
     event_name   = c.get('scenario_event', '')
     consensus    = c.get('scenario_consensus', '')
+    event_day    = str(c.get('scenario_event_day', '') or '').strip().lower()
     if not scenarios or len(scenarios) < 3:
         return '', []
+
+    # Section title reflects WHEN the primary event lands — a future event must not be
+    # titled "Today's Scenarios" (e.g. Thursday's GDP rendered on a Wednesday).
+    if event_day in ('', 'today'):
+        _sec_title = "Today's Scenarios"
+    elif event_day == 'tomorrow':
+        _sec_title = "Tomorrow's Scenarios"
+    else:
+        _sec_title = f"{event_day.capitalize()}'s Scenarios"
 
     _LABEL_COLORS = {0: '#dc2626', 1: '#2563eb', 2: '#16a34a'}   # Hot=red, In-Line=blue, Cold=green
     _LABEL_BG    = {0: '#fef2f2', 1: '#eff6ff', 2: '#f0fdf4'}
@@ -563,14 +573,14 @@ def _build_scenarios_block(c: dict) -> tuple[str, list]:
         '<div style="margin:16px 0;">'
         f'<p style="margin:0 0 8px 0;font-size:11px;font-weight:700;text-transform:uppercase;'
         f'letter-spacing:0.08em;color:#6b7280;border-bottom:1px solid #e5e7eb;padding-bottom:5px;">'
-        f'Today&#39;s Scenarios</p>'
+        f'{html_lib.escape(_sec_title)}</p>'
         f'{event_header_html}'
         f'{scenario_html}'
         f'{levels_html}'
         f'</div>'
     )
 
-    all_txt = ['TODAY\'S SCENARIOS', '']
+    all_txt = [_sec_title.upper(), '']
     if header:
         all_txt += [f'Event: {header}', '']
     all_txt += txt_lines
@@ -966,6 +976,23 @@ if __name__ == "__main__":
                 print(_msg)
                 logging.error(_msg)
                 sys.exit(1)
+
+            # --send-only skipped monitor.py, which normally regenerates the PDF. Both the
+            # served report site AND the email's PDF attachment are built from report.pdf,
+            # so without this they'd be stale relative to the fresh commentary the email
+            # body is built from (the 5/22 PDF/email mismatch). Regenerate now — the
+            # freshness gate above already guarantees commentary is today's LLM output,
+            # and generate_pdf_report only re-renders when commentary is fresh.
+            if _args.send_only:
+                logging.info(" --send-only: regenerating PDF from current commentary...")
+                print(" --send-only: regenerating PDF report...")
+                try:
+                    subprocess.run([PY, 'generate_pdf_report.py'], cwd=str(ROOT), check=True)
+                    logging.info(" PDF regenerated to match commentary.")
+                except Exception as _pdf_err:
+                    # Non-fatal: a stale attachment is less bad than skipping the daily email.
+                    logging.error(f" --send-only PDF regen failed: {_pdf_err}")
+                    print(f" [WARN] PDF regen failed ({_pdf_err}) — sending with existing PDF.")
 
             logging.info(" Preparing and sending email...")
             msg = build_email()

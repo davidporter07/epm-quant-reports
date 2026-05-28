@@ -1582,30 +1582,32 @@ async function initMarketsPage() {
         const spotlightWrap = document.getElementById('marketsTopicSpotlight');
         const spotlightContent = document.getElementById('marketsTopicSpotlightContent');
         if (spotlightWrap && spotlightContent && sp.title && sp.body) {
-          const bodyParas = sp.body.split(/\n\n+/).map(p =>
-            `<p class="market-copy">${escapeHtml(p.trim())}</p>`
-          ).join('');
-          const funds = Array.isArray(sp.funds) && sp.funds.length
-            ? `<div class="spotlight-funds">
-                <div class="briefing-col-title" style="margin-top:1rem;">Related Funds &amp; Vehicles</div>
-                ${sp.funds.map(f => `
-                  <div class="spotlight-fund-row">
-                    <span class="spotlight-fund-ticker">${escapeHtml(f.ticker || '')}</span>
-                    <span class="spotlight-fund-name">${escapeHtml(f.name || '')}</span>
-                    <span class="spotlight-fund-type">${escapeHtml(f.type || '')}</span>
-                    <span class="spotlight-fund-note">${escapeHtml(f.exposure_note || '')}</span>
-                  </div>`).join('')}
-              </div>`
-            : '';
-          spotlightContent.innerHTML = `
-            <div class="briefing-col-title">${escapeHtml(sp.title)}</div>
-            ${bodyParas}
-            ${funds}`;
-          spotlightWrap.style.display = '';
+          let html = '<div class="briefing-col-title">' + escapeHtml(sp.title) + '</div>';
+          const paras = String(sp.body).split(/\n\n+/);
+          for (let i = 0; i < paras.length; i++) {
+            const t = paras[i].trim();
+            if (t) html += '<p class="market-copy">' + escapeHtml(t) + '</p>';
+          }
+          const funds = Array.isArray(sp.funds) ? sp.funds : [];
+          if (funds.length) {
+            html += '<div class="spotlight-funds"><div class="briefing-col-title" style="margin-top:1rem;">Related Funds &amp; Vehicles</div>';
+            for (let i = 0; i < funds.length; i++) {
+              const f = funds[i] || {};
+              html += '<div class="spotlight-fund-row">';
+              html += '<span class="spotlight-fund-ticker">' + escapeHtml(f.ticker || '') + '</span>';
+              html += '<span class="spotlight-fund-name">' + escapeHtml(f.name || '') + '</span>';
+              html += '<span class="spotlight-fund-type">' + escapeHtml(f.type || '') + '</span>';
+              html += '<span class="spotlight-fund-note">' + escapeHtml(f.exposure_note || '') + '</span>';
+              html += '</div>';
+            }
+            html += '</div>';
+          }
+          spotlightContent.innerHTML = html;
+          spotlightWrap.style.display = 'block';
         }
       }
     }
-  } catch (_) {}
+  } catch (e) { console.warn('EPM commentary render:', e); }
 
   startQuotesPoller('#marketsIndexes', '#marketsGeneratedAt');
 }
