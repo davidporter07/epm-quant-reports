@@ -3633,3 +3633,130 @@ data/experiment/growth24_shadow_paper/growth24_current_shadow_summary.json
 data/experiment/growth24_shadow_paper/growth24_current_paper_plan.csv
 data/experiment/growth24_shadow_paper/growth24_paper_outcome_summary.json
 ```
+
+## 2026-05-28 - Growth24 Maturity Automation and Full-Coverage Shadow Refresh
+
+Objective:
+
+- Add a local reminder/automation path for scoring the Growth24 shadow-paper
+  ledger when the next paper cycles mature, especially the `2026-05-14`
+  stress-weighted top2 plan due around `2026-06-15`.
+- Refresh stale Growth24 AV earnings cache entries and rerun the current
+  stress-weighted shadow forecast only after confirming the panel can emit a
+  full 24-name decision universe.
+
+Automation added:
+
+```text
+Checker: dl_growth24_paper_maturity_check.py
+Wrapper: scripts/run_growth24_paper_maturity_check.cmd
+Scheduled task: \FundMonitorGrowth24PaperScore
+Next run: 2026-06-15 18:30 local time
+Cadence: daily
+Wrapper action: refresh Growth24 AV earnings, refresh Growth24 prices, rebuild
+AV earnings panel, score paper outcomes, write maturity status/alert files.
+```
+
+Coverage diagnosis:
+
+```text
+Initial refreshed run:
+AsOfDate: 2026-05-27
+UniverseCount: 19 / 24
+Missing tickers: AVGO, CSCO, GOOG, NOW, SNPS
+Cause: stale/missing AV earnings feature values at the decision date.
+
+After targeted AV earnings refresh:
+Panel max date: 2026-05-28
+Labeled through: 2026-04-28
+Decision rows: 24
+Feature-gap tickers: 0
+```
+
+Full shadow-paper rerun:
+
+```text
+Command: python dl_growth24_shadow_paper.py --device cpu
+AsOfDate: 2026-05-28
+Train labels through: 2026-04-28
+Status: selected
+UniverseCount: 24
+Selected paper longs: INTC,MU
+Top ranks: INTC, MU, LRCX, NOW, NFLX, AMD, PLTR, ORCL
+Outcome refresh: 2 matured trades, 11 pending trades
+Next maturity alert date: 2026-06-11
+Specific watched plan: 2026-05-14 INTC,MU due 2026-06-15
+```
+
+Interpretation:
+
+- The 19-name run was a data freshness/aliasing problem, not a model capacity
+  problem. The scheduled checker now refreshes the same aliased earnings ticker
+  set used by panel construction, including `GOOG -> GOOGL`.
+- The latest valid full-universe Growth24 shadow forecast remains concentrated
+  in `INTC,MU`; this should stay in the paper lane until the June maturity
+  checks confirm whether the live edge is real out of sample.
+- No production DL promotion is justified from this refresh alone. The next
+  model-improvement work should target robustness, uncertainty gating, and
+  regime-aware breadth rather than chasing a single higher point forecast.
+
+Research-informed next experiment ladder:
+
+```text
+1. Data integrity / universe breadth
+   - Keep Growth24 earnings aliases fresh before every panel rebuild.
+   - Add a panel diagnostic gate that fails a shadow run if the decision-date
+     universe is below 24 or if any champion feature is NaN.
+
+2. Cross-sectional objective upgrade
+   - Current rank-head work is directionally right: trade selection is a
+     cross-sectional ranking problem, not just a return point-forecast problem.
+   - Next architecture should preserve date-grouped batches and optimize top-k
+     excess spread, daily IC, turnover, and drawdown directly.
+
+3. Sequence encoder upgrade
+   - Test a PatchTST-style patched encoder for longer lookback windows and
+     masked pretraining on the Growth24 panel before supervised fine-tuning.
+   - Test a TFT-style gated model for static ticker attributes, known calendar
+     covariates, historical market/earnings inputs, and feature attribution.
+
+4. Foundation-model sidecar, not blind replacement
+   - Evaluate TimesFM/Chronos-style pretrained time-series embeddings as
+     additional features or ensemble members. Treat them as weak learners until
+     walk-forward evidence beats the current rank-head baseline.
+
+5. Institutional-grade ensemble
+   - Add tree/tabular baselines and stack them with the DL rank-head output.
+   - Gu/Kelly/Xiu-style asset-pricing evidence supports nonlinear interactions,
+     but the benchmark must include momentum, liquidity, volatility, and
+     regularized non-DL models so the DL is proving incremental edge.
+
+6. Risk and uncertainty gates
+   - Add conformal/quantile uncertainty and abstention gates so the model can
+     choose "no trade" when rank dispersion is weak or uncertainty is high.
+   - Promotion requires out-of-sample paper plans through at least the June
+     maturity cycle plus stress/regime validation; no single refreshed forecast
+     is enough.
+```
+
+Research references reviewed:
+
+```text
+PatchTST / patched time-series transformer:
+https://arxiv.org/abs/2211.14730
+
+Temporal Fusion Transformer:
+https://arxiv.org/abs/1912.09363
+
+TimesFM foundation model:
+https://research.google/blog/a-decoder-only-foundation-model-for-time-series-forecasting/
+
+Chronos foundation model:
+https://arxiv.org/abs/2403.07815
+
+Empirical Asset Pricing via Machine Learning:
+https://academic.oup.com/rfs/article/33/5/2223/5758276
+
+DeepLOB / market microstructure DL:
+https://arxiv.org/abs/1808.03668
+```
