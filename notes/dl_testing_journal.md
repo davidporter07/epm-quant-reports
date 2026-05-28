@@ -3760,3 +3760,72 @@ https://academic.oup.com/rfs/article/33/5/2223/5758276
 DeepLOB / market microstructure DL:
 https://arxiv.org/abs/1808.03668
 ```
+
+## 2026-05-28 Growth24 Research Ladder Runner And First CUDA Pass
+
+Implementation:
+
+- Added `scripts/run_growth24_research_ladder.ps1` and `.cmd` wrapper to make
+  the next Growth24 ladder reproducible.
+- Ladder stages:
+  - PatchTST/TFT encoder probe.
+  - Foundation sidecar feature build plus augmented panel output.
+  - Current-date two-seed Growth24 shadow runs across spread-loss weights.
+  - Ensemble gate requiring the requested top-N member count.
+  - Optional historical blind loop across the same spread-loss weights.
+
+Current-date two-member ensemble, 8 epochs, seeds `20260506,20260507`,
+`--device cuda --amp`, AsOf `2026-05-28`:
+
+```text
+spread=0.0
+status: trade_allowed
+top2: INTC,NFLX
+score_gap: 0.214535
+forecast_gap_pct: -0.595901
+rank_score_std_top: 0.043658
+raw_forecast_std_top: 2.419933
+validation_score: 1.003957
+validation_daily_ic: 0.310408
+validation_spread: 0.236656
+
+spread=0.1
+status: trade_allowed
+top2: INTC,NFLX
+score_gap: 0.222797
+forecast_gap_pct: -0.436938
+rank_score_std_top: 0.032381
+raw_forecast_std_top: 3.098771
+validation_score: 0.971936
+validation_daily_ic: 0.287407
+validation_spread: 0.234671
+```
+
+Bounded historical blind check, 3 cycles, 3 epochs, two-member ensemble,
+top2/bottom2 paper scoring:
+
+```text
+spread=0.0
+cycles: 2026-02-17, 2026-03-18, 2026-04-17
+mean_long_short_return: 0.257923
+spread_hit_rate: 1.000000
+max_drawdown: 0.000000
+
+spread=0.1
+cycles: 2026-02-17, 2026-03-18, 2026-04-17
+mean_long_short_return: 0.280502
+spread_hit_rate: 1.000000
+max_drawdown: 0.000000
+```
+
+Interpretation:
+
+- The two-member ensemble materially changed the current live top-2 from the
+  single-member result (`INTC,MU`) to `INTC,NFLX`; single-member runs are not
+  enough for uncertainty gating.
+- Spread loss `0.1` is directionally promising on this bounded check: slightly
+  better current score gap, lower rank dispersion, and better 3-cycle blind
+  long-short return. It also has lower validation score/daily IC and higher raw
+  forecast dispersion, so it is not yet a promotion candidate.
+- Next decision point: run the two-member ladder over the larger 12-cycle and
+  36-cycle historical windows before changing the standing paper-trade policy.
