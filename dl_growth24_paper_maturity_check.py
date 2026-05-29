@@ -33,6 +33,20 @@ from dl_growth24_paper_outcome import (
     _summary,
     _write_json,
 )
+from dl_growth24_current_control_gate import (
+    DEFAULT_FORECAST as DEFAULT_CONTROL_GATE_FORECAST,
+    DEFAULT_MARKDOWN_OUTPUT as DEFAULT_CONTROL_GATE_MARKDOWN_OUTPUT,
+    DEFAULT_OUTPUT as DEFAULT_CONTROL_GATE_OUTPUT,
+    DEFAULT_PAPER_PLAN as DEFAULT_CONTROL_GATE_PAPER_PLAN,
+    DEFAULT_PANEL_DIAGNOSTICS as DEFAULT_CONTROL_GATE_PANEL_DIAGNOSTICS,
+    DEFAULT_PLAN_OVERLAY_OUTPUT as DEFAULT_CONTROL_GATE_PLAN_OVERLAY_OUTPUT,
+    DEFAULT_SUMMARY as DEFAULT_CONTROL_GATE_SUMMARY,
+    DEFAULT_UNIVERSE_SCORE_STD_MAX,
+    _json_safe as _control_gate_json_safe,
+    _markdown as _control_gate_markdown,
+    build_gate as build_control_gate,
+    write_plan_overlay as write_control_gate_plan_overlay,
+)
 from dl_rank_head_shadow_forecast import HORIZON
 from refresh_growth24_price_cache import _download_ohlcv, _load_tickers, _merge_cache, FIELD_TO_CACHE
 from quant_cup.earnings_av import download_earnings
@@ -40,6 +54,12 @@ from quant_cup.earnings_av import download_earnings
 
 DEFAULT_STATUS_OUTPUT = Path("data/experiment/growth24_shadow_paper/growth24_paper_maturity_status.json")
 DEFAULT_ALERT_OUTPUT = Path("data/experiment/growth24_shadow_paper/growth24_paper_maturity_alert.txt")
+DEFAULT_CONTROL_OVERLAY_OUTCOME_LEDGER = Path(
+    "data/experiment/growth24_shadow_paper/growth24_control_overlay_outcome_ledger.csv"
+)
+DEFAULT_CONTROL_OVERLAY_OUTCOME_SUMMARY = Path(
+    "data/experiment/growth24_shadow_paper/growth24_control_overlay_outcome_summary.json"
+)
 DEFAULT_TICKER_CONFIG = Path("config/research_growth_universe.json")
 
 
@@ -84,6 +104,285 @@ def _split_tickers(value: object) -> list[str]:
     if pd.isna(value):
         return []
     return [part.strip().upper() for part in str(value).split(",") if part.strip()]
+
+
+def _clean_str(value: object) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    return str(value)
+
+
+def _numeric(value: object) -> float | None:
+    out = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    return float(out) if pd.notna(out) else None
+
+
+def _mean_or_none(rows: pd.DataFrame, column: str) -> float | None:
+    if rows.empty or column not in rows.columns:
+        return None
+    values = pd.to_numeric(rows[column], errors="coerce").dropna()
+    return float(values.mean()) if not values.empty else None
+
+
+def _rate_or_none(rows: pd.DataFrame, column: str) -> float | None:
+    if rows.empty or column not in rows.columns:
+        return None
+    values = rows[column].dropna()
+    return float(values.astype(bool).mean()) if not values.empty else None
+
+
+def _normalize_forecast_log(forecasts: pd.DataFrame) -> pd.DataFrame:
+    if forecasts.empty:
+        return forecasts.copy()
+    rows = forecasts.copy()
+    for column in ["RunDate", "Model", "SourceResults", "Rank", "ShadowRankScore", "Ticker"]:
+        if column not in rows.columns:
+            rows[column] = ""
+    rows["AsOfDate"] = pd.to_datetime(rows["AsOfDate"], errors="coerce").dt.date.astype(str)
+    rows["RunDate"] = rows["RunDate"].astype(str)
+    rows["Model"] = rows["Model"].astype(str)
+    rows["SourceResults"] = rows["SourceResults"].astype(str)
+    rows["Rank"] = pd.to_numeric(rows["Rank"], errors="coerce")
+    rows["ShadowRankScore"] = pd.to_numeric(rows["ShadowRankScore"], errors="coerce")
+    rows["Ticker"] = rows["Ticker"].astype(str).str.upper().str.strip()
+    return rows
+
+
+def _plan_forecast_rows(forecasts: pd.DataFrame, plan: pd.Series) -> pd.DataFrame:
+    if forecasts.empty:
+        return forecasts.copy()
+    asof_key = pd.Timestamp(plan.get("AsOfDate")).date().isoformat()
+    model = _clean_str(plan.get("Model"))
+    source = _clean_str(plan.get("SourceResults"))
+    run_date = _clean_str(plan.get("RunDate"))
+
+    rows = forecasts[
+        forecasts["AsOfDate"].astype(str).eq(asof_key)
+        & forecasts["Model"].astype(str).eq(model)
+        & forecasts["SourceResults"].astype(str).eq(source)
+    ].copy()
+    if rows.empty:
+        rows = forecasts[
+            forecasts["AsOfDate"].astype(str).eq(asof_key)
+            & forecasts["Model"].astype(str).eq(model)
+            & forecasts["RunDate"].astype(str).eq(run_date)
+        ].copy()
+    if rows.empty:
+        rows = forecasts[
+            forecasts["AsOfDate"].astype(str).eq(asof_key)
+            & forecasts["Model"].astype(str).eq(model)
+        ].copy()
+    return rows
+
+
+def _plan_trade_rows(trades: pd.DataFrame, plan: pd.Series) -> pd.DataFrame:
+    if trades.empty:
+        return trades.copy()
+    asof_key = pd.Timestamp(plan.get("AsOfDate")).date().isoformat()
+    model = _clean_str(plan.get("Model"))
+    source = _clean_str(plan.get("SourceResults"))
+    run_date = _clean_str(plan.get("RunDate"))
+    rows = trades[
+        trades["AsOfDate"].astype(str).eq(asof_key)
+        & trades["Model"].astype(str).eq(model)
+        & trades["SourceResults"].astype(str).eq(source)
+        & trades["RunDate"].astype(str).eq(run_date)
+    ].copy()
+    if rows.empty:
+        rows = trades[
+            trades["AsOfDate"].astype(str).eq(asof_key)
+            & trades["Model"].astype(str).eq(model)
+            & trades["RunDate"].astype(str).eq(run_date)
+        ].copy()
+    return rows
+
+
+def _control_overlay_decision(
+    plan: pd.Series,
+    forecasts: pd.DataFrame,
+    max_universe_score_std: float,
+    expected_universe_count: int,
+) -> dict[str, Any]:
+    plan_longs = _split_tickers(plan.get("LongTickers"))
+    top_n = int(_numeric(plan.get("PaperTopN")) or len(plan_longs) or 2)
+    if forecasts.empty:
+        return {
+            "gate_status": "paper_control_unavailable",
+            "overlay_status": "paper_overlay_unavailable",
+            "universe_count": 0,
+            "universe_score_std": None,
+            "gate_long_tickers": [],
+            "gate_failures": ["forecast rows unavailable"],
+        }
+
+    scores = pd.to_numeric(forecasts["ShadowRankScore"], errors="coerce").dropna()
+    universe_score_std = float(scores.std(ddof=0)) if not scores.empty else None
+    ordered = forecasts.sort_values(["Rank", "ShadowRankScore"], ascending=[True, False])
+    gate_longs = [str(t).upper().strip() for t in ordered.head(top_n)["Ticker"].tolist()]
+    failures: list[str] = []
+    if len(forecasts) < int(expected_universe_count):
+        failures.append(f"universe count {len(forecasts)} < {int(expected_universe_count)}")
+    if universe_score_std is None:
+        failures.append("universe score std missing")
+    elif universe_score_std > float(max_universe_score_std):
+        failures.append(f"universe score std {universe_score_std:.6f} > {float(max_universe_score_std):.6f}")
+
+    gate_status = "paper_control_abstain" if failures else "paper_control_allowed"
+    overlay_status = "paper_overlay_abstain" if failures else "paper_overlay_allowed"
+    return {
+        "gate_status": gate_status,
+        "overlay_status": overlay_status,
+        "universe_count": int(len(forecasts)),
+        "universe_score_std": universe_score_std,
+        "gate_long_tickers": gate_longs,
+        "gate_failures": failures,
+    }
+
+
+def _base_plan_outcome(trade_rows: pd.DataFrame) -> dict[str, Any]:
+    if trade_rows.empty:
+        return {
+            "base_outcome_status": "unavailable",
+            "base_ticker_count": 0,
+            "base_mean_forward_21d": None,
+            "base_mean_excess_21d": None,
+            "base_hit_rate": None,
+            "base_excess_hit_rate": None,
+        }
+    statuses = trade_rows["Status"].astype(str).str.lower()
+    matured = bool(len(statuses)) and statuses.eq("matured").all()
+    return {
+        "base_outcome_status": "matured" if matured else "pending",
+        "base_ticker_count": int(len(trade_rows)),
+        "base_mean_forward_21d": _mean_or_none(trade_rows, "RealizedForward21D") if matured else None,
+        "base_mean_excess_21d": _mean_or_none(trade_rows, "RealizedExcess21D") if matured else None,
+        "base_hit_rate": _rate_or_none(trade_rows, "Hit") if matured else None,
+        "base_excess_hit_rate": _rate_or_none(trade_rows, "ExcessHit") if matured else None,
+    }
+
+
+def _overlay_outcome_status(overlay_status: str, base_status: str) -> str:
+    if overlay_status == "paper_overlay_allowed":
+        return base_status
+    if overlay_status == "paper_overlay_abstain":
+        return "abstained_matured" if base_status == "matured" else "abstained_pending"
+    return "unavailable"
+
+
+def _abstention_classification(overlay_trade_status: str, base_mean_forward: float | None) -> str:
+    if overlay_trade_status != "abstained_matured" or base_mean_forward is None:
+        return ""
+    if base_mean_forward < 0.0:
+        return "avoided_loss"
+    if base_mean_forward > 0.0:
+        return "skipped_gain"
+    return "neutral_skip"
+
+
+def _build_control_overlay_outcomes(
+    plan_log: pd.DataFrame,
+    forecasts: pd.DataFrame,
+    trades: pd.DataFrame,
+    max_universe_score_std: float,
+    expected_universe_count: int,
+) -> pd.DataFrame:
+    selected = _selected_plan_rows(plan_log)
+    forecast_rows = _normalize_forecast_log(forecasts)
+    rows: list[dict[str, Any]] = []
+    for _, plan in selected.iterrows():
+        asof_key = pd.Timestamp(plan.get("AsOfDate")).date().isoformat()
+        plan_longs = _split_tickers(plan.get("LongTickers"))
+        decision = _control_overlay_decision(
+            plan,
+            _plan_forecast_rows(forecast_rows, plan),
+            max_universe_score_std,
+            expected_universe_count,
+        )
+        base = _base_plan_outcome(_plan_trade_rows(trades, plan))
+        overlay_trade_status = _overlay_outcome_status(decision["overlay_status"], base["base_outcome_status"])
+        overlay_longs = plan_longs if decision["overlay_status"] == "paper_overlay_allowed" else []
+        rows.append(
+            {
+                "RunDate": _clean_str(plan.get("RunDate")),
+                "AsOfDate": asof_key,
+                "EstimatedDueDate": _business_due_date(pd.Timestamp(asof_key), HORIZON).isoformat(),
+                "Model": _clean_str(plan.get("Model")),
+                "PlanStatus": _clean_str(plan.get("Status")),
+                "PlanLongTickers": ",".join(plan_longs),
+                "BaseOutcomeStatus": base["base_outcome_status"],
+                "BaseTickerCount": base["base_ticker_count"],
+                "BaseMeanForward21D": base["base_mean_forward_21d"],
+                "BaseMeanExcess21D": base["base_mean_excess_21d"],
+                "BaseHitRate": base["base_hit_rate"],
+                "BaseExcessHitRate": base["base_excess_hit_rate"],
+                "GateStatus": decision["gate_status"],
+                "OverlayStatus": decision["overlay_status"],
+                "OverlayTradeStatus": overlay_trade_status,
+                "OverlayTraded": bool(overlay_trade_status in {"matured", "pending"}),
+                "OverlayLongTickers": ",".join(overlay_longs),
+                "UniverseCount": decision["universe_count"],
+                "ExpectedUniverseCount": int(expected_universe_count),
+                "UniverseScoreStd": decision["universe_score_std"],
+                "MaxUniverseScoreStd": float(max_universe_score_std),
+                "GateLongTickers": ",".join(decision["gate_long_tickers"]),
+                "GateFailures": "; ".join(decision["gate_failures"]),
+                "AbstentionClassification": _abstention_classification(
+                    overlay_trade_status,
+                    base["base_mean_forward_21d"],
+                ),
+                "SourceResults": _clean_str(plan.get("SourceResults")),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _summarize_control_overlay_outcomes(ledger: pd.DataFrame) -> dict[str, Any]:
+    if ledger.empty:
+        return {
+            "ledger_rows": 0,
+            "base_matured_plans": 0,
+            "base_pending_plans": 0,
+            "overlay_allowed_plans": 0,
+            "overlay_abstained_plans": 0,
+            "overlay_matured_plans": 0,
+            "overlay_pending_plans": 0,
+            "abstained_matured_plans": 0,
+            "avoided_loss_plans": 0,
+            "skipped_gain_plans": 0,
+        }
+
+    base_matured = ledger[ledger["BaseOutcomeStatus"].eq("matured")].copy()
+    overlay_matured = ledger[ledger["OverlayTradeStatus"].eq("matured")].copy()
+    abstained_matured = ledger[ledger["OverlayTradeStatus"].eq("abstained_matured")].copy()
+    return {
+        "ledger_rows": int(len(ledger)),
+        "base_matured_plans": int(len(base_matured)),
+        "base_pending_plans": int(ledger["BaseOutcomeStatus"].eq("pending").sum()),
+        "overlay_allowed_plans": int(ledger["OverlayStatus"].eq("paper_overlay_allowed").sum()),
+        "overlay_abstained_plans": int(ledger["OverlayStatus"].eq("paper_overlay_abstain").sum()),
+        "overlay_matured_plans": int(len(overlay_matured)),
+        "overlay_pending_plans": int(ledger["OverlayTradeStatus"].eq("pending").sum()),
+        "abstained_matured_plans": int(len(abstained_matured)),
+        "avoided_loss_plans": int(ledger["AbstentionClassification"].eq("avoided_loss").sum()),
+        "skipped_gain_plans": int(ledger["AbstentionClassification"].eq("skipped_gain").sum()),
+        "base_matured_mean_forward_21d": _mean_or_none(base_matured, "BaseMeanForward21D"),
+        "base_matured_mean_excess_21d": _mean_or_none(base_matured, "BaseMeanExcess21D"),
+        "overlay_matured_mean_forward_21d": _mean_or_none(overlay_matured, "BaseMeanForward21D"),
+        "overlay_matured_mean_excess_21d": _mean_or_none(overlay_matured, "BaseMeanExcess21D"),
+        "abstained_matured_mean_forward_21d": _mean_or_none(abstained_matured, "BaseMeanForward21D"),
+        "abstained_matured_mean_excess_21d": _mean_or_none(abstained_matured, "BaseMeanExcess21D"),
+    }
+
+
+def _write_control_overlay_outcomes(
+    ledger_output: Path,
+    summary_output: Path,
+    ledger: pd.DataFrame,
+    summary: dict[str, Any],
+) -> None:
+    ledger_output.parent.mkdir(parents=True, exist_ok=True)
+    ledger.to_csv(ledger_output, index=False)
+    _write_json(summary_output, summary)
 
 
 def _refresh_price_cache(ticker_config: Path, start: date, end: date) -> None:
@@ -228,7 +527,64 @@ def _plan_status(
     }
 
 
-def _write_alert(path: Path, status: dict[str, Any], summary: dict[str, Any]) -> None:
+def _control_gate_status(args: argparse.Namespace) -> dict[str, Any]:
+    if bool(args.skip_control_gate):
+        return {
+            "status": "skipped",
+            "paper_only": True,
+            "live_policy_changed": False,
+            "reason": "disabled by --skip-control-gate",
+        }
+    gate_args = argparse.Namespace(
+        forecast=args.control_gate_forecast,
+        summary=args.control_gate_summary,
+        panel_diagnostics=args.control_gate_panel_diagnostics,
+        paper_plan=args.control_gate_paper_plan,
+        output=args.control_gate_output,
+        plan_overlay_output=args.control_gate_plan_overlay_output,
+        markdown_output=args.control_gate_markdown_output,
+        long_n=int(args.control_gate_long_n),
+        short_n=int(args.control_gate_short_n),
+        expected_universe_count=int(args.control_gate_expected_universe_count),
+        max_universe_score_std=float(args.control_gate_max_universe_score_std),
+        max_score_gap=args.control_gate_max_score_gap,
+    )
+    try:
+        report = build_control_gate(gate_args)
+        args.control_gate_output.parent.mkdir(parents=True, exist_ok=True)
+        args.control_gate_markdown_output.parent.mkdir(parents=True, exist_ok=True)
+        args.control_gate_output.write_text(
+            json.dumps(_control_gate_json_safe(report), indent=2),
+            encoding="utf-8",
+        )
+        write_control_gate_plan_overlay(args.control_gate_plan_overlay_output, report)
+        args.control_gate_markdown_output.write_text(_control_gate_markdown(report), encoding="utf-8")
+        return report
+    except Exception as exc:
+        return {
+            "status": "unavailable",
+            "paper_only": True,
+            "live_policy_changed": False,
+            "error": str(exc),
+            "forecast": str(args.control_gate_forecast),
+            "paper_plan": str(args.control_gate_paper_plan),
+            "thresholds": {
+                "expected_universe_count": int(args.control_gate_expected_universe_count),
+                "long_n": int(args.control_gate_long_n),
+                "short_n": int(args.control_gate_short_n),
+                "max_universe_score_std": float(args.control_gate_max_universe_score_std),
+                "max_score_gap": args.control_gate_max_score_gap,
+            },
+        }
+
+
+def _write_alert(
+    path: Path,
+    status: dict[str, Any],
+    summary: dict[str, Any],
+    control_gate: dict[str, Any] | None = None,
+    control_overlay_summary: dict[str, Any] | None = None,
+) -> None:
     lines = [
         "Growth24 paper maturity check",
         f"Generated: {status['generated_at']}",
@@ -241,6 +597,43 @@ def _write_alert(path: Path, status: dict[str, Any], summary: dict[str, Any]) ->
         f"Next due date: {status.get('next_due_date')}",
         "",
     ]
+    if control_gate:
+        gate_metrics = control_gate.get("forecast_metrics", {})
+        gate_failures = control_gate.get("gate_failures", [])
+        overlay = control_gate.get("paper_plan_overlay", {})
+        lines.extend(
+            [
+                f"Control gate status: {control_gate.get('status')}",
+                f"Control gate paper-only: {control_gate.get('paper_only')}",
+                f"Control gate live policy changed: {control_gate.get('live_policy_changed')}",
+                f"Control gate paper plan changed: {control_gate.get('paper_plan_changed')}",
+                f"Control gate AsOfDate: {gate_metrics.get('asof_date', '')}",
+                f"Control gate selected longs: {','.join(gate_metrics.get('long_tickers', []))}",
+                f"Control gate universe score std: {gate_metrics.get('universe_score_std', '')}",
+                f"Control gate failures: {'; '.join(gate_failures) if gate_failures else control_gate.get('error', 'none')}",
+                f"Paper overlay status: {overlay.get('status', '')}",
+                f"Paper overlay action: {overlay.get('action', '')}",
+                f"Paper overlay plan status: {overlay.get('plan_status', '')}",
+                f"Paper overlay plan longs: {','.join(overlay.get('plan_long_tickers', []))}",
+                "",
+            ]
+        )
+    if control_overlay_summary:
+        lines.extend(
+            [
+                f"Overlay ledger rows: {control_overlay_summary.get('ledger_rows')}",
+                f"Overlay allowed plans: {control_overlay_summary.get('overlay_allowed_plans')}",
+                f"Overlay abstained plans: {control_overlay_summary.get('overlay_abstained_plans')}",
+                f"Overlay matured plans: {control_overlay_summary.get('overlay_matured_plans')}",
+                f"Abstained matured plans: {control_overlay_summary.get('abstained_matured_plans')}",
+                f"Avoided-loss plans: {control_overlay_summary.get('avoided_loss_plans')}",
+                f"Skipped-gain plans: {control_overlay_summary.get('skipped_gain_plans')}",
+                f"Base matured mean forward 21D: {control_overlay_summary.get('base_matured_mean_forward_21d')}",
+                f"Overlay matured mean forward 21D: {control_overlay_summary.get('overlay_matured_mean_forward_21d')}",
+                f"Abstained matured mean forward 21D: {control_overlay_summary.get('abstained_matured_mean_forward_21d')}",
+                "",
+            ]
+        )
     for plan in status["plans"]:
         if plan["Status"] in {"due_today", "overdue_pending", "pending"}:
             lines.append(
@@ -260,6 +653,8 @@ def main() -> int:
     ap.add_argument("--summary-output", type=Path, default=DEFAULT_SUMMARY_OUTPUT)
     ap.add_argument("--status-output", type=Path, default=DEFAULT_STATUS_OUTPUT)
     ap.add_argument("--alert-output", type=Path, default=DEFAULT_ALERT_OUTPUT)
+    ap.add_argument("--control-overlay-ledger-output", type=Path, default=DEFAULT_CONTROL_OVERLAY_OUTCOME_LEDGER)
+    ap.add_argument("--control-overlay-summary-output", type=Path, default=DEFAULT_CONTROL_OVERLAY_OUTCOME_SUMMARY)
     ap.add_argument("--ticker-config", type=Path, default=DEFAULT_TICKER_CONFIG)
     ap.add_argument("--refresh-data", action="store_true", help="Refresh yfinance cache and rebuild the AV earnings panel first.")
     ap.add_argument("--refresh-earnings", action="store_true", help="Refresh stale/missing Growth24 Alpha Vantage earnings cache before panel rebuild.")
@@ -267,6 +662,19 @@ def main() -> int:
     ap.add_argument("--refresh-start", default=None, help="Override price refresh start date.")
     ap.add_argument("--today", default=None, help="Override today's date for checks/tests.")
     ap.add_argument("--strict", action="store_true", help="Exit non-zero when a plan is due/overdue and still pending.")
+    ap.add_argument("--skip-control-gate", action="store_true", help="Skip the report-only Growth24 current control gate.")
+    ap.add_argument("--control-gate-forecast", type=Path, default=DEFAULT_CONTROL_GATE_FORECAST)
+    ap.add_argument("--control-gate-summary", type=Path, default=DEFAULT_CONTROL_GATE_SUMMARY)
+    ap.add_argument("--control-gate-panel-diagnostics", type=Path, default=DEFAULT_CONTROL_GATE_PANEL_DIAGNOSTICS)
+    ap.add_argument("--control-gate-paper-plan", type=Path, default=DEFAULT_CONTROL_GATE_PAPER_PLAN)
+    ap.add_argument("--control-gate-output", type=Path, default=DEFAULT_CONTROL_GATE_OUTPUT)
+    ap.add_argument("--control-gate-plan-overlay-output", type=Path, default=DEFAULT_CONTROL_GATE_PLAN_OVERLAY_OUTPUT)
+    ap.add_argument("--control-gate-markdown-output", type=Path, default=DEFAULT_CONTROL_GATE_MARKDOWN_OUTPUT)
+    ap.add_argument("--control-gate-long-n", type=int, default=2)
+    ap.add_argument("--control-gate-short-n", type=int, default=2)
+    ap.add_argument("--control-gate-expected-universe-count", type=int, default=24)
+    ap.add_argument("--control-gate-max-universe-score-std", type=float, default=DEFAULT_UNIVERSE_SCORE_STD_MAX)
+    ap.add_argument("--control-gate-max-score-gap", type=float, default=None)
     args = ap.parse_args()
 
     today = _parse_today(args.today)
@@ -286,8 +694,32 @@ def main() -> int:
         args.summary_output,
     )
     status = _plan_status(plan_log, trades, panel, today)
-    _write_json(args.status_output, {"maturity": status, "outcome_summary": summary})
-    _write_alert(args.alert_output, status, summary)
+    control_gate = _control_gate_status(args)
+    forecasts = _forecast_lookup(args.forecast_log)
+    control_overlay_ledger = _build_control_overlay_outcomes(
+        plan_log=plan_log,
+        forecasts=forecasts,
+        trades=trades,
+        max_universe_score_std=float(args.control_gate_max_universe_score_std),
+        expected_universe_count=int(args.control_gate_expected_universe_count),
+    )
+    control_overlay_summary = _summarize_control_overlay_outcomes(control_overlay_ledger)
+    _write_control_overlay_outcomes(
+        args.control_overlay_ledger_output,
+        args.control_overlay_summary_output,
+        control_overlay_ledger,
+        control_overlay_summary,
+    )
+    _write_json(
+        args.status_output,
+        {
+            "maturity": status,
+            "outcome_summary": summary,
+            "control_gate": control_gate,
+            "control_overlay_outcomes": control_overlay_summary,
+        },
+    )
+    _write_alert(args.alert_output, status, summary, control_gate, control_overlay_summary)
 
     print("Status: checked")
     print(f"Today: {status['today']}")
@@ -297,8 +729,25 @@ def main() -> int:
     print(f"Next due date: {status.get('next_due_date')}")
     print(f"Matured trades: {summary.get('matured_trades')}")
     print(f"Pending trades: {summary.get('pending_trades')}")
+    print(f"Control gate: {control_gate.get('status')}")
+    overlay = control_gate.get("paper_plan_overlay", {})
+    if overlay:
+        print(f"Paper overlay: {overlay.get('status')}")
+    print(f"Overlay ledger rows: {control_overlay_summary.get('ledger_rows')}")
+    print(f"Overlay allowed plans: {control_overlay_summary.get('overlay_allowed_plans')}")
+    print(f"Overlay abstained plans: {control_overlay_summary.get('overlay_abstained_plans')}")
+    print(f"Overlay matured plans: {control_overlay_summary.get('overlay_matured_plans')}")
+    print(f"Abstained matured plans: {control_overlay_summary.get('abstained_matured_plans')}")
+    if control_gate.get("gate_failures"):
+        print("Control gate failures:")
+        for failure in control_gate["gate_failures"]:
+            print(f" - {failure}")
+    if control_gate.get("error"):
+        print(f"Control gate error: {control_gate['error']}")
     print(f"Saved status -> {args.status_output}")
     print(f"Saved alert -> {args.alert_output}")
+    print(f"Saved overlay ledger -> {args.control_overlay_ledger_output}")
+    print(f"Saved overlay summary -> {args.control_overlay_summary_output}")
     if args.strict and (status["due_today_count"] or status["overdue_pending_count"]):
         return 2
     return 0

@@ -3651,7 +3651,7 @@ Automation added:
 Checker: dl_growth24_paper_maturity_check.py
 Wrapper: scripts/run_growth24_paper_maturity_check.cmd
 Scheduled task: \FundMonitorGrowth24PaperScore
-Next run: 2026-06-15 18:30 local time
+Next run: 2026-06-11 18:30 local time
 Cadence: daily
 Wrapper action: refresh Growth24 AV earnings, refresh Growth24 prices, rebuild
 AV earnings panel, score paper outcomes, write maturity status/alert files.
@@ -3920,3 +3920,234 @@ Interpretation:
 - Next decision point: run a 36-cycle, 8-epoch baseline two-member ensemble
   only if compute time is acceptable, then compare against the existing
   validated 36-cycle/8-epoch single-member policy before changing paper rules.
+
+## 2026-05-29 Growth24 Paper-Only Control Gate Integration
+
+Implementation:
+
+- Added `dl_growth24_current_control_gate.py` to score the current Growth24
+  shadow forecast against the research dispersion gate without changing live
+  paper-plan files.
+- Wired the gate into `dl_growth24_paper_maturity_check.py` as report-only
+  output. The maturity checker now writes the gate verdict into
+  `growth24_paper_maturity_status.json` and the text alert, but strict exit
+  behavior remains tied only to due/overdue maturity status.
+- Added `--skip-control-gate` plus threshold/path overrides so scheduled checks
+  can disable or adjust the report-only gate without code changes.
+
+Local no-refresh verification:
+
+```text
+Command: python dl_growth24_paper_maturity_check.py --today 2026-05-29
+Status: checked
+Selected plans: 6
+Due today: 0
+Overdue pending: 0
+Next due date: 2026-06-11
+Matured trades: 2
+Pending trades: 11
+
+Control gate: paper_control_abstain
+Control gate failure:
+universe score std 0.087727 > 0.085000
+```
+
+Interpretation:
+
+- The current `INTC,MU` paper plan remains unchanged, but the scheduled
+  maturity report now records that the research control gate would abstain on
+  the latest current forecast.
+- The 2026-06-15 maturity score should compare the `2026-05-14` `INTC,MU`
+  paper outcome against this newer dispersion-gate behavior before any live
+  policy promotion.
+
+## 2026-05-29 Growth24 Maturity-Control Comparison Plan
+
+Automation check:
+
+```text
+Task: \FundMonitorGrowth24PaperScore
+Next run: 2026-06-11 18:30 local time
+Action: D:\fund_monitor\scripts\run_growth24_paper_maturity_check.cmd
+Schedule: daily
+```
+
+The task was moved from a `2026-06-15` start date to `2026-06-11` so it will
+catch the first pending maturity date as well as the watched `2026-06-15`
+`INTC,MU` plan.
+
+Comparison protocol for `2026-06-15`:
+
+```text
+Plan under review: 2026-05-14 INTC,MU
+Expected due date: 2026-06-15
+Standing paper policy: selected
+Current dispersion gate reference: paper_control_abstain
+Control threshold: universe_score_std <= 0.085
+Latest measured universe_score_std: 0.087727
+```
+
+Decision rule:
+
+- If `INTC,MU` matures with a strong positive average 21D return, keep the
+  dispersion gate in paper-only shadow mode and require more scored examples.
+- If `INTC,MU` is weak or negative while the broader historical gate still
+  holds up, promote the dispersion gate to a formal paper-policy candidate.
+- Do not change live policy from this single plan alone; use the result to
+  update the base-versus-control historical/paper comparison.
+
+## 2026-05-29 Growth24 Historical Dispersion-Gate Paper Simulation
+
+Implementation:
+
+- Added `dl_growth24_dispersion_gate_backtest.py` as a research-only replay of
+  the validated 36-cycle Growth24 stress shadow log.
+- The script compares the standing top2/bottom2 paper ledger against the same
+  ledger filtered by the current dispersion gate:
+  `UniverseScoreStd <= 0.085`.
+- It writes a JSON/CSV artifact under `data/experiment/...` and a tracked
+  Markdown report at
+  `notes/growth24_36c_8e_stress_dispersion_gate_backtest.md`.
+
+Result:
+
+```text
+Baseline:
+trade_days: 36
+coverage: 1.000000
+mean_long_short_return: 0.082589
+median_long_short_return: 0.054513
+spread_hit_rate: 0.750000
+max_drawdown: -0.198607
+naive_sharpe: 9.000265
+
+Dispersion-gated:
+trade_days: 22
+coverage: 0.611111
+mean_long_short_return: 0.131033
+median_long_short_return: 0.088180
+spread_hit_rate: 0.909091
+max_drawdown: -0.040210
+naive_sharpe: 14.149311
+
+Abstained-only:
+trade_days: 14
+mean_long_short_return: 0.006462
+spread_hit_rate: 0.500000
+max_drawdown: -0.317310
+```
+
+Interpretation:
+
+- The dispersion gate is historically useful as a paper-control overlay: it
+  improves mean spread, median spread, hit rate, drawdown, and naive Sharpe on
+  the traded subset.
+- The gate is not free. It avoided 7 negative cycles but also skipped 7
+  positive cycles, including some large winners. That argues for continued
+  paper-only tracking rather than immediate live-policy promotion.
+- Future scored paper outcomes should be appended to this base-versus-control
+  comparison before changing the Growth24 live paper rules.
+
+## 2026-05-29 Growth24 Current Paper-Plan Dispersion Overlay
+
+Implementation:
+
+- Extended `dl_growth24_current_control_gate.py` so the dispersion gate now
+  reads the current paper plan at
+  `data/experiment/growth24_shadow_paper/growth24_current_paper_plan.csv`.
+- The gate writes a separate paper-only overlay CSV at
+  `data/experiment/growth24_shadow_paper/growth24_current_paper_plan_control_overlay.csv`.
+  It does not mutate the standing paper-plan file.
+- Wired the same overlay into `dl_growth24_paper_maturity_check.py`, so the
+  scheduled maturity status and text alert report the base-policy paper plan
+  and the control-gate paper overlay together.
+
+Local verification:
+
+```text
+Command: python dl_growth24_current_control_gate.py
+Status: paper_control_abstain
+Overlay: paper_overlay_abstain
+AsOfDate: 2026-05-28
+Longs: INTC, MU
+Universe score std: 0.087727
+Gate failure: universe score std 0.087727 > 0.085000
+```
+
+```text
+Command: python dl_growth24_paper_maturity_check.py --today 2026-05-29
+Status: checked
+Selected plans: 6
+Due today: 0
+Overdue pending: 0
+Next due date: 2026-06-11
+Matured trades: 2
+Pending trades: 11
+Control gate: paper_control_abstain
+Paper overlay: paper_overlay_abstain
+```
+
+Current interpretation:
+
+- The standing current paper plan remains `selected` for `INTC,MU`.
+- The dispersion overlay says `paper_overlay_abstain` because
+  `universe_score_std = 0.087727` is above the `0.085` threshold.
+- This gives the 2026-06-15 and later maturity checks an explicit
+  base-policy-versus-control record without changing the live policy, website,
+  pipeline, or email behavior.
+
+## 2026-05-29 Growth24 Control Overlay Outcome Ledger
+
+Implementation:
+
+- Added a date-keyed control-overlay outcome ledger to
+  `dl_growth24_paper_maturity_check.py`.
+- The ledger is rebuilt from the standing paper plan log, forecast log, and
+  scored outcome trades every time the maturity check runs.
+- Outputs:
+  - `data/experiment/growth24_shadow_paper/growth24_control_overlay_outcome_ledger.csv`
+  - `data/experiment/growth24_shadow_paper/growth24_control_overlay_outcome_summary.json`
+- The status JSON and text alert now include base-policy versus overlay
+  outcome counts. The base paper outcome CSV/summary remain unchanged.
+
+Local verification:
+
+```text
+Command: python dl_growth24_paper_maturity_check.py --today 2026-05-29
+Overlay ledger rows: 6
+Overlay allowed plans: 1
+Overlay abstained plans: 5
+Overlay matured plans: 0
+Abstained matured plans: 1
+```
+
+Current ledger snapshot:
+
+```text
+2025-12-30 Top2:
+  base: matured, mean forward 21D 33.18%
+  overlay: abstained_matured
+  classification: skipped_gain
+
+2026-05-14 StressW2:
+  base: pending, due 2026-06-15
+  overlay: allowed
+  universe_score_std: 0.077648
+
+2026-05-28 StressW2:
+  base: pending, due 2026-06-29
+  overlay: abstained
+  universe_score_std: 0.087727
+```
+
+Important correction:
+
+- The earlier comparison note used the latest current gate reading
+  (`2026-05-28`, `paper_control_abstain`) as the reference for the
+  `2026-05-14` plan.
+- The date-keyed ledger is more precise: at the `2026-05-14` decision date,
+  the dispersion overlay would have allowed the `INTC,MU` plan because
+  `universe_score_std = 0.077648 <= 0.085`.
+- Therefore the `2026-06-15` maturity check will score both base and overlay
+  as traded for that plan. The next true abstain-vs-base live paper comparison
+  is currently the `2026-05-28` `INTC,MU` plan due `2026-06-29`.
