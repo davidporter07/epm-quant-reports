@@ -1804,6 +1804,7 @@ tactical_outperforming: Short phrase (3-5 words) — sectors/themes outperformin
 tactical_underperforming: Short phrase (3-5 words) — sectors/themes lagging. Ground in sector_bottom3 from the payload (e.g., "Energy, Real Estate, utilities").
 
 asset_class_outlooks: Object with keys "Equities", "Fixed Income", "Commodities", "US Dollar". Each: {"label": one of Bullish/Cautious/Neutral/Negative, "rationale": "1-2 sentences"}.
+CRITICAL: asset_class_outlooks rationales are LONG-TERM FUNDAMENTAL views (3-6 month horizon) — they MUST be substantively different from market_outlook_rationale (which is the 4-6 week tactical view). The Equities rationale specifically MUST focus on FUNDAMENTAL drivers (earnings trajectory, multiple expansion/compression, capex cycle, structural themes like AI infrastructure) — NOT on today's index move, today's sector tilt, or today's specific news. Do not echo market_outlook_rationale; if the Equities rationale begins with "The S&P 500's [pct]% advance" or mentions today's price move, you have failed this rule. Start the Equities rationale with the fundamental driver (e.g., "Forward earnings growth of...", "AI capex commitments of...", "Multiple expansion supported by...").
 
 portfolio_spotlight_winners: Array of up to 3 objects for tickers with positive return_1m: {"ticker":"...","metric_label":"...","commentary":"2 sentences on what drives outperformance and whether it persists."}. IMPORTANT: each entry in portfolio_top_performers includes a "description" field — use it to understand what the fund actually is. Write commentary grounded in that actual strategy. Do NOT invent sector attributions.
 ONE-SHOT EXAMPLE for portfolio_spotlight_winners:
@@ -2061,6 +2062,8 @@ def _scrub_text(text: str) -> str:
     # Fix sentence-start punctuation artefacts like ". ," or " ,"
     text = re.sub(r"\.\s+,", ".", text)
     text = re.sub(r"\s+,", ",", text)
+    # Strip redundant +/- after directional verbs ("fell -5.55%" → "fell 5.55%")
+    text = _strip_double_signs(text)
     return text
 
 
@@ -2362,7 +2365,10 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
             # frame any release as "today"/"this morning" — catches the LLM pulling a
             # week-ahead catalyst (e.g. Thursday's GDP) forward and dating it today.
             dating = _check_event_dating(part1, today_has_econ=bool(today_econ))
-            if not banned and not leaks and not numeric and not causal and not dating:
+            move_sig = _check_move_significance(part1, snapshot)
+            superlatives = _check_unsourced_superlatives(part1, flat_headlines)
+            if (not banned and not leaks and not numeric and not causal and not dating
+                    and not move_sig and not superlatives):
                 break
             if banned:
                 print(f"  [RETRY] Attempt {attempt + 1} still contained banned phrases after scrub: {banned}. Retrying...")
@@ -2374,6 +2380,10 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
                 print(f"  [RETRY] Attempt {attempt + 1} had causal logic inversions: {causal}. Retrying...")
             if dating:
                 print(f"  [RETRY] Attempt {attempt + 1} dated a non-today event as today: {dating}. Retrying...")
+            if move_sig:
+                print(f"  [RETRY] Attempt {attempt + 1} framed a noise-level move as direction: {move_sig}. Retrying...")
+            if superlatives:
+                print(f"  [RETRY] Attempt {attempt + 1} made unsourced superlative/geopolitical claims: {superlatives}. Retrying...")
         except Exception as exc:
             print(f"  [WARN] Narrative call failed (attempt {attempt + 1}): {exc}")
             part1 = {}
@@ -2457,12 +2467,21 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
             part2 = scrub_banned_phrases(part2)
             banned = find_banned_phrases(part2)
             leaks = find_leaked_placeholders(part2)
-            if not banned and not leaks:
+            echo = _check_equities_rationale_echo(part2)
+            move_sig = _check_move_significance(part2, snapshot)
+            superlatives = _check_unsourced_superlatives(part2, flat_headlines)
+            if not banned and not leaks and not echo and not move_sig and not superlatives:
                 break
             if banned:
                 print(f"  [RETRY] Attempt {attempt + 1} still contained banned phrases after scrub: {banned}. Retrying...")
             if leaks:
                 print(f"  [RETRY] Attempt {attempt + 1} contained leaked placeholders: {leaks}. Retrying...")
+            if echo:
+                print(f"  [RETRY] Attempt {attempt + 1} echo violation: {echo}. Retrying...")
+            if move_sig:
+                print(f"  [RETRY] Attempt {attempt + 1} framed a noise-level move as direction: {move_sig}. Retrying...")
+            if superlatives:
+                print(f"  [RETRY] Attempt {attempt + 1} made unsourced superlative/geopolitical claims: {superlatives}. Retrying...")
         except Exception as exc:
             print(f"  [WARN] Outlook call failed (attempt {attempt + 1}): {exc}")
             part2 = {}
@@ -2566,7 +2585,8 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
             banned = find_banned_phrases(part4)
             leaks = find_leaked_placeholders(part4)
             dating = _check_event_dating(part4, today_has_econ=bool(today_econ))
-            if not banned and not leaks and not dating:
+            yld_err = _check_synthesis_yield_direction(part4, snapshot)
+            if not banned and not leaks and not dating and not yld_err:
                 break
             if banned:
                 print(f"  [RETRY] Attempt {attempt + 1} synthesis still had banned phrases: {banned}. Retrying...")
@@ -2574,6 +2594,8 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
                 print(f"  [RETRY] Attempt {attempt + 1} contained leaked placeholders: {leaks}. Retrying...")
             if dating:
                 print(f"  [RETRY] Attempt {attempt + 1} synthesis dated a non-today event as today: {dating}. Retrying...")
+            if yld_err:
+                print(f"  [RETRY] Attempt {attempt + 1} 10Y direction wrong: {yld_err}. Retrying...")
         except Exception as exc:
             print(f"  [WARN] Synthesis call failed (attempt {attempt + 1}): {exc}")
             part4 = {}
@@ -2761,6 +2783,261 @@ def _check_event_dating(data: dict, today_has_econ: bool) -> list[str]:
             if any(kw in low for kw in _EVENT_KEYWORDS):
                 violations.append(sent.strip()[:90])
     return violations[:4]
+
+
+# ---------------------------------------------------------------------------
+# Credibility guardrails (PR 0/1): noise-as-signal + unsourced superlatives.
+# Same contract as the other _check_* validators: return list[str] of issues
+# (empty = clean) so the existing Call-1/Call-2 retry loops can re-roll.
+# ---------------------------------------------------------------------------
+
+# A daily index move smaller than this (in %) is statistical noise and must not
+# be described as confirming/driving a directional bias.
+_NOISE_MOVE_PCT = 0.25
+
+# "0.02% advance confirms a bullish bias" — confirmation-of-bias language, which
+# is essentially never legitimate on a flat tape. Also index-tied strong-move verbs.
+_BIAS_CONFIRM_RE = re.compile(
+    r"(confirm\w*|cement\w*|reinforc\w*|signal\w*|underscor\w*|solidif\w*)\s+"
+    r"(an?\s+|the\s+|a\s+continued\s+|its\s+)?(bull\w*|bear\w*|up\s*trend|down\s*trend|risk-?on|risk-?off)"
+    r"|\b(bull\w*|bear\w*)\s+bias\b",
+    re.IGNORECASE,
+)
+_INDEX_STRONG_MOVE_RE = re.compile(
+    r"\b(s&p\s*500|s&p|nasdaq|dow|the\s+index|the\s+market|equities|stocks)\b"
+    r"[^.]{0,40}\b(rallied|rally|surg\w+|soar\w+|plung\w+|tumbl\w+|crater\w+|"
+    r"sold\s+off|sell-?off|spiked?|cratered)\b"
+    r"|\b(rallied|surg\w+|soar\w+|plung\w+|tumbl\w+)\b[^.]{0,30}\b(s&p|nasdaq|dow|index|market)\b",
+    re.IGNORECASE,
+)
+
+
+def _index_daily_pct(snapshot: dict) -> float | None:
+    """Best-effort daily % change of the broad equity tape from the snapshot."""
+    for key in ("S&P 500", "S&P 500 (SPX)", "SPX", "Nasdaq 100"):
+        entry = (snapshot or {}).get(key)
+        if isinstance(entry, dict) and entry.get("pct_change") is not None:
+            try:
+                return float(entry["pct_change"])
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def _check_move_significance(data: dict, snapshot: dict) -> list[str]:
+    """Flag directional/bias language attached to a noise-level index move.
+
+    Only fires when |S&P daily %| < _NOISE_MOVE_PCT. Scans the index-level
+    narrative fields (equities_commentary, market_outlook_rationale) for
+    confirmation-of-bias phrasing or index-tied strong-move verbs. Sector- and
+    single-name moves are NOT scanned, so legitimate "Energy fell -1.5%" is fine.
+    """
+    pct = _index_daily_pct(snapshot)
+    if pct is None or abs(pct) >= _NOISE_MOVE_PCT:
+        return []
+    violations: list[str] = []
+    for field in ("equities_commentary", "market_outlook_rationale"):
+        text = data.get(field)
+        if not isinstance(text, str) or not text.strip():
+            continue
+        for sent in _SENTENCE_SPLIT_RE.split(text):
+            if _BIAS_CONFIRM_RE.search(sent) or _INDEX_STRONG_MOVE_RE.search(sent):
+                violations.append(f"{field}: noise move ({pct:+.2f}%) framed as direction — '{sent.strip()[:80]}'")
+    return violations[:4]
+
+
+# Historical-comparison superlatives ("widest ... in 25 years", "most since 2008").
+# These imply a checkable research claim and must be corroborated by a headline.
+# NOTE: plain technical levels like "52-week high of 7,520" do NOT match (no
+# in/since-<time> qualifier), so data-derived facts are not flagged.
+_HIST_SUPERLATIVE_RE = re.compile(
+    r"\b(widest|narrowest|biggest|largest|smallest|strongest|weakest|fastest|"
+    r"steepest|highest|lowest|best|worst|most|sharpest|deepest)\b"
+    r"[^.]{0,40}\b(in|since|over)\b[^.]{0,24}"
+    r"(\d{2,4}|\b(?:one|two|three|four|five|ten|twenty|thirty)\b|year|years|decade|month)",
+    re.IGNORECASE,
+)
+# Specific geopolitical EVENT claims (not just nouns) that need a source.
+_GEO_EVENT_RE = re.compile(
+    r"\b(air\s*strikes?|strikes?|missile\w*|invasion|invaded|ceasefire|truce|"
+    r"sanction\w*|coup|nuclear\s+\w+|peace\s+deal|peace\s+talks?|bombard\w*|"
+    r"retaliat\w*|escalat\w*)\b",
+    re.IGNORECASE,
+)
+_STOPWORDS = {
+    "the", "and", "for", "with", "that", "this", "from", "into", "over", "than",
+    "have", "has", "was", "were", "are", "its", "their", "amid", "after", "while",
+    "as", "of", "to", "in", "on", "by", "at", "a", "an", "is", "be", "it",
+}
+
+
+def _content_tokens(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z][a-z0-9.&-]{3,}", text.lower()) if w not in _STOPWORDS}
+
+
+def _check_unsourced_superlatives(data: dict, headlines: list) -> list[str]:
+    """Flag historical-superlative or geopolitical-event claims with no headline support.
+
+    A claim is "supported" if its sentence shares at least one distinctive content
+    token with the available headlines. Catches fabrications like "South Korean
+    equities outpaced U.S. tech by the widest margin in 25 years" and unsourced
+    "fresh U.S. strikes on Iran" when no headline corroborates them.
+    """
+    hl_text = " ".join(str(h) for h in (headlines or [])).lower()
+    hl_tokens = _content_tokens(hl_text)
+    fields = (
+        "equities_commentary", "fixed_income_commentary", "commodities_commentary",
+        "currencies_commentary", "economics_commentary", "market_outlook_rationale",
+        "cross_asset_synthesis",
+    )
+    violations: list[str] = []
+    for field in fields:
+        text = data.get(field)
+        if not isinstance(text, str) or not text.strip():
+            continue
+        for sent in _SENTENCE_SPLIT_RE.split(text):
+            is_superlative = bool(_HIST_SUPERLATIVE_RE.search(sent))
+            is_geo = bool(_GEO_EVENT_RE.search(sent))
+            if not (is_superlative or is_geo):
+                continue
+            sent_tokens = _content_tokens(sent)
+            if hl_tokens and (sent_tokens & hl_tokens):
+                continue  # corroborated by at least one headline token
+            kind = "superlative" if is_superlative else "geopolitical"
+            violations.append(f"{field}: unsourced {kind} claim — '{sent.strip()[:80]}'")
+    return violations[:4]
+
+
+def _check_equities_rationale_echo(part2: dict) -> str | None:
+    """Flag when asset_class_outlooks.Equities.rationale duplicates market_outlook_rationale.
+
+    The two are supposed to occupy different time horizons in the report — the Near-Term
+    Market Outlook box is 4-6 weeks (price-action driven), and the Long-Term Fundamental
+    Outlook Equities row is 3-6 months (earnings/multiples driven). The LLM has a strong
+    habit of echoing the same paragraph into both slots, so the reader sees the same text
+    twice on page 7. Return a violation string when the two rationales overlap heavily
+    (>=85% of the first 200 chars match after lowercasing/normalising whitespace), so the
+    Call 2 retry loop can re-roll. Returns None when clean.
+    """
+    near = (part2.get("market_outlook_rationale") or "").strip()
+    aco  = part2.get("asset_class_outlooks") or {}
+    long_eq = ((aco.get("Equities") or {}).get("rationale") or "").strip()
+    if not near or not long_eq:
+        return None
+    import re as _re
+    _norm = lambda s: _re.sub(r"\s+", " ", s.lower())
+    n, l = _norm(near)[:240], _norm(long_eq)[:240]
+    if not n or not l:
+        return None
+    # Verbatim or substring containment is a hard fail.
+    if n == l or n in l or l in n:
+        return "Equities rationale duplicates market_outlook_rationale verbatim"
+    # Token-set Jaccard overlap — catches single-word paraphrases that shift character
+    # positions but preserve the underlying word bag (e.g. swapping "despite" for "while").
+    _stop = {"the","a","an","and","or","of","to","in","on","as","is","are","was","were",
+             "be","by","for","with","that","this","at","from","it","its"}
+    tok_n = {w for w in _re.findall(r"[a-z0-9.%-]+", n) if w not in _stop and len(w) > 1}
+    tok_l = {w for w in _re.findall(r"[a-z0-9.%-]+", l) if w not in _stop and len(w) > 1}
+    if tok_n and tok_l:
+        jaccard = len(tok_n & tok_l) / len(tok_n | tok_l)
+        if jaccard >= 0.80:
+            return f"Equities rationale {jaccard:.0%} token overlap with market_outlook_rationale"
+    return None
+
+
+def _check_synthesis_yield_direction(part4: dict, snapshot: dict) -> str | None:
+    """Detect 10-year yield direction contradiction in cross_asset_synthesis.
+
+    The existing `_check_numeric_consistency` validator scans
+    equities/commodities/currencies/fixed_income for PERCENT-format sign mismatches
+    but does NOT scan cross_asset_synthesis, and does not understand BASIS-POINT
+    (`bp`) phrasing. Real-world failure observed 2026-05-28: snapshot 10Y bp_change
+    was -2.0 (yield FELL) yet synthesis claimed "the 10-year yield's 2 bp rise to
+    4.48%" — a hard factual contradiction with the pre-market bullets and fixed
+    income commentary on the same page.
+
+    Heuristic: scan synthesis text for any sentence mentioning 10-year/10-yr yield
+    that also names a direction verb. Compare verb's implied sign against the
+    snapshot's 10-Yr Yield bp_change (or change). Returns a single violation
+    string (or None when clean). Tolerant of phrasings with bp OR percent OR no
+    unit — only the direction word matters.
+    """
+    syn = (part4.get("cross_asset_synthesis") or "").strip()
+    if not syn:
+        return None
+    snap10 = (snapshot or {}).get("10-Yr Yield") or {}
+    truth = snap10.get("bp_change")
+    if truth is None:
+        truth = snap10.get("change")
+    if truth is None or abs(truth) < 0.5:
+        # Near-zero move (< 0.5 bp): the direction call is too noisy to enforce.
+        return None
+    truth_up = truth > 0
+
+    import re as _re
+    _UP_WORDS   = {"rose", "rise", "rises", "rising", "climbed", "climb", "jumped",
+                   "jump", "ticked up", "surged", "surge", "advanced", "advance",
+                   "gained", "gain", "higher", "increase", "increased", "increasing"}
+    _DOWN_WORDS = {"fell", "fall", "falls", "falling", "dropped", "drop", "slipped",
+                   "slip", "ticked down", "tumbled", "tumble", "declined", "decline",
+                   "slid", "slide", "lower", "decrease", "decreased", "decreasing",
+                   "eased", "ease", "retreated", "retreat"}
+    _YIELD_KW   = ("10-year", "10-yr", "ten-year", "10y yield", "10-year yield",
+                   "10-yr yield", "10-year treasury", "ten year yield")
+
+    # Operate on sentences so a single piece can match yield + direction in the same clause.
+    for sent in _re.split(r"(?<=[.!?])\s+", syn):
+        low = sent.lower()
+        if not any(kw in low for kw in _YIELD_KW):
+            continue
+        words = set(_re.findall(r"[a-z-]+", low))
+        cited_up = bool(words & _UP_WORDS)
+        cited_dn = bool(words & _DOWN_WORDS)
+        # Skip sentences that cite both (e.g. "fell from a 10-yr high") — too ambiguous.
+        if cited_up == cited_dn:
+            continue
+        if cited_up != truth_up:
+            actual = "rose" if truth_up else "fell"
+            cited  = "rose" if cited_up else "fell"
+            return (f"cross_asset_synthesis says 10Y yield {cited} but snapshot "
+                    f"bp_change={truth:+.1f} (actually {actual}): \"{sent.strip()[:120]}\"")
+    return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Post-process scrub: kill "fell -5.55%" double-negative artefacts where a
+# directional verb is paired with a redundant minus sign on the percent. The
+# LLM occasionally emits both a verb-of-direction and a signed percent, which
+# reads as a double negation. Idempotent — fixes only the verb-immediately-
+# adjacent case; standalone signed percents (e.g. "the close was -5.55%") are
+# left untouched. Applies in scrub_banned_phrases for all narrative fields.
+# ─────────────────────────────────────────────────────────────────────────────
+_DOUBLE_NEG_RE = re.compile(
+    r"\b(fell|fall|falls|dropped|drop|drops|declined|decline|declines|slid|slipped|"
+    r"slips|slipping|tumbled|tumbles|plunged|plunges|retreated|sank|sinks|lost|"
+    r"shed|sheds)\b(\s+(?:by\s+|to\s+)?)-(\d)",
+    re.IGNORECASE,
+)
+_DOUBLE_POS_RE = re.compile(
+    r"\b(rose|rise|rises|climbed|climbs|jumped|jumps|gained|gains|surged|surges|"
+    r"advanced|advances|rallied|rallies|soared|soars|ticked\s+up)\b(\s+(?:by\s+|to\s+)?)"
+    r"\+(\d)",
+    re.IGNORECASE,
+)
+
+
+def _strip_double_signs(text: str) -> str:
+    """Strip redundant +/- after directional verbs (e.g. 'fell -5.55%' → 'fell 5.55%').
+
+    Only matches when the verb is IMMEDIATELY followed by the signed number (optional
+    'by'/'to' filler permitted). Standalone signed percents in non-verb contexts
+    (e.g. 'closed at -5.55%') are left untouched.
+    """
+    if not isinstance(text, str) or not text:
+        return text
+    text = _DOUBLE_NEG_RE.sub(r"\1\g<2>\3", text)
+    text = _DOUBLE_POS_RE.sub(r"\1\g<2>\3", text)
+    return text
 
 
 def _check_numeric_consistency(data: dict, snapshot: dict) -> list[str]:

@@ -49,6 +49,7 @@ epm-quant-reports/
 
 # Model backups and experiments (keep only active models)
 models/experiment/
+models/history/
 models/*_backup.pt
 models/*_backup.json
 models/*_backup.csv

@@ -67,15 +67,22 @@ def run(cmd: list[str]) -> int:
 # Files that live on the server and must not be overwritten from local.
 _SERVER_MANAGED = {"jwt_secret.key", "users.db", "earnings_calendar.json"}
 
+# Directories that the SERVER owns and the laptop must never push up. data/jobs/
+# is the live deep-analysis queue written by the web worker; pushing stale local
+# job files would resurrect old/cancelled jobs and corrupt queue state.
+_SERVER_OWNED_DIRS = {"jobs"}
+
 
 def _scp_dir(local: Path, remote: str, key_args: list[str]) -> int:
     """Copy contents of a local directory to a remote path via scp, skipping .git folders
-    and any server-managed files that the server owns (e.g. jwt_secret.key, users.db)."""
+    and any server-managed files/dirs that the server owns (e.g. jwt_secret.key, users.db,
+    data/jobs/)."""
     import tempfile, shutil
     dest_user_host, dest_path = remote.split(":", 1)
+    _ignore = shutil.ignore_patterns(".git", "__pycache__", *_SERVER_OWNED_DIRS)
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp) / local.name
-        shutil.copytree(local, tmp_dir, ignore=shutil.ignore_patterns(".git", "__pycache__"))
+        shutil.copytree(local, tmp_dir, ignore=_ignore)
         # Drop server-managed files so scp never tries to overwrite them.
         for name in _SERVER_MANAGED:
             candidate = tmp_dir / name

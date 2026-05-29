@@ -64,12 +64,29 @@ def _set_auth_cookie(response: JSONResponse, token: str, remember_me: bool) -> N
     )
 
 app = FastAPI(title="EPM Market Intelligence", version="0.7.0")
+
+# CORS: an explicit allowlist is REQUIRED when allow_credentials=True — a wildcard
+# origin with credentials is invalid per the Fetch spec and unsafe for cookie auth.
+# Configure via ALLOWED_ORIGINS (comma-separated) in .env; falls back to the known
+# production + local-dev origins.
+_DEFAULT_ALLOWED_ORIGINS = [
+    "https://epm-market-intelligence.com",
+    "https://www.epm-market-intelligence.com",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+_allowed_origins = [
+    o.strip()
+    for o in os.environ.get("ALLOWED_ORIGINS", "").split(",")
+    if o.strip()
+] or _DEFAULT_ALLOWED_ORIGINS
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -1085,9 +1102,18 @@ async def api_register(body: RegisterRequest) -> JSONResponse:
 
 @app.post("/api/auth/forgot-password")
 async def api_forgot_password(request: Request, body: ForgotPasswordRequest) -> JSONResponse:
-    # Always return the same message regardless of whether the email exists 
+    # Always return the same message regardless of whether the email exists
     # prevents user enumeration attacks.
     generic_ok = JSONResponse({"ok": True, "message": "If that email is registered, a reset link has been sent."})
+
+    # Rate-limit to prevent reset-email bombing / abuse of our outbound mail.
+    # Gate on BOTH source IP and the target email so neither axis can be hammered.
+    _ip = request.client.host if request.client else "anon"
+    _email_key = (body.email or "").strip().lower()
+    if (_rate_limited(f"forgot-ip:{_ip}", max_requests=5, window_s=300)
+            or (_email_key and _rate_limited(f"forgot-email:{_email_key}", max_requests=3, window_s=900))):
+        # Return the same generic OK so we don't leak that throttling occurred.
+        return generic_ok
 
     user = get_user_by_email(body.email.strip())
     if not user:
@@ -1739,8 +1765,13 @@ def get_forecasts() -> dict:
 
     tickers_out: dict[str, dict] = {}
     for ticker, data in store.items():
-        entry = dict(data)
+        entry = dict(data)  # shallow copy — safe to round top-level scalars
         entry["name"] = MAG7_NAMES.get(ticker, ticker)
+        # Trim spurious precision (the consensus CSV stores ~17 sig figs). Display
+        # layers already round, but don't leak it raw through the API either.
+        for _k in ("consensus", "agreement_ratio", "forecast_stddev"):
+            if isinstance(entry.get(_k), (int, float)):
+                entry[_k] = round(float(entry[_k]), 4)
         tickers_out[ticker] = entry
 
     return {"ok": True, "as_of": as_of, "tickers": tickers_out, "commentary": commentary}
@@ -2121,10 +2152,18 @@ class ChatRequest(BaseModel):
 
 @app.post("/api/chat")
 async def api_chat(request: Request, body: ChatRequest) -> JSONResponse:
-    """AI market assistant — proxies to local Ollama with market context injected."""
+    """AI market assistant — proxies to local Ollama with market context injected.
+
+    Auth-gated: this drives the local Ollama instance (shared, finite GPU), so it
+    must not be open to anonymous callers. Mirrors the /api/deep/* auth pattern.
+    """
     import requests as _req
 
-    if _rate_limited(f"chat:{request.client.host}", max_requests=20, window_s=60):
+    payload = _require_user(request)
+
+    # Rate-limit per authenticated user (falls back to IP if sub is missing).
+    _rl_key = f"chat:{payload.get('sub') or (request.client.host if request.client else 'anon')}"
+    if _rate_limited(_rl_key, max_requests=20, window_s=60):
         raise HTTPException(status_code=429, detail="Too many requests. Please wait before sending another message.")
 
     if _council_is_running():

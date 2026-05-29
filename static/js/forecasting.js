@@ -255,7 +255,7 @@ function renderForecastCards(tickers, asOf, chartDataMap) {
         </div>
       </div>
       <div class="forecast-card-meta">
-        <span class="badge ${confClass}">${d.confidence_label || '—'} Confidence</span>
+        <span class="badge ${confClass}" title="Model consensus level — not realized forecast accuracy">${d.confidence_label || '—'} Agreement</span>
         ${d.winning_model ? `<span class="agree-badge">★ ${d.winning_model}</span>` : ''}
       </div>
       ${agreePct !== null ? `

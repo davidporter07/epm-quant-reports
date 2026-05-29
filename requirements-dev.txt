@@ -1,0 +1,7 @@
+# Dev/test-only dependencies (not needed for the pipeline or the live app).
+# Install with:  pip install -r requirements-dev.txt
+#
+# Note: httpx + bcrypt + PyJWT + python-multipart are already in requirements.txt
+# (the web app needs them); they're only listed here as a reminder that the
+# tests/test_app_security.py suite needs the full web stack installed to run.
+pytest>=8,<10

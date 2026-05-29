@@ -740,6 +740,21 @@ body {{
   line-height: 1.45;
 }}
 .outlook-table tr:nth-child(even) td {{ background: {OFF_WHITE}; }}
+/* Allow the outlook table to flow between rows but never mid-row.
+   Avoiding the table itself was too aggressive — pushed it onto its own page. */
+.outlook-table tr {{ page-break-inside: avoid; }}
+
+/* ======================= TWO-COLUMN COMMENTARY+TABLE BLOCKS ======================= */
+/* Prevent Commodities / Currencies + Fixed Income narrative-plus-table sections
+   from splitting across page boundaries — keeps the table rows attached to the
+   narrative they belong to. Falls back gracefully if the block is taller than a page. */
+.two-col {{ page-break-inside: avoid; }}
+
+/* ======================= TOPIC SPOTLIGHT (DEEP-DIVE) ======================= */
+/* Keep the Topic Spotlight (title + paragraphs + funds table) on a single page
+   when possible. Prevents the headline from being orphaned at the bottom of one
+   page with the body bleeding to the next. */
+.topic-spotlight-wrap {{ page-break-inside: avoid; }}
 
 /* ======================= PORTFOLIO SPOTLIGHT ======================= */
 .spotlight-section {{
@@ -1232,9 +1247,11 @@ def build_topic_spotlight_html(commentary: dict) -> str:
   <th>Ticker</th><th>Name</th><th>Type</th><th>Exposure</th>
 </tr></thead><tbody>{fund_rows}</tbody></table>""" if fund_rows else ""
     return f"""
+<div class="topic-spotlight-wrap">
 <div class="sec-header">Market Spotlight</div>
 <div class="sec-subheader">{title}</div>
-{paras}{fund_block}"""
+{paras}{fund_block}
+</div>"""
 
 
 def build_page3_html(logo_b64: str, commentary: dict) -> str:
@@ -1366,8 +1383,8 @@ def build_mag7_table_html(df: pd.DataFrame) -> str:
     <tr>
       <th class="l">Ticker</th>
       <th>Consensus<br>21-Day Fcast</th>
-      <th>Confidence</th>
       <th>Model<br>Agreement</th>
+      <th>Agreement<br>Ratio</th>
       <th>Linear</th>
       <th>ML</th>
       <th>ARIMAX</th>
@@ -1380,7 +1397,7 @@ def build_mag7_table_html(df: pd.DataFrame) -> str:
   <tbody>{rows}</tbody>
 </table>
 <p class="footnote">Consensus = equally-weighted ensemble of Linear, ML (Gradient Boost), ARIMAX, Deep Learning, and Fama-French factor models.
-Confidence reflects cross-model agreement and recent RMSE. Agreement Ratio = fraction of models directionally aligned.
+Model Agreement (High/Medium/Low) reflects how strongly the models concur — directional alignment, forecast dispersion, and recent RMSE. It measures model consensus, NOT realized forecast accuracy. Agreement Ratio = fraction of models directionally aligned.
 Forecasts represent 21-trading-day forward return estimates. They are not investment recommendations.
 Past model performance does not guarantee future accuracy.</p>"""
 
@@ -1715,12 +1732,18 @@ This page is for informational use and does not constitute investment advice.</p
 
 
 def build_tactical_positioning_html(commentary: dict) -> str:
-    """Pillar 2 — render the deterministic tactical-positioning block.
+    """Pillar 2 — render the deterministic tactical-positioning banner.
 
     Reads `tactical_positioning` (computed in generate_market_commentary.main from the
     30-fund book + sector tilt + VIX). Returns empty string if absent, so the section
-    silently degrades if the upstream compute failed. Inline-styled to avoid coupling
-    to new CSS classes.
+    silently degrades if the upstream compute failed.
+
+    Note: In the PDF this renders as a COMPACT BANNER (stance + sector tilt + factor
+    read + takeaway) intended to sit ABOVE the Portfolio Spotlight. The fund list is
+    deliberately omitted because the Portfolio Spotlight underneath shows the same
+    top/bottom funds with full LLM commentary — duplicating the fund tickers here
+    would be redundant. The email retains the full block (with funds) because the
+    email does not include the Portfolio Spotlight.
     """
     tp = commentary.get("tactical_positioning") or {}
     stance = str(tp.get("stance") or "").strip()
@@ -1729,8 +1752,6 @@ def build_tactical_positioning_html(commentary: dict) -> str:
     detail   = str(tp.get("stance_detail") or "").strip()
     factor   = str(tp.get("factor_read")   or "").strip()
     take     = str(tp.get("takeaway")      or "").strip()
-    tops     = tp.get("top_funds")    or []
-    bots     = tp.get("bottom_funds") or []
 
     # Colour the stance badge from its lead word.
     low = stance.lower()
@@ -1741,63 +1762,35 @@ def build_tactical_positioning_html(commentary: dict) -> str:
     else:
         badge_cls = "badge-neut"
 
-    def _fund_li(f: dict) -> str:
-        tkr = esc(str(f.get("ticker", "")).upper())
-        ret = f.get("ret_1m")
-        try:
-            ret_s = f"{float(ret):+.1f}% 1M"
-        except Exception:
-            ret_s = ""
-        beta = f.get("beta")
-        sharpe = f.get("sharpe")
-        bits = []
-        if sharpe is not None:
-            try:    bits.append(f"Sharpe {float(sharpe):.2f}")
-            except Exception: pass
-        if beta is not None:
-            try:    bits.append(f"β {float(beta):.2f}")
-            except Exception: pass
-        meta = " · ".join(bits)
-        tag  = esc(str(f.get("tag", ""))[:64])
-        meta_html = f'<span style="color:#6b7280;font-size:10pt;"> ({esc(meta)})</span>' if meta else ""
-        tag_html  = f'<span style="color:#374151;font-size:10pt;"> — {tag}</span>' if tag else ""
-        return (f'<li style="margin:2px 0;font-size:11pt;">'
-                f'<strong>{tkr}</strong> <span style="color:#1d4ed8;font-weight:700;">{esc(ret_s)}</span>'
-                f'{meta_html}{tag_html}</li>')
+    factor_html = (
+        f'<span style="font-size:9.5pt;color:#374151;font-style:italic;"> · {esc(factor)}</span>'
+        if factor else ""
+    )
+    take_html = (
+        f'<div style="margin-top:3px;font-size:10pt;color:#111827;">'
+        f'<strong>Takeaway:</strong> {esc(take)}</div>'
+        if take else ""
+    )
+    detail_html = (
+        f'<div style="font-size:9.5pt;color:#374151;margin-top:2px;">{esc(detail)}{factor_html}</div>'
+        if detail else (
+            f'<div style="font-size:9.5pt;color:#374151;font-style:italic;margin-top:2px;">{esc(factor)}</div>'
+            if factor else ""
+        )
+    )
 
-    top_html = "".join(_fund_li(f) for f in tops)
-    bot_html = "".join(_fund_li(f) for f in bots)
-    cols = ""
-    if top_html or bot_html:
-        cols = f"""
-<div style="display:flex;margin-top:6px;">
-  <div style="flex:1;padding-right:8px;">
-    <div style="font-size:10pt;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#16a34a;margin-bottom:3px;">Best-Positioned</div>
-    <ul style="margin:0;padding-left:18px;">{top_html}</ul>
-  </div>
-  <div style="flex:1;padding-left:8px;border-left:1px solid #e5e7eb;">
-    <div style="font-size:10pt;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#dc2626;margin-bottom:3px;">Lagging</div>
-    <ul style="margin:0;padding-left:18px;">{bot_html}</ul>
-  </div>
-</div>"""
-
-    factor_html = f'<div style="margin-top:6px;font-size:10pt;color:#374151;font-style:italic;">{esc(factor)}</div>' if factor else ""
-    take_html   = f'<div style="margin-top:4px;font-size:11pt;color:#111827;"><strong>Takeaway:</strong> {esc(take)}</div>' if take else ""
-
+    # Compact banner — single-row layout with stance badge + sector tilt + factor read,
+    # then takeaway underneath. Total height roughly 3 lines — designed to sit cleanly
+    # above the Portfolio Spotlight header without spanning a page break.
     return f"""
-<div class="sec-header" style="margin-top:10px;">Quantitative Tactical Positioning</div>
-<div class="outlook-box" style="padding:8px 10px;">
-  <div class="outlook-body" style="padding:0;">
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
-      <span class="badge {badge_cls}" style="font-size:11pt;padding:3px 10px;">{esc(stance)}</span>
-      <span style="font-size:10pt;color:#6b7280;">{esc(detail)}</span>
-    </div>
-    {cols}
-    {factor_html}
-    {take_html}
+<div class="tactical-banner" style="border-left:3px solid #1e3a8a;background:#f8fafc;padding:7px 12px;margin:8px 0 4px 0;page-break-inside:avoid;page-break-after:avoid;">
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+    <span style="font-size:8.5pt;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#6b7280;">Quant Tactical Read</span>
+    <span class="badge {badge_cls}" style="font-size:10pt;padding:2px 9px;">{esc(stance)}</span>
   </div>
-</div>
-<p class="footnote" style="margin-top:2px;">Quant signals derived from the EPM portfolio book ({len(tops)+len(bots)} funds shown of {len(tops)+len(bots)}+ tracked) + sector tilt + VIX. Deterministic, not LLM-generated.</p>"""
+  {detail_html}
+  {take_html}
+</div>"""
 
 
 def build_spotlight_html(commentary: dict) -> str:
@@ -1980,9 +1973,10 @@ def build_page5_html(logo_b64: str, commentary: dict, features_df: pd.DataFrame)
 
 <div class="rule"></div>
 
-{build_spotlight_html(commentary) if fresh else ""}
-
+<div class="spotlight-wrap" style="page-break-inside:avoid;">
 {build_tactical_positioning_html(commentary)}
+{build_spotlight_html(commentary) if fresh else ""}
+</div>
 
 <div class="sec-header">Portfolio Fund Metrics</div>
 {build_metrics_table_html(features_df)}
