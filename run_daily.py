@@ -12,7 +12,11 @@ silently fall behind the email:
   3. freshness check — verify the LIVE site now serves today's analysis. If not,
                        exit non-zero so the scheduler/alerting surfaces it.
 
-Previously the scheduler ran only step 1, so the site was never synced.
+Observability: every terminal outcome is written to logs/run_daily_status.json
+(structured) and appended to logs/run_daily.log (one line per run). /api/health and
+an operator can read the status file to see the last run's result without scraping
+stdout. No alert EMAIL is sent from here — that would risk duplicate mails and needs
+SMTP creds; the status file + marker are the low-risk alert surface.
 
 Designed for testability: the subprocess runner and the freshness checker are
 injectable, so tests exercise the orchestration without sending email or deploying.
@@ -25,13 +29,39 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parent
 PY = sys.executable
+LOGS_DIR = ROOT / "logs"
+STATUS_FILE = LOGS_DIR / "run_daily_status.json"
+MARKER_LOG = LOGS_DIR / "run_daily.log"
+
+
+def _record_status(stage: str, ok: bool, detail: str, *, status_file: Path = STATUS_FILE) -> None:
+    """Write a structured status file + append a marker line. Never raises — alerting
+    must not break the run. `stage` is one of: send_email | post_run | freshness | ok.
+    """
+    try:
+        status_file.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "stage": stage,
+            "ok": ok,
+            "detail": detail,
+        }
+        tmp = status_file.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        tmp.replace(status_file)
+        with (status_file.parent / "run_daily.log").open("a", encoding="utf-8") as fh:
+            fh.write(f"{payload['ts']} [{'OK' if ok else 'FAIL'}] {stage}: {detail}\n")
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"[run_daily] (status write failed: {exc})")
 
 
 def _default_runner(cmd: list[str]) -> int:
@@ -60,18 +90,24 @@ def main(
     #    or non-LLM reports, so a non-zero exit here means we must NOT deploy.
     rc = runner([PY, "send_email.py"])
     if rc != 0:
-        print(f"[run_daily] send_email.py exited {rc} — report not deployed. Aborting.")
+        msg = f"send_email.py exited {rc} — report not deployed. Aborting."
+        print(f"[run_daily] {msg}")
+        _record_status("send_email", False, msg)
         return 1
 
     # 2. Post-run tasks + sync to server. A sync hiccup is non-fatal here because
     #    the freshness check below is the real gate on whether the site is current.
     rc = runner([PY, "post_run.py"])
+    post_run_warn = ""
     if rc != 0:
-        print(f"[run_daily] post_run.py exited {rc} — sync may be incomplete; verifying site...")
+        post_run_warn = f"post_run.py exited {rc} — sync may be incomplete; verifying site..."
+        print(f"[run_daily] {post_run_warn}")
 
     # 3. Verify the public site actually reflects today's analysis.
     if args.skip_freshness:
         print("[run_daily] freshness check skipped by flag.")
+        _record_status("ok", True, "freshness check skipped by flag" +
+                       (f" ({post_run_warn})" if post_run_warn else ""))
         return 0
 
     if fresh_checker is None:
@@ -80,12 +116,15 @@ def main(
 
     fresh, detail = fresh_checker()
     if not fresh:
-        print(f"[run_daily] LIVE SITE STALE: {detail}")
-        print("[run_daily] The email may have gone out but the website is behind. "
-              "Re-run `python post_run.py` and check the sync logs.")
+        msg = (f"LIVE SITE STALE: {detail}. The email may have gone out but the "
+               f"website is behind. Re-run `python post_run.py` and check sync logs.")
+        print(f"[run_daily] {msg}")
+        _record_status("freshness", False, msg)
         return 2
 
-    print(f"[run_daily] OK — {detail}")
+    ok_detail = detail + (f" (warning: {post_run_warn})" if post_run_warn else "")
+    print(f"[run_daily] OK — {ok_detail}")
+    _record_status("ok", True, ok_detail)
     return 0
 
 

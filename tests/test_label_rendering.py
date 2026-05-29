@@ -27,3 +27,10 @@ def test_forecasting_js_badge_says_agreement_not_confidence():
     src = _read("static/js/forecasting.js")
     assert "} Confidence</span>" not in src
     assert "} Agreement</span>" in src
+
+
+def test_chat_widget_has_guest_signin_guard():
+    # PR2: logged-out users get a sign-in prompt, not a raw "Not authenticated".
+    src = _read("static/js/site.js")
+    assert "Please sign in (top-right) to use the AI Market Assistant." in src
+    assert "isMember" in src

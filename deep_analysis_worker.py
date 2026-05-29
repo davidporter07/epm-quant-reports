@@ -18,7 +18,7 @@ import os
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -255,8 +255,59 @@ def _run_pipeline(job_id: str, ticker: str) -> None:
 # Background worker thread
 # ---------------------------------------------------------------------------
 
+def worker_status() -> dict:
+    """Lightweight liveness view of the background worker thread (for /api/health)."""
+    return {
+        "alive": bool(_worker_thread is not None and _worker_thread.is_alive()),
+        "stop_requested": _stop_event.is_set(),
+    }
+
+
+def prune_old_jobs(max_age_days: int = 30, *, now: Optional[datetime] = None) -> int:
+    """Conservatively delete TERMINAL job files older than max_age_days.
+
+    Removes only jobs whose status is completed/failed/cancelled AND whose
+    completed_at/updated_at timestamp is older than the cutoff. NEVER touches
+    queued/running jobs, and skips any job without a parseable terminal timestamp
+    (when in doubt, keep it). Returns the number of files removed.
+    """
+    cutoff = (now or datetime.utcnow()) - timedelta(days=max_age_days)
+    removed = 0
+    for p in _jobs_dir().glob("*.json"):
+        try:
+            j = json.loads(p.read_text())
+        except Exception:
+            continue
+        if j.get("status") not in ("completed", "failed", "cancelled"):
+            continue
+        ts_raw = j.get("completed_at") or j.get("updated_at")
+        if not ts_raw:
+            continue
+        try:
+            ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+            if ts.tzinfo is not None:
+                ts = ts.astimezone(timezone.utc).replace(tzinfo=None)
+        except Exception:
+            continue
+        if ts < cutoff:
+            try:
+                p.unlink()
+                removed += 1
+            except Exception:
+                continue
+    return removed
+
+
 def _worker_loop() -> None:
     _reset_interrupted_jobs()
+    # Conservative retention: drop terminal jobs older than 30 days on startup.
+    try:
+        _pruned = prune_old_jobs()
+        if _pruned:
+            import logging
+            logging.getLogger(__name__).info("Pruned %d job file(s) older than 30 days", _pruned)
+    except Exception:
+        pass
     while not _stop_event.is_set():
         job = _next_queued_job()
         if job is None:
