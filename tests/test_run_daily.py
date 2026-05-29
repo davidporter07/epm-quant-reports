@@ -68,3 +68,18 @@ def test_unreachable_site_is_not_fresh():
     fresh, detail = csf.is_site_fresh(
         today="2026-05-28", market_open=True, fetch=lambda url: None)
     assert fresh is False
+
+
+def test_extract_report_date_handles_nested_commentary_shape():
+    # /api/commentary returns the date NESTED under "commentary".
+    payload = {"ok": True, "commentary": {"report_date": "2026-05-29", "x": 1}}
+    assert csf._extract_report_date(payload) == "2026-05-29"
+
+
+def test_extract_report_date_top_level_fallback():
+    assert csf._extract_report_date({"report_date": "2026-05-29"}) == "2026-05-29"
+
+
+def test_extract_report_date_missing_returns_none():
+    assert csf._extract_report_date({"ok": True, "commentary": {}}) is None
+    assert csf._extract_report_date("not a dict") is None

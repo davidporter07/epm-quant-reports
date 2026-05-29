@@ -72,31 +72,49 @@ _SERVER_MANAGED = {"jwt_secret.key", "users.db", "earnings_calendar.json"}
 # job files would resurrect old/cancelled jobs and corrupt queue state.
 _SERVER_OWNED_DIRS = {"jobs"}
 
+# Local-only research/cache directories the live web app never reads. Excluding
+# them keeps the sync fast AND avoids Windows MAX_PATH (260-char) copytree errors
+# on the deeply-nested DL experiment outputs (data/experiment/.../growth24_*/...).
+_LOCAL_ONLY_DIRS = {"experiment", "qlora_training", ".yfinance_cache", "commentary_archive"}
+
+_SYNC_EXCLUDE_DIRS = _SERVER_OWNED_DIRS | _LOCAL_ONLY_DIRS
+
+
+def _scp_dir_names(local: Path) -> list[str]:
+    """Top-level entries of `local` to sync, with server-owned/local-only dirs and
+    server-managed files excluded by name. Pure + deterministic so it can be tested
+    without touching the network or the filesystem layout of the remote."""
+    return [
+        p.name for p in sorted(local.iterdir())
+        if p.name not in _SYNC_EXCLUDE_DIRS
+        and p.name not in _SERVER_MANAGED
+        and p.name not in (".git", "__pycache__")
+    ]
+
 
 def _scp_dir(local: Path, remote: str, key_args: list[str]) -> int:
-    """Copy contents of a local directory to a remote path via scp, skipping .git folders
-    and any server-managed files/dirs that the server owns (e.g. jwt_secret.key, users.db,
-    data/jobs/)."""
-    import tempfile, shutil
-    dest_user_host, dest_path = remote.split(":", 1)
-    _ignore = shutil.ignore_patterns(".git", "__pycache__", *_SERVER_OWNED_DIRS)
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_dir = Path(tmp) / local.name
-        shutil.copytree(local, tmp_dir, ignore=_ignore)
-        # Drop server-managed files so scp never tries to overwrite them.
-        for name in _SERVER_MANAGED:
-            candidate = tmp_dir / name
-            if candidate.exists():
-                candidate.unlink()
-        items = list(tmp_dir.iterdir())
-        if not items:
-            return 0
-        cmd = ["scp", *key_args, "-r"] + [str(p) for p in items] + [f"{dest_user_host}:{dest_path}/"]
-        try:
-            return subprocess.run(cmd, timeout=300).returncode
-        except subprocess.TimeoutExpired:
-            print(f"[WARN] scp timed out after 300s for {local} — skipping")
-            return 1
+    """Copy a local directory's top-level entries to a remote path via scp.
+
+    Runs scp from cwd=local and passes RELATIVE names. This avoids two Windows
+    failure modes the previous temp-copytree approach hit:
+      - absolute paths like 'C:\\Users\\...\\file' were handed to scp, which parses
+        the leading 'C:' as 'host:path' and silently failed to transfer the file
+        (this is why operational data/ files stopped syncing);
+      - shutil.copytree blew the 260-char MAX_PATH limit on deep experiment dirs
+        (data/experiment/.../growth24_*), aborting the entire sync.
+    Server-owned/local-only dirs and server-managed files are excluded by name.
+    """
+    names = _scp_dir_names(local)
+    if not names:
+        return 0
+    dest = remote if remote.endswith("/") else remote + "/"
+    cmd = ["scp", *key_args, "-r", *names, dest]
+    try:
+        # cwd=local => scp receives bare relative names (no drive-letter colon).
+        return subprocess.run(cmd, cwd=str(local), timeout=300).returncode
+    except subprocess.TimeoutExpired:
+        print(f"[WARN] scp timed out after 300s for {local} — skipping")
+        return 1
 
 
 def sync_to_server():
