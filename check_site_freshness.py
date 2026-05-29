@@ -67,8 +67,21 @@ def _fetch_report_date(url: str, timeout: int = 15) -> Optional[str]:
         data = resp.json()
     except Exception:
         return None
+    return _extract_report_date(data)
+
+
+def _extract_report_date(data) -> Optional[str]:
+    """Pull report_date from the /api/commentary payload.
+
+    The endpoint returns {"ok": true, "commentary": {..., "report_date": "..."}},
+    so the date is nested under "commentary". Fall back to a top-level key for
+    robustness against future shape changes.
+    """
     if not isinstance(data, dict):
         return None
+    commentary = data.get("commentary")
+    if isinstance(commentary, dict) and commentary.get("report_date"):
+        return commentary["report_date"]
     return data.get("report_date") or None
 
 
