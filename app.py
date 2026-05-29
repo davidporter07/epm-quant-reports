@@ -38,7 +38,7 @@ from services.auth_service import (
 )
 from services.email_service import EmailError, send_password_reset_email
 from deep_analysis_worker import (cancel_job, enqueue, get_job_status, get_today_cached_job,
-                                   invalidate_today_cache, start_worker, stop_worker)
+                                   invalidate_today_cache, start_worker, stop_worker, worker_status)
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -1240,7 +1240,70 @@ def download_current_report() -> FileResponse:
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"status": "ok"}
+    """Operational health for monitoring. Aggregates lightweight checks and never
+    raises. Returns status 'ok' or 'degraded'. Intentionally exposes NO secrets,
+    host/IPs, or filesystem paths — only booleans, the (already-public) report date,
+    and bare filenames for any missing data file.
+    """
+    checks: dict = {}
+    overall_ok = True
+
+    # 1. Commentary present + fresh on market days
+    try:
+        from check_site_freshness import market_is_open, today_str
+        cpath = DATA_DIR / "latest_commentary.json"
+        report_date = None
+        if cpath.exists():
+            with cpath.open(encoding="utf-8") as fh:
+                report_date = (json.load(fh) or {}).get("report_date")
+        mkt_open = market_is_open()
+        fresh = (report_date == today_str()) if mkt_open else True
+        checks["commentary"] = {
+            "present": bool(report_date),
+            "report_date": report_date,
+            "market_open": mkt_open,
+            "fresh": fresh,
+        }
+        if not report_date or (mkt_open and not fresh):
+            overall_ok = False
+    except Exception:
+        checks["commentary"] = {"ok": False, "error": "check_failed"}
+        overall_ok = False
+
+    # 2. Critical data files present (bare filenames only)
+    try:
+        required = ["latest_commentary.json", "consensus_forecasts.csv",
+                    "forecast_confidence.csv", "enrichment.json"]
+        missing = [f for f in required if not (DATA_DIR / f).exists()]
+        checks["data_files"] = {"all_present": not missing, "missing": missing}
+        if missing:
+            overall_ok = False
+    except Exception:
+        checks["data_files"] = {"ok": False}
+        overall_ok = False
+
+    # 3. Deep-analysis worker liveness
+    try:
+        ws = worker_status()
+        checks["deep_worker"] = ws
+        if not ws.get("alive"):
+            overall_ok = False
+    except Exception:
+        checks["deep_worker"] = {"alive": False}
+        overall_ok = False
+
+    # 4. Ollama reachability (the host/IP is deliberately NOT returned)
+    try:
+        import requests as _req
+        r = _req.get(f"{_CHAT_OLLAMA_HOST}/api/tags", timeout=3)
+        checks["ollama"] = {"reachable": bool(r.ok)}
+        if not r.ok:
+            overall_ok = False
+    except Exception:
+        checks["ollama"] = {"reachable": False}
+        overall_ok = False
+
+    return {"status": "ok" if overall_ok else "degraded", "checks": checks}
 
 
 @app.get("/api/suggest-tickers")

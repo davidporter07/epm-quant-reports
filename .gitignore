@@ -23,6 +23,7 @@ email_log.txt
 email_sent.log
 push_log.txt
 *.log
+logs/run_daily_status.json
 
 # Generated data outputs — exclude entire data/ directory
 .env

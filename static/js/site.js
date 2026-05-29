@@ -3020,6 +3020,19 @@ function mountAIChat() {
     e.preventDefault();
     const text = input.value.trim();
     if (!text) return;
+
+    // Guest gate: /api/chat is auth-only. Show a clear sign-in prompt rather than
+    // letting a logged-out user fire a request that just returns "Not authenticated".
+    // (The server-side auth gate stays the real enforcement; this is UX only.)
+    const isMember = document.body.dataset.authState === 'member'
+                     || !!localStorage.getItem('epm_username');
+    if (!isMember) {
+      input.value = '';
+      appendMsg('user', text);
+      appendMsg('assistant', 'Please sign in (top-right) to use the AI Market Assistant.');
+      return;
+    }
+
     input.value = '';
     input.disabled = true;
 

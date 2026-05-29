@@ -1010,101 +1010,128 @@ def build_email():
     return msg
 
 # --- Main send flow ---
-if __name__ == "__main__":
+
+def _check_commentary_fresh(today: str) -> "str | None":
+    """Return an error message if today's commentary is stale/missing/non-LLM,
+    else None. Extracted as a seam so the send flow is unit-testable and so the
+    freshness gate stays a single source of truth."""
+    try:
+        with open(COMMENTARY_JSON, 'r', encoding='utf-8') as _f:
+            _c = json.load(_f)
+        _narrative_date = _c.get('narrative_source_date', '')
+        _narrative_ts   = _c.get('narrative_generated_at', '')
+        _narrative_fields = [
+            "equities_commentary", "fixed_income_commentary",
+            "commodities_commentary", "currencies_commentary",
+            "economics_commentary", "pre_market_bullets",
+        ]
+        _stale = (
+            _c.get('report_date') != today
+            or _narrative_date != today
+            or not _narrative_ts
+            or any(not _c.get(k) for k in _narrative_fields)
+        )
+        if _stale:
+            return (
+                f"[BLOCK] Narrative stale or missing "
+                f"(report_date={_c.get('report_date')!r}, "
+                f"narrative_source_date={_narrative_date!r}, "
+                f"narrative_generated_at={_narrative_ts!r}). Email send blocked."
+            )
+        _source = _c.get('narrative_source', '')
+        if _source != 'llm':
+            return (
+                f"[BLOCK] Narrative source is {_source!r} (expected 'llm') — "
+                f"deterministic fallback was used. Email send blocked. "
+                f"Investigate logs/generate_market_commentary.log."
+            )
+        return None
+    except Exception as _gate_err:
+        return f"[BLOCK] Could not verify commentary freshness ({_gate_err}). Email send blocked."
+
+
+def main(argv=None) -> int:
+    """Daily email workflow. Returns a process exit code:
+      0 = email sent, OR cleanly skipped (already-sent-today / market-closed)
+      1 = real failure: monitor.py error, stale/blocked commentary, or send failure
+
+    Previously the workflow swallowed monitor/SMTP exceptions and the process
+    still exited 0, so run_daily.py / the scheduler could not tell a failed run
+    from a successful one. Now true failures return non-zero; the already-sent
+    and market-closed skips remain clean (0) successes.
+    """
     import argparse as _ap
     _parser = _ap.ArgumentParser()
     _parser.add_argument("--send-only", action="store_true",
                          help="Skip monitor.py re-run and send with existing data (requires fresh commentary)")
-    _args, _ = _parser.parse_known_args()
+    _args, _ = _parser.parse_known_args(argv)
 
     if already_sent_today():
         print(" Email already sent today. Skipping.")
         logging.info(" Email already sent today. Skipping.")
-    elif not is_market_open():
+        return 0
+    if not is_market_open():
         print(" Market closed today. No email sent.")
         logging.info(" Market closed today. No email sent.")
-    else:
-        try:
-            if _args.send_only:
-                logging.info(" --send-only: skipping monitor.py, using existing commentary.")
-                print(" --send-only: skipping monitor.py re-run.")
-            else:
-                logging.info(" Running monitor.py to generate new report...")
-                subprocess.run([PY, 'monitor.py'], cwd=str(ROOT), env={**os.environ, 'PDF_MODE': 'true'}, check=True)
-                logging.info(" Report updated.")
+        return 0
 
-            # Freshness gate — block send if narrative is stale or missing.
-            _today = datetime.now(TZ).strftime('%Y-%m-%d')
+    try:
+        if _args.send_only:
+            logging.info(" --send-only: skipping monitor.py, using existing commentary.")
+            print(" --send-only: skipping monitor.py re-run.")
+        else:
+            logging.info(" Running monitor.py to generate new report...")
             try:
-                with open(COMMENTARY_JSON, 'r', encoding='utf-8') as _f:
-                    _c = json.load(_f)
-                _narrative_date = _c.get('narrative_source_date', '')
-                _narrative_ts   = _c.get('narrative_generated_at', '')
-                _narrative_fields = [
-                    "equities_commentary", "fixed_income_commentary",
-                    "commodities_commentary", "currencies_commentary",
-                    "economics_commentary", "pre_market_bullets",
-                ]
-                _stale = (
-                    _c.get('report_date') != _today
-                    or _narrative_date != _today
-                    or not _narrative_ts
-                    or any(not _c.get(k) for k in _narrative_fields)
-                )
-                if _stale:
-                    _msg = (
-                        f"[BLOCK] Narrative stale or missing "
-                        f"(report_date={_c.get('report_date')!r}, "
-                        f"narrative_source_date={_narrative_date!r}, "
-                        f"narrative_generated_at={_narrative_ts!r}). "
-                        f"Email send blocked."
-                    )
-                    print(_msg)
-                    logging.error(_msg)
-                    sys.exit(1)
-                _source = _c.get('narrative_source', '')
-                if _source != 'llm':
-                    _msg = (
-                        f"[BLOCK] Narrative source is {_source!r} (expected 'llm') — "
-                        f"deterministic fallback was used. Email send blocked. "
-                        f"Investigate logs/generate_market_commentary.log."
-                    )
-                    print(_msg)
-                    logging.error(_msg)
-                    sys.exit(1)
-            except Exception as _gate_err:
-                _msg = f"[BLOCK] Could not verify commentary freshness ({_gate_err}). Email send blocked."
+                subprocess.run([PY, 'monitor.py'], cwd=str(ROOT),
+                               env={**os.environ, 'PDF_MODE': 'true'}, check=True)
+            except subprocess.CalledProcessError as _mon_err:
+                _msg = f"[FAIL] monitor.py failed ({_mon_err}). Email not sent."
                 print(_msg)
                 logging.error(_msg)
-                sys.exit(1)
+                return 1
+            logging.info(" Report updated.")
 
-            # --send-only skipped monitor.py, which normally regenerates the PDF. Both the
-            # served report site AND the email's PDF attachment are built from report.pdf,
-            # so without this they'd be stale relative to the fresh commentary the email
-            # body is built from (the 5/22 PDF/email mismatch). Regenerate now — the
-            # freshness gate above already guarantees commentary is today's LLM output,
-            # and generate_pdf_report only re-renders when commentary is fresh.
-            if _args.send_only:
-                logging.info(" --send-only: regenerating PDF from current commentary...")
-                print(" --send-only: regenerating PDF report...")
-                try:
-                    subprocess.run([PY, 'generate_pdf_report.py'], cwd=str(ROOT), check=True)
-                    logging.info(" PDF regenerated to match commentary.")
-                except Exception as _pdf_err:
-                    # Non-fatal: a stale attachment is less bad than skipping the daily email.
-                    logging.error(f" --send-only PDF regen failed: {_pdf_err}")
-                    print(f" [WARN] PDF regen failed ({_pdf_err}) — sending with existing PDF.")
+        # Freshness gate — block send if narrative is stale or missing.
+        _today = datetime.now(TZ).strftime('%Y-%m-%d')
+        _fresh_err = _check_commentary_fresh(_today)
+        if _fresh_err:
+            print(_fresh_err)
+            logging.error(_fresh_err)
+            return 1
 
-            logging.info(" Preparing and sending email...")
-            msg = build_email()
-            context = ssl.create_default_context()
-            with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
-                server.login(FROM, os.getenv("GMAIL_APP_PASSWORD"))
-                server.sendmail(FROM, TO, msg.as_string())
+        # --send-only skipped monitor.py, which normally regenerates the PDF. Both the
+        # served report site AND the email's PDF attachment are built from report.pdf,
+        # so without this they'd be stale relative to the fresh commentary the email
+        # body is built from (the 5/22 PDF/email mismatch). Regenerate now — the
+        # freshness gate above already guarantees commentary is today's LLM output,
+        # and generate_pdf_report only re-renders when commentary is fresh.
+        if _args.send_only:
+            logging.info(" --send-only: regenerating PDF from current commentary...")
+            print(" --send-only: regenerating PDF report...")
+            try:
+                subprocess.run([PY, 'generate_pdf_report.py'], cwd=str(ROOT), check=True)
+                logging.info(" PDF regenerated to match commentary.")
+            except Exception as _pdf_err:
+                # Non-fatal: a stale attachment is less bad than skipping the daily email.
+                logging.error(f" --send-only PDF regen failed: {_pdf_err}")
+                print(f" [WARN] PDF regen failed ({_pdf_err}) — sending with existing PDF.")
 
-            logging.info(" Email sent successfully.")
-            mark_sent_today()
-            print(" Email sent successfully.")
-        except Exception as e:
-            logging.error(f" Error in workflow: {e}")
-            print(f" Error in workflow: {e}")
+        logging.info(" Preparing and sending email...")
+        msg = build_email()
+        context = ssl.create_default_context()
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
+            server.login(FROM, os.getenv("GMAIL_APP_PASSWORD"))
+            server.sendmail(FROM, TO, msg.as_string())
+
+        logging.info(" Email sent successfully.")
+        mark_sent_today()
+        print(" Email sent successfully.")
+        return 0
+    except Exception as e:
+        logging.error(f" Error in workflow: {e}")
+        print(f" Error in workflow: {e}")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
