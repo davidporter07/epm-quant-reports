@@ -3829,3 +3829,94 @@ Interpretation:
   forecast dispersion, so it is not yet a promotion candidate.
 - Next decision point: run the two-member ladder over the larger 12-cycle and
   36-cycle historical windows before changing the standing paper-trade policy.
+
+## 2026-05-28 Growth24 12-Cycle And 36-Cycle Expansion
+
+Command family:
+
+```text
+scripts/run_growth24_research_ladder.ps1
+  -Device cuda -Amp
+  -Seeds "20260506,20260507"
+  -HistoricalTopN 2
+  -SkipCurrent
+```
+
+12-cycle expansion, 3 epochs, two-member ensemble, top2/bottom2 paper scoring:
+
+```text
+spread=0.0
+asof_start: 2025-05-15
+asof_end: 2026-04-17
+mean_long_short_return: 0.140543
+spread_hit_rate: 0.750000
+max_drawdown: -0.054234
+naive_sharpe: 11.686149
+
+spread=0.1
+asof_start: 2025-05-15
+asof_end: 2026-04-17
+mean_long_short_return: 0.121694
+spread_hit_rate: 0.750000
+max_drawdown: -0.079167
+naive_sharpe: 10.806412
+```
+
+36-cycle expansion, 3 epochs, two-member ensemble, top2/bottom2 paper scoring:
+
+```text
+spread=0.0
+asof_start: 2023-05-11
+asof_end: 2026-04-17
+mean_long_return: 0.097617
+mean_short_return: 0.007533
+mean_long_short_return: 0.090084
+spread_hit_rate: 0.694444
+long_hit_rate: 0.694444
+short_hit_rate: 0.472222
+max_drawdown: -0.146769
+naive_sharpe: 10.240115
+```
+
+36-cycle weakest cycles:
+
+```text
+2024-04-12: -0.048933
+2025-06-16: -0.044306
+2023-11-09: -0.042955
+2024-11-11: -0.038959
+2023-09-12: -0.035470
+2024-03-13: -0.032545
+2025-10-15: -0.024828
+2025-02-13: -0.024532
+```
+
+36-cycle strongest cycles:
+
+```text
+2026-04-17: 0.382150
+2024-10-11: 0.283658
+2025-12-15: 0.254175
+2025-09-16: 0.213015
+2025-08-15: 0.199679
+2026-01-15: 0.159649
+2025-01-14: 0.131421
+2024-06-12: 0.117169
+```
+
+Interpretation:
+
+- The 12-cycle expansion rejects spread-loss `0.1` as a near-term promotion
+  candidate. It underperformed baseline on mean spread, drawdown, and naive
+  Sharpe despite matching hit rate.
+- The 36-cycle baseline remains positive but loses the "insane accuracy" shape
+  seen in the short 2026-only window. The edge is real enough to keep testing,
+  but not stable enough to promote into production or alter live paper policy.
+- The recurring long book is highly concentrated in high-beta/AI-semiconductor
+  names (`PLTR`, `NVDA`, `INTC`, `MU`, `AMD`, `TSLA`), and the short book is
+  often mega-cap quality (`MSFT`, `AAPL`, `META`, `ADBE`, `SNPS`). The next
+  model work should test concentration/turnover/risk penalties and regime
+  abstention before adding more objective weight.
+- Next decision point: run a 36-cycle, 8-epoch baseline two-member ensemble
+  only if compute time is acceptable, then compare against the existing
+  validated 36-cycle/8-epoch single-member policy before changing paper rules.
