@@ -459,6 +459,100 @@ def _build_premarket_block(c: dict) -> tuple[str, list]:
     return html_out, txt_lines
 
 
+def _build_tactical_block(c: dict) -> tuple[str, list]:
+    """Pillar 2 — compact email block for the deterministic tactical-positioning view.
+
+    Reads `tactical_positioning` produced upstream. Returns ('', []) if absent so the
+    section silently degrades when the upstream compute is empty.
+    """
+    tp = (c.get('tactical_positioning') or {}) if isinstance(c, dict) else {}
+    stance = str(tp.get('stance') or '').strip()
+    if not stance:
+        return '', []
+    detail   = str(tp.get('stance_detail') or '').strip()
+    factor   = str(tp.get('factor_read')   or '').strip()
+    take     = str(tp.get('takeaway')      or '').strip()
+    tops     = tp.get('top_funds')    or []
+    bots     = tp.get('bottom_funds') or []
+
+    low = stance.lower()
+    if low.startswith('risk-on') or low.startswith('pro-cyclical'):
+        badge_bg, badge_fg = '#dcfce7', '#166534'
+    elif low.startswith('risk-off') or low.startswith('defensive'):
+        badge_bg, badge_fg = '#fef3c7', '#92400e'
+    else:
+        badge_bg, badge_fg = '#e5e7eb', '#374151'
+
+    def _fund_li(f: dict) -> str:
+        tkr = html_lib.escape(str(f.get('ticker', '')).upper())
+        try:
+            ret_s = f"{float(f.get('ret_1m', 0)):+.1f}% 1M"
+        except Exception:
+            ret_s = ''
+        bits = []
+        for k, lab in (('sharpe', 'Sharpe'), ('beta', 'β')):
+            v = f.get(k)
+            if v is None:
+                continue
+            try:
+                bits.append(f"{lab} {float(v):.2f}")
+            except Exception:
+                pass
+        meta = ' · '.join(bits)
+        meta_html = f'<span style="color:#6b7280;font-size:11px;"> ({html_lib.escape(meta)})</span>' if meta else ''
+        return (f'<li style="margin:1px 0;font-size:12px;">'
+                f'<strong>{tkr}</strong> '
+                f'<span style="color:#1d4ed8;font-weight:700;">{html_lib.escape(ret_s)}</span>'
+                f'{meta_html}</li>')
+
+    top_html = ''.join(_fund_li(f) for f in tops)
+    bot_html = ''.join(_fund_li(f) for f in bots)
+    cols_html = ''
+    if top_html or bot_html:
+        cols_html = (
+            '<table style="border-collapse:collapse;width:100%;margin-top:6px;"><tr>'
+            '<td style="vertical-align:top;width:50%;padding-right:6px;">'
+            '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:#16a34a;margin-bottom:2px;">Best-Positioned</div>'
+            f'<ul style="margin:0;padding-left:16px;">{top_html}</ul>'
+            '</td>'
+            '<td style="vertical-align:top;width:50%;padding-left:6px;border-left:1px solid #e5e7eb;">'
+            '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:#dc2626;margin-bottom:2px;">Lagging</div>'
+            f'<ul style="margin:0;padding-left:16px;">{bot_html}</ul>'
+            '</td></tr></table>'
+        )
+
+    factor_html = (f'<p style="margin:6px 0 0 0;font-size:11px;color:#374151;font-style:italic;">'
+                   f'{html_lib.escape(factor)}</p>') if factor else ''
+    take_html   = (f'<p style="margin:4px 0 0 0;font-size:12px;color:#111827;">'
+                   f'<strong>Takeaway:</strong> {html_lib.escape(take)}</p>') if take else ''
+
+    html_out = (
+        '<div style="margin:14px 0 0 0;padding:10px 12px;background:#f8fafc;'
+        'border:1px solid #e5e7eb;border-radius:6px;">'
+        '<p style="margin:0 0 6px 0;font-size:11px;font-weight:700;text-transform:uppercase;'
+        'letter-spacing:0.08em;color:#6b7280;">Quantitative Tactical Positioning</p>'
+        f'<div style="display:flex;align-items:center;gap:8px;">'
+        f'<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;'
+        f'font-weight:700;background:{badge_bg};color:{badge_fg};">{html_lib.escape(stance)}</span>'
+        f'<span style="font-size:11px;color:#6b7280;">{html_lib.escape(detail)}</span>'
+        f'</div>'
+        f'{cols_html}{factor_html}{take_html}'
+        '</div>'
+    )
+    text_lines = ['QUANTITATIVE TACTICAL POSITIONING', '',
+                  f'Stance: {stance}', f'  {detail}' if detail else '']
+    if tops:
+        text_lines.append('  Best-Positioned: ' + ', '.join(
+            f"{f.get('ticker','')} ({float(f.get('ret_1m',0)):+.1f}% 1M)" for f in tops))
+    if bots:
+        text_lines.append('  Lagging: ' + ', '.join(
+            f"{f.get('ticker','')} ({float(f.get('ret_1m',0)):+.1f}% 1M)" for f in bots))
+    if factor: text_lines.append(f'  Factor: {factor}')
+    if take:   text_lines.append(f'  Takeaway: {take}')
+    text_lines.append('')
+    return html_out, text_lines
+
+
 def _build_scenarios_block(c: dict) -> tuple[str, list]:
     """Build the Today's Scenarios block: Too Hot / In Line / Too Cold.
     Returns (html_string, text_lines). Returns empty if scenarios data absent.
@@ -467,8 +561,18 @@ def _build_scenarios_block(c: dict) -> tuple[str, list]:
     levels_watch = c.get('levels_to_watch') or []
     event_name   = c.get('scenario_event', '')
     consensus    = c.get('scenario_consensus', '')
+    event_day    = str(c.get('scenario_event_day', '') or '').strip().lower()
     if not scenarios or len(scenarios) < 3:
         return '', []
+
+    # Section title reflects WHEN the primary event lands — a future event must not be
+    # titled "Today's Scenarios" (e.g. Thursday's GDP rendered on a Wednesday).
+    if event_day in ('', 'today'):
+        _sec_title = "Today's Scenarios"
+    elif event_day == 'tomorrow':
+        _sec_title = "Tomorrow's Scenarios"
+    else:
+        _sec_title = f"{event_day.capitalize()}'s Scenarios"
 
     _LABEL_COLORS = {0: '#dc2626', 1: '#2563eb', 2: '#16a34a'}   # Hot=red, In-Line=blue, Cold=green
     _LABEL_BG    = {0: '#fef2f2', 1: '#eff6ff', 2: '#f0fdf4'}
@@ -563,14 +667,14 @@ def _build_scenarios_block(c: dict) -> tuple[str, list]:
         '<div style="margin:16px 0;">'
         f'<p style="margin:0 0 8px 0;font-size:11px;font-weight:700;text-transform:uppercase;'
         f'letter-spacing:0.08em;color:#6b7280;border-bottom:1px solid #e5e7eb;padding-bottom:5px;">'
-        f'Today&#39;s Scenarios</p>'
+        f'{html_lib.escape(_sec_title)}</p>'
         f'{event_header_html}'
         f'{scenario_html}'
         f'{levels_html}'
         f'</div>'
     )
 
-    all_txt = ['TODAY\'S SCENARIOS', '']
+    all_txt = [_sec_title.upper(), '']
     if header:
         all_txt += [f'Event: {header}', '']
     all_txt += txt_lines
@@ -693,6 +797,9 @@ def build_commentary_email_blocks(commentary):
     # ── Sector heatmap ──────────────────────────────────────────────────────
     sector_html, sector_text = _build_sector_heatmap(c.get('sector_performance') or [])
 
+    # ── Pillar 2: Quantitative Tactical Positioning ─────────────────────────
+    tactical_html, tactical_text = _build_tactical_block(c)
+
     # ── Pre-Market Look block ────────────────────────────────────────────────
     premarket_html, premarket_txt = _build_premarket_block(c)
 
@@ -806,6 +913,8 @@ def build_commentary_email_blocks(commentary):
         hp.append(snapshot_html)
         if sector_html:
             hp.append(sector_html)
+        if tactical_html:
+            hp.append(tactical_html)
         hp.append(
             f'<p style="margin:10px 0 0 0;font-size:12px;color:#6b7280;">'
             f'Full cross-asset data (Treasury curve, global equity, commodities, currencies &amp; crypto) '
@@ -838,6 +947,8 @@ def build_commentary_email_blocks(commentary):
         tp += ['MARKET SNAPSHOT', ''] + snap_lines + ['']
     if sector_text:
         tp += ['SECTORS: ' + '  '.join(sector_text), '']
+    if tactical_text:
+        tp += tactical_text
     tp += [f'Full cross-asset data (Treasury curve, global equity, commodities, currencies & crypto): {GITHUB_LINK}', '']
     tp += ['Full data and disclosures: see report site.', '']
 
@@ -966,6 +1077,23 @@ if __name__ == "__main__":
                 print(_msg)
                 logging.error(_msg)
                 sys.exit(1)
+
+            # --send-only skipped monitor.py, which normally regenerates the PDF. Both the
+            # served report site AND the email's PDF attachment are built from report.pdf,
+            # so without this they'd be stale relative to the fresh commentary the email
+            # body is built from (the 5/22 PDF/email mismatch). Regenerate now — the
+            # freshness gate above already guarantees commentary is today's LLM output,
+            # and generate_pdf_report only re-renders when commentary is fresh.
+            if _args.send_only:
+                logging.info(" --send-only: regenerating PDF from current commentary...")
+                print(" --send-only: regenerating PDF report...")
+                try:
+                    subprocess.run([PY, 'generate_pdf_report.py'], cwd=str(ROOT), check=True)
+                    logging.info(" PDF regenerated to match commentary.")
+                except Exception as _pdf_err:
+                    # Non-fatal: a stale attachment is less bad than skipping the daily email.
+                    logging.error(f" --send-only PDF regen failed: {_pdf_err}")
+                    print(f" [WARN] PDF regen failed ({_pdf_err}) — sending with existing PDF.")
 
             logging.info(" Preparing and sending email...")
             msg = build_email()

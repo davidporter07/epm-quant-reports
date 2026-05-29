@@ -276,6 +276,23 @@ def pct_display(val: Any) -> str:
         return "N/A"
 
 
+def _signed(val: Any, decimals: int = 2, suffix: str = "", thousands: bool = False) -> str:
+    """Format a number with an explicit +/- sign, normalizing values that round to
+    zero so a near-zero or negative-zero input never renders as '-0.00' or '+-0.00'.
+    Each field derives its own sign (callers must NOT share one sign across change/pct).
+    Returns the em-dash placeholder on non-numeric input.
+    """
+    try:
+        r = round(float(val) + 0.0, decimals)
+        if r == 0:
+            r = 0.0  # collapse negative zero
+        sign = "+" if r >= 0 else "-"
+        body = f"{abs(r):,.{decimals}f}" if thousands else f"{abs(r):.{decimals}f}"
+        return f"{sign}{body}{suffix}"
+    except (TypeError, ValueError):
+        return "—"
+
+
 # ---------------------------------------------------------------------------
 # CSS
 # ---------------------------------------------------------------------------
@@ -723,6 +740,21 @@ body {{
   line-height: 1.45;
 }}
 .outlook-table tr:nth-child(even) td {{ background: {OFF_WHITE}; }}
+/* Allow the outlook table to flow between rows but never mid-row.
+   Avoiding the table itself was too aggressive — pushed it onto its own page. */
+.outlook-table tr {{ page-break-inside: avoid; }}
+
+/* ======================= TWO-COLUMN COMMENTARY+TABLE BLOCKS ======================= */
+/* Prevent Commodities / Currencies + Fixed Income narrative-plus-table sections
+   from splitting across page boundaries — keeps the table rows attached to the
+   narrative they belong to. Falls back gracefully if the block is taller than a page. */
+.two-col {{ page-break-inside: avoid; }}
+
+/* ======================= TOPIC SPOTLIGHT (DEEP-DIVE) ======================= */
+/* Keep the Topic Spotlight (title + paragraphs + funds table) on a single page
+   when possible. Prevents the headline from being orphaned at the bottom of one
+   page with the body bleeding to the next. */
+.topic-spotlight-wrap {{ page-break-inside: avoid; }}
 
 /* ======================= PORTFOLIO SPOTLIGHT ======================= */
 .spotlight-section {{
@@ -880,11 +912,10 @@ def build_snapshot_table(snapshot: dict, title: str = "U.S. Markets", show_dolla
 
         if change is not None and pct is not None:
             try:
-                sign    = "+" if float(change) >= 0 else ""
-                chg_str = (f"{sign}{float(change):.3f}" if is_yield
-                           else f"{sign}{float(change):,.2f}")
-                pct_str = f"{sign}{float(pct):.2f}%"
-                cls     = "pos" if float(change) >= 0 else "neg"
+                _cv     = round(float(change) + 0.0, 3 if is_yield else 2)
+                chg_str = _signed(change, 3) if is_yield else _signed(change, 2, thousands=True)
+                pct_str = _signed(pct, 2, suffix="%")
+                cls     = "flat" if _cv == 0 else ("pos" if _cv > 0 else "neg")
             except Exception:
                 chg_str = pct_str = "\u2014"
                 cls = "flat"
@@ -897,19 +928,15 @@ def build_snapshot_table(snapshot: dict, title: str = "U.S. Markets", show_dolla
             if is_yield:
                 _bpw = data.get("bp_change_1w"); _bpy = data.get("bp_change_ytd")
                 if _bpw is not None:
-                    _sgn = "+" if float(_bpw) >= 0 else ""
-                    _sub.append(f"1W: {_sgn}{float(_bpw):.0f}bp")
+                    _sub.append(f"1W: {_signed(_bpw, 0, suffix='bp')}")
                 if _bpy is not None:
-                    _sgn = "+" if float(_bpy) >= 0 else ""
-                    _sub.append(f"YTD: {_sgn}{float(_bpy):.0f}bp")
+                    _sub.append(f"YTD: {_signed(_bpy, 0, suffix='bp')}")
             else:
                 _pw = data.get("pct_change_1w"); _py = data.get("pct_change_ytd")
                 if _pw is not None:
-                    _sgn = "+" if float(_pw) >= 0 else ""
-                    _sub.append(f"1W: {_sgn}{float(_pw):.1f}%")
+                    _sub.append(f"1W: {_signed(_pw, 1, suffix='%')}")
                 if _py is not None:
-                    _sgn = "+" if float(_py) >= 0 else ""
-                    _sub.append(f"YTD: {_sgn}{float(_py):.1f}%")
+                    _sub.append(f"YTD: {_signed(_py, 1, suffix='%')}")
         except Exception:
             pass
         sub_html = (
@@ -1094,8 +1121,6 @@ def build_page2_html(logo_b64: str, commentary: dict) -> str:
   <div class="two-col-r">
     <div class="sub-label">U.S. Treasury Yields</div>
     {bonds_tbl}
-    <div class="sub-label">Economics</div>
-    {para("economics_commentary")}
   </div>
 </div>
 """
@@ -1196,9 +1221,16 @@ def build_topic_spotlight_html(commentary: dict) -> str:
     if not sp or not sp.get("title") or not sp.get("body"):
         return ""
     title = esc(str(sp.get("title", "")))
+    # Split paragraphs on double-newline; fall back to runs of 2+ spaces so the deep-dive
+    # never collapses into one blob if the model used spaces instead of newlines.
+    import re as _re
+    _body = str(sp.get("body", ""))
+    _parts = _re.split(r"\n\n+", _body)
+    if len(_parts) < 2:
+        _parts = _re.split(r" {2,}", _body)
     paras = "".join(
         f'<p class="commentary-p">{esc(p.strip())}</p>'
-        for p in str(sp.get("body", "")).split("\n\n")
+        for p in _parts
         if p.strip()
     )
     funds = sp.get("funds") or []
@@ -1215,9 +1247,11 @@ def build_topic_spotlight_html(commentary: dict) -> str:
   <th>Ticker</th><th>Name</th><th>Type</th><th>Exposure</th>
 </tr></thead><tbody>{fund_rows}</tbody></table>""" if fund_rows else ""
     return f"""
+<div class="topic-spotlight-wrap">
 <div class="sec-header">Market Spotlight</div>
 <div class="sec-subheader">{title}</div>
-{paras}{fund_block}"""
+{paras}{fund_block}
+</div>"""
 
 
 def build_page3_html(logo_b64: str, commentary: dict) -> str:
@@ -1256,6 +1290,9 @@ def build_page3_html(logo_b64: str, commentary: dict) -> str:
     {fx_tbl}
   </div>
 </div>
+
+<div class="sec-header">Economics</div>
+{para("economics_commentary")}
 
 {build_synthesis_html(commentary)}
 {build_topic_spotlight_html(commentary)}
@@ -1346,8 +1383,8 @@ def build_mag7_table_html(df: pd.DataFrame) -> str:
     <tr>
       <th class="l">Ticker</th>
       <th>Consensus<br>21-Day Fcast</th>
-      <th>Confidence</th>
       <th>Model<br>Agreement</th>
+      <th>Agreement<br>Ratio</th>
       <th>Linear</th>
       <th>ML</th>
       <th>ARIMAX</th>
@@ -1360,7 +1397,7 @@ def build_mag7_table_html(df: pd.DataFrame) -> str:
   <tbody>{rows}</tbody>
 </table>
 <p class="footnote">Consensus = equally-weighted ensemble of Linear, ML (Gradient Boost), ARIMAX, Deep Learning, and Fama-French factor models.
-Confidence reflects cross-model agreement and recent RMSE. Agreement Ratio = fraction of models directionally aligned.
+Model Agreement (High/Medium/Low) reflects how strongly the models concur — directional alignment, forecast dispersion, and recent RMSE. It measures model consensus, NOT realized forecast accuracy. Agreement Ratio = fraction of models directionally aligned.
 Forecasts represent 21-trading-day forward return estimates. They are not investment recommendations.
 Past model performance does not guarantee future accuracy.</p>"""
 
@@ -1564,6 +1601,65 @@ def build_technical_perspectives_html(commentary: dict) -> str:
 </table>"""
 
 
+def build_support_resistance_html(commentary: dict) -> str:
+    """Pillar 3 — render the deterministic key support/resistance table.
+
+    Reads the `support` and `resistance` arrays populated by fetch_technical_levels.
+    All-numeric, no LLM — matches Sevens-style "key support X / resistance Y" rigor.
+    Returns empty string when the upstream compute is absent so the page just shows
+    the MA table by itself if anything went wrong.
+    """
+    tech = commentary.get("technical_levels") or {}
+    if not tech:
+        return ""
+    display_order = ["S&P 500", "Nasdaq 100", "Gold", "WTI Crude", "10-Yr Yield", "VIX"]
+    rows = ""
+    have_any = False
+    for name in display_order:
+        d = tech.get(name) or {}
+        sup = d.get("support") or []
+        res = d.get("resistance") or []
+        if not sup and not res:
+            continue
+        have_any = True
+
+        def _fmt(entry: dict) -> str:
+            try:
+                lvl = float(entry.get("level"))
+                tag = str(entry.get("tag", ""))
+                # 10-Yr Yield is a percent (e.g. 4.50); everything else gets thousands sep.
+                if name == "10-Yr Yield":
+                    return f"{lvl:.2f}% <span style='color:#6b7280;font-size:9pt;'>({esc(tag)})</span>"
+                return f"{lvl:,.2f} <span style='color:#6b7280;font-size:9pt;'>({esc(tag)})</span>"
+            except Exception:
+                return "—"
+
+        sup_cells = " · ".join(_fmt(s) for s in sup) or "—"
+        res_cells = " · ".join(_fmt(r) for r in res) or "—"
+        rows += f"""
+    <tr>
+      <td class="l">{esc(name)}</td>
+      <td class="r" style="color:#16a34a;">{sup_cells}</td>
+      <td class="r" style="color:#dc2626;">{res_cells}</td>
+    </tr>"""
+
+    if not have_any:
+        return ""
+    return f"""
+<div class="sec-header" style="margin-top:8px;">Key Support &amp; Resistance Levels</div>
+<table class="tech-table">
+  <thead>
+    <tr>
+      <th class="l">Asset</th>
+      <th class="r">Key Support (closest below)</th>
+      <th class="r">Key Resistance (closest above)</th>
+    </tr>
+  </thead>
+  <tbody>{rows}</tbody>
+</table>
+<p class="footnote" style="margin-top:2px;">Levels computed from 90-day price action: swing extrema clustered with MAs and 52-week levels, then filtered to the closest 1-2 above/below the current price. Numeric, not LLM-derived.</p>"""
+
+
 def build_market_outlook_html(commentary: dict) -> str:
     label       = str(commentary.get("market_outlook_label") or "Neutral").strip()
     rationale   = str(commentary.get("market_outlook_rationale") or "").strip()
@@ -1633,6 +1729,68 @@ def build_market_outlook_html(commentary: dict) -> str:
 </table>
 <p class="footnote">Outlook updated {TODAY_LONG}. Near-term outlook covers 4-6 weeks. Long-term outlook reflects 3-6 month fundamental view.
 This page is for informational use and does not constitute investment advice.</p>"""
+
+
+def build_tactical_positioning_html(commentary: dict) -> str:
+    """Pillar 2 — render the deterministic tactical-positioning banner.
+
+    Reads `tactical_positioning` (computed in generate_market_commentary.main from the
+    30-fund book + sector tilt + VIX). Returns empty string if absent, so the section
+    silently degrades if the upstream compute failed.
+
+    Note: In the PDF this renders as a COMPACT BANNER (stance + sector tilt + factor
+    read + takeaway) intended to sit ABOVE the Portfolio Spotlight. The fund list is
+    deliberately omitted because the Portfolio Spotlight underneath shows the same
+    top/bottom funds with full LLM commentary — duplicating the fund tickers here
+    would be redundant. The email retains the full block (with funds) because the
+    email does not include the Portfolio Spotlight.
+    """
+    tp = commentary.get("tactical_positioning") or {}
+    stance = str(tp.get("stance") or "").strip()
+    if not stance:
+        return ""
+    detail   = str(tp.get("stance_detail") or "").strip()
+    factor   = str(tp.get("factor_read")   or "").strip()
+    take     = str(tp.get("takeaway")      or "").strip()
+
+    # Colour the stance badge from its lead word.
+    low = stance.lower()
+    if low.startswith("risk-on") or low.startswith("pro-cyclical"):
+        badge_cls = "badge-bull"
+    elif low.startswith("risk-off") or low.startswith("defensive"):
+        badge_cls = "badge-caut"
+    else:
+        badge_cls = "badge-neut"
+
+    factor_html = (
+        f'<span style="font-size:9.5pt;color:#374151;font-style:italic;"> · {esc(factor)}</span>'
+        if factor else ""
+    )
+    take_html = (
+        f'<div style="margin-top:3px;font-size:10pt;color:#111827;">'
+        f'<strong>Takeaway:</strong> {esc(take)}</div>'
+        if take else ""
+    )
+    detail_html = (
+        f'<div style="font-size:9.5pt;color:#374151;margin-top:2px;">{esc(detail)}{factor_html}</div>'
+        if detail else (
+            f'<div style="font-size:9.5pt;color:#374151;font-style:italic;margin-top:2px;">{esc(factor)}</div>'
+            if factor else ""
+        )
+    )
+
+    # Compact banner — single-row layout with stance badge + sector tilt + factor read,
+    # then takeaway underneath. Total height roughly 3 lines — designed to sit cleanly
+    # above the Portfolio Spotlight header without spanning a page break.
+    return f"""
+<div class="tactical-banner" style="border-left:3px solid #1e3a8a;background:#f8fafc;padding:7px 12px;margin:8px 0 4px 0;page-break-inside:avoid;page-break-after:avoid;">
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+    <span style="font-size:8.5pt;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#6b7280;">Quant Tactical Read</span>
+    <span class="badge {badge_cls}" style="font-size:10pt;padding:2px 9px;">{esc(stance)}</span>
+  </div>
+  {detail_html}
+  {take_html}
+</div>"""
 
 
 def build_spotlight_html(commentary: dict) -> str:
@@ -1809,11 +1967,16 @@ def build_page5_html(logo_b64: str, commentary: dict, features_df: pd.DataFrame)
 <div class="sec-header first">Technical Perspectives  Key Asset Moving Averages</div>
 {build_technical_perspectives_html(commentary)}
 
+{build_support_resistance_html(commentary)}
+
 {build_market_outlook_html(commentary) if fresh else ""}
 
 <div class="rule"></div>
 
+<div class="spotlight-wrap" style="page-break-inside:avoid;">
+{build_tactical_positioning_html(commentary)}
 {build_spotlight_html(commentary) if fresh else ""}
+</div>
 
 <div class="sec-header">Portfolio Fund Metrics</div>
 {build_metrics_table_html(features_df)}

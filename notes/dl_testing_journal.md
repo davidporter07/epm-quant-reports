@@ -3089,3 +3089,834 @@ Result: PASS
 All deeper improvements (vectorize teacher lookup, assert coverage, distill_weight sweep,
 get_regime_series, label vocab reconciliation, BIC sweep) are parked until after Quant Cup ships.
 See plan file: C:\Users\david\.claude\plans\here-is-what-was-lexical-turtle.md
+
+## 2026-05-21 - Growth24 Ticker-Concentration Training Probe
+
+Objective:
+
+- Test whether moving ticker concentration control upstream into the training
+  loss improves the Growth24 rank-head candidate more safely than post-prediction
+  cooldown selection rules.
+
+Completed smoke/probe:
+
+```text
+Base setup: Growth24 RSI/MA/volume/AV earnings champion feature stack
+Panel: data/experiment/dl_research_panels/research_growth_24_price_earnings_av_panel.parquet
+Target mode: date_excess
+Seeds: 20260506
+Device: CPU
+Ticker concentration temperature: 0.05
+```
+
+Results:
+
+```text
+1-cycle smoke, ticker_concentration_weight=0.02:
+  Status: scored
+  Mean long-short return: +44.00%
+  Spread hit rate: 100.00%
+
+3-cycle probe, ticker_concentration_weight=0.02:
+  Status: scored
+  Mean long-short return: +24.05%
+  Spread hit rate: 66.67%
+
+3-cycle matched control, ticker_concentration_weight=0.00:
+  Status: scored
+  Mean long-short return: +24.05%
+  Spread hit rate: 66.67%
+```
+
+Selection comparison:
+
+```text
+Both 3-cycle ledgers selected the same top1/bottom1 trades:
+2026-01-15: long MU, short MSFT
+2026-02-17: long INTC, short GOOG
+2026-03-18: long INTC, short AAPL
+```
+
+Interpretation:
+
+- The concentration-aware loss path runs successfully, but the quick probe did
+  not change selections versus the no-concentration control.
+- Do not advance ticker-concentration training loss to a full 12-cycle or
+  36-cycle overnight replay yet. It is a weak candidate unless a stronger
+  weight or different objective shows a measurable selection change in a cheap
+  probe.
+- The next upstream improvement should focus on model signal quality or stress
+  robustness directly, not ticker concentration control.
+
+## 2026-05-21 - Growth24 Stress-Weighted Training Probe
+
+Objective:
+
+- Move stress robustness upstream into training instead of trying to repair
+  selections after prediction.
+- Add a research-only `--stress-loss-weight` knob to the rank-head training
+  path. Defaults remain unchanged at `1.0`.
+
+Implementation:
+
+```text
+Files:
+dl_rank_head_experiment.py
+dl_rank_head_historical_blind_loop.py
+
+New controls:
+--stress-loss-weight
+--stress-feature-column
+--stress-feature-min
+--stress-drawdown-threshold
+```
+
+Smoke/probe results:
+
+```text
+1-cycle smoke, stress_loss_weight=2.0, broad stress mask:
+  Status: scored
+  Stress-weighted training dates: 2714
+  Mean long-short return: +41.31%
+  Spread hit rate: 100.00%
+
+3-cycle probe, stress_loss_weight=2.0, broad stress mask:
+  Status: scored
+  Stress-weighted training dates: ~2703-2714
+  Mean long-short return: +17.93%
+  Spread hit rate: 66.67%
+
+3-cycle probe, stress_loss_weight=2.0, drawdown-only <= -20%:
+  Status: scored
+  Stress-weighted training dates: 859
+  Mean long-short return: +21.42%
+  Spread hit rate: 100.00%
+
+Matched 3-cycle no-stress-weight control:
+  Mean long-short return: +24.05%
+  Spread hit rate: 66.67%
+```
+
+Rate-bear 2022 cheap stress bracket:
+
+```text
+Config: stress_loss_weight=2.0, drawdown-only <= -20%, cycles=3, epochs=1, seed=20260506
+
+top1_bottom1:
+  mean spread: -10.07%
+  hit: 33.33%
+  max drawdown: -37.13%
+
+top2_bottom2:
+  mean spread: -3.70%
+  hit: 33.33%
+  max drawdown: -17.07%
+
+top3_bottom3:
+  mean spread: +2.23%
+  hit: 66.67%
+  max drawdown: -2.47%
+```
+
+Interpretation:
+
+- Broad `Market_Stress_Regime` weighting is too broad; it covers roughly half
+  the panel and weakens the cheap probe.
+- Drawdown-only stress weighting is a more plausible branch: it improves hit
+  consistency, but gives up some upside in the latest 3-cycle window.
+- In rate-bear 2022, the stress-weighted model still fails top1/top2 but turns
+  top3 positive with low drawdown. The next test should be a Final Four stress
+  sweep using drawdown-only `--stress-loss-weight 2.0` and scoring top1/top2/top3
+  before any 12-cycle or 36-cycle overnight replay.
+
+## 2026-05-21 - Growth24 Stress-Weighted Final Four Sweep
+
+Objective:
+
+- Test the drawdown-only stress-weighted training branch across the four named
+  stress gates before deciding whether it deserves a longer replay.
+
+Configuration:
+
+```text
+Panel: data/experiment/dl_research_panels/research_growth_24_price_earnings_av_panel.parquet
+Feature stack: Growth24 RSI/MA/volume/AV earnings champion features
+Cycles per regime: 3
+Epochs: 1
+Seed: 20260506
+Stress config: --stress-loss-weight 2.0 --stress-feature-min 2.0 --stress-drawdown-threshold -0.20
+Output dir: data/experiment/final4_growth24_earnings_stress_weight_probe
+Gate report: notes/final4_growth24_earnings_stress_weight_regime_gate.md
+```
+
+Gate result:
+
+```text
+Status: fail
+
+top1_bottom1:
+  stress_spread: +8.10%
+  worst_dd: -37.13%
+  failures: q4_2018_drawdown, rate_bear_2022
+
+top2_bottom2:
+  stress_spread: +6.42%
+  worst_dd: -17.07%
+  failures: rate_bear_2022 only
+
+top3_bottom3:
+  stress_spread: +5.12%
+  worst_dd: -9.76%
+  failures: gfc_2008, q4_2018_drawdown
+```
+
+Per-regime result:
+
+```text
+current_2026:
+  top1 +40.20%, top2 +25.63%, top3 +21.57%, all 100% hit
+
+gfc_2008:
+  top1 +10.27%, top2 +2.78%, top3 -0.26%
+
+q4_2018_drawdown:
+  top1 -8.00%, top2 +0.99%, top3 -3.07%
+
+rate_bear_2022:
+  top1 -10.07%, top2 -3.70%, top3 +2.23%
+```
+
+Interpretation:
+
+- This is a partial improvement, not a promotion candidate.
+- Compared with the original stress gate, the stress-weighted branch improves
+  average stress spread and drawdown, especially for top2/top3, but no single
+  fixed basket passes all four stress regimes.
+- The useful signal is that stress weighting changes the failure surface:
+  q4_2018 improves at top2, rate_bear_2022 improves at top3, and current_2026
+  improves strongly across all baskets.
+- Do not run a 36-cycle replay yet. The next test should either:
+  1. run a 12-cycle stress-weighted drawdown-only replay to see if the top2
+     improvement survives outside the four stress windows, or
+  2. test a non-oracle, predeclared stress basket policy that uses broader top3
+     exposure only during severe drawdown regimes.
+
+## 2026-05-21 - Growth24 12-Cycle Stress-Weighted Qualifier
+
+Objective:
+
+- Test whether the drawdown-only stress-weighted branch survives a broader
+  12-cycle blind replay before spending overnight time on a full seed/epoch run.
+
+Configuration:
+
+```text
+Panel: data/experiment/dl_research_panels/research_growth_24_price_earnings_av_panel.parquet
+Feature stack: Growth24 RSI/MA/volume/AV earnings champion features
+Cycles: 12
+Epochs: 1
+Seed: 20260506
+Target mode: date_excess
+Stress config: --stress-loss-weight 2.0 --stress-feature-min 2.0 --stress-drawdown-threshold -0.20
+Artifact stem: growth24_12c_1e_feature_probe_stress_drawdown20_w2
+```
+
+Basket diagnostics:
+
+```text
+top1_bottom1:
+  long: +10.92%
+  long_excess: +6.59%
+  spread: +9.21%
+  spread hit: 75.00%
+  max DD: -10.80%
+
+top2_bottom2:
+  long: +10.85%
+  long_excess: +6.52%
+  spread: +11.73%
+  spread hit: 66.67%
+  max DD: -2.91%
+
+top3_bottom3:
+  long: +10.45%
+  long_excess: +6.12%
+  spread: +10.32%
+  spread hit: 91.67%
+  max DD: -4.73%
+```
+
+Gate checks:
+
+```text
+Long-only gate at -35% drawdown:
+  Status: pass
+  Passing configs: 7290 / 7290
+  Best: top1, long=+13.27%, excess=+11.89%, excess hit=83.33%, coverage=50.00%
+
+Narrow cap-aware top2/cap50 gate:
+  Status: pass
+  Mean long: +10.72%
+  Mean excess: +6.38%
+  Excess hit: 66.67%
+  Coverage: 100.00%
+  Max slot share: 33.33%
+  Long DD: -8.03%
+```
+
+Artifacts:
+
+```text
+data/experiment/historical_blind_rank_head/growth24_12c_1e_feature_probe_stress_drawdown20_w2_shadow_log.parquet
+data/experiment/historical_blind_rank_head/growth24_12c_1e_feature_probe_stress_drawdown20_w2_summary.json
+notes/dl_shadow_diagnostic_growth24_12c_1e_feature_probe_stress_drawdown20_w2.md
+notes/dl_long_only_gate_growth24_12c_1e_feature_probe_stress_drawdown20_w2.md
+notes/dl_cap_aware_replay_growth24_12c_1e_feature_probe_stress_drawdown20_w2_top2_cap50.md
+```
+
+Interpretation:
+
+- This branch earns a heavier replay. It is only 1 epoch / 1 seed, so it is not
+  directly comparable to the existing 8-epoch / 2-seed champion, but the 12-cycle
+  signal is strong enough to advance.
+- The best next run is a 12-cycle seed/epoch replay with the same stress config,
+  preferably 8 epochs and 2 seeds if overnight time is available.
+- Promotion is still blocked until the heavier replay and stress gate both pass.
+
+## 2026-05-22 - Growth24 12-Cycle Stress-Weighted Seed-Robust Replay
+
+Objective:
+
+- Run the heavier qualifier for the drawdown-only stress-weighted branch using
+  the champion-style 8 epochs and 2 seeds.
+
+Configuration:
+
+```text
+Panel: data/experiment/dl_research_panels/research_growth_24_price_earnings_av_panel.parquet
+Feature stack: Growth24 RSI/MA/volume/AV earnings champion features
+Cycles: 12
+Epochs: 8
+Seeds: 20260506,20260507
+Target mode: date_excess
+Stress config: --stress-loss-weight 2.0 --stress-feature-min 2.0 --stress-drawdown-threshold -0.20
+Artifact stem: growth24_12c_8e_feature_probe_stress_drawdown20_w2_seedrobust_2seed
+```
+
+Run note:
+
+```text
+The first run hit the 6-hour tool timeout after saving cycle result JSONs
+through c007_20251015. The remaining c008-c012 window was run separately and
+the full 12-cycle shadow log was reconstructed from saved result JSONs plus the
+resume shadow log.
+```
+
+Basket diagnostics:
+
+```text
+top1_bottom1:
+  long: +15.83%
+  long_excess: +11.50%
+  spread: +14.62%
+  spread hit: 91.67%
+  max DD: -31.70%
+
+top2_bottom2:
+  long: +11.38%
+  long_excess: +7.05%
+  spread: +9.94%
+  spread hit: 83.33%
+  max DD: -15.57%
+
+top3_bottom3:
+  long: +9.74%
+  long_excess: +5.41%
+  spread: +6.80%
+  spread hit: 66.67%
+  max DD: -12.96%
+```
+
+Gate checks:
+
+```text
+Long-only gate at -35% drawdown:
+  Status: pass
+  Passing configs: 6210 / 7290
+  Best: top1, long=+17.53%, excess=+14.72%, excess hit=80.00%, coverage=41.67%
+
+Narrow cap-aware top2/cap50 gate:
+  Status: pass
+  Mean long: +13.61%
+  Mean excess: +8.44%
+  Excess hit: 80.00%
+  Coverage: 83.33%
+  Max slot share: 35.00%
+```
+
+Artifacts:
+
+```text
+data/experiment/historical_blind_rank_head/growth24_12c_8e_feature_probe_stress_drawdown20_w2_seedrobust_2seed_shadow_log.parquet
+data/experiment/historical_blind_rank_head/growth24_12c_8e_feature_probe_stress_drawdown20_w2_seedrobust_2seed_summary.json
+notes/dl_shadow_diagnostic_growth24_12c_8e_feature_probe_stress_drawdown20_w2_seedrobust_2seed.md
+notes/dl_long_only_gate_growth24_12c_8e_feature_probe_stress_drawdown20_w2_seedrobust_2seed_dd35.md
+notes/dl_cap_aware_replay_growth24_12c_8e_feature_probe_stress_drawdown20_w2_seedrobust_2seed_top2_cap50.md
+```
+
+Interpretation:
+
+- The stress-weighted branch passes the heavier 12-cycle qualifier.
+- It does not clearly beat the prior 12-cycle champion on top1 spread, but it
+  materially improves the top2 basket and top2/cap50 profile.
+- This branch now deserves a 36-cycle replay only if the objective is a more
+  diversified/stress-aware paper policy. It is not yet a production candidate
+  because the full 36-cycle and Final Four stress gate still need to pass.
+
+## 2026-05-27 - Growth24 36-Cycle Stress-Weighted Seed-Robust Replay
+
+Objective:
+
+- Run the full 36-cycle replay for the drawdown-only stress-weighted Growth24
+  branch after the 12-cycle seed-robust qualifier passed.
+
+Configuration:
+
+```text
+Panel: data/experiment/dl_research_panels/research_growth_24_price_earnings_av_panel.parquet
+Feature stack: Growth24 RSI/MA/volume/AV earnings champion features
+Cycles: 36
+Epochs: 8
+Seeds: 20260506,20260507
+Target mode: date_excess
+Stress config: --stress-loss-weight 2.0 --stress-feature-min 2.0 --stress-drawdown-threshold -0.20
+Artifact stem: growth24_36c_8e_feature_probe_stress_drawdown20_w2_seedrobust_2seed
+```
+
+Basket diagnostics:
+
+```text
+top1_bottom1:
+  long: +12.55%
+  long_excess: +9.32%
+  spread: +10.77%
+  spread hit: 72.22%
+
+top2_bottom2:
+  long: +9.37%
+  long_excess: +6.14%
+  spread: +8.26%
+  spread hit: 75.00%
+
+top3_bottom3:
+  long: +7.54%
+  long_excess: +4.30%
+  spread: +5.69%
+  spread hit: 66.67%
+```
+
+Gate checks:
+
+```text
+Long-only gate at -35% drawdown:
+  Status: pass
+  Passing configs: 7155 / 7290
+  Best: top1, long=+15.67%, excess=+11.62%, excess hit=64.00%, coverage=69.44%
+
+Narrow cap-aware top2/cap50 gate:
+  Status: pass
+  Mean long: +9.57%
+  Mean excess: +6.26%
+  Excess hit: 70.97%
+  Coverage: 86.11%
+  Max slot share: 41.94%
+```
+
+Artifacts:
+
+```text
+data/experiment/historical_blind_rank_head/growth24_36c_8e_feature_probe_stress_drawdown20_w2_seedrobust_2seed_shadow_log.parquet
+data/experiment/historical_blind_rank_head/growth24_36c_8e_feature_probe_stress_drawdown20_w2_seedrobust_2seed_summary.json
+notes/dl_shadow_diagnostic_growth24_36c_8e_feature_probe_stress_drawdown20_w2_seedrobust_2seed.md
+notes/dl_long_only_gate_growth24_36c_8e_feature_probe_stress_drawdown20_w2_seedrobust_2seed_dd35.md
+notes/dl_cap_aware_replay_growth24_36c_8e_feature_probe_stress_drawdown20_w2_seedrobust_2seed_top2_cap50.md
+```
+
+Interpretation:
+
+- The stress-weighted branch passes the full 36-cycle replay and both broad
+  paper-policy gates.
+- The strongest deployable research policy from this branch is the diversified
+  top2/cap50 lane, not top1 concentration.
+- Promotion remains gated by Final Four stress-regime validation and shadow
+  paper policy refresh.
+
+## 2026-05-27 - Growth24 Stress-Weighted Final Four and Paper Policy Promotion
+
+Objective:
+
+- Validate the 36-cycle stress-weighted branch against the focused Final Four
+  stress windows using the same 8-epoch / 2-seed training strength, then update
+  the Growth24 shadow-paper lane if the gate supports it.
+
+Final Four configuration:
+
+```text
+Panel: data/experiment/dl_research_panels/research_growth_24_price_earnings_av_panel.parquet
+Feature stack: Growth24 RSI/MA/volume/AV earnings champion features
+Epochs: 8
+Seeds: 20260506,20260507
+Stress config: --stress-loss-weight 2.0 --stress-feature-min 2.0 --stress-drawdown-threshold -0.20
+Output dir: data/experiment/final4_growth24_earnings_stress_weight_8e2seed_probe
+```
+
+Final Four gate result:
+
+```text
+Status: pass
+
+top1_bottom1:
+  status: fail
+  stress spread: +13.94%
+  worst stress DD: -26.59%
+
+top2_bottom2:
+  status: pass
+  stress spread: +9.90%
+  worst stress DD: -4.54%
+
+top3_bottom3:
+  status: fail
+  stress spread: +6.24%
+  worst stress DD: -8.07%
+```
+
+Comparison against the prior Growth24 champion:
+
+- Prior champion is still stronger on broad 36-cycle top1 spread, but it failed
+  the Final Four stress gate.
+- The stress-weighted branch is the better shadow-paper policy because its
+  top2 basket passed both the broad 36-cycle cap-aware gate and the focused
+  Final Four stress gate.
+- Use top2/cap50 for paper tracking. Do not promote top1 or top3 from this
+  branch.
+
+Shadow-paper policy update:
+
+```text
+Model label: Growth24RankHeadShadowTop2StressW2
+Validated artifact: growth24_36c_8e_feature_probe_stress_drawdown20_w2_seedrobust_2seed
+Default panel: data/experiment/dl_research_panels/research_growth_24_price_earnings_av_panel.parquet
+Default paper top N: 2
+Default max ticker share: 50%
+Default seeds: 20260506,20260507
+Default stress weight: 2.0
+```
+
+Current paper run:
+
+```text
+AsOfDate: 2026-05-14
+Train labels through: 2026-04-15
+Status: selected
+Selected long tickers: INTC,MU
+Outcome refresh: 2 matured trades, 7 pending trades
+```
+
+Artifacts:
+
+```text
+scripts/run_final4_growth24_stress_weight_8e2seed.ps1
+data/experiment/final4_growth24_earnings_stress_weight_8e2seed_probe/regime_gate.json
+notes/final4_growth24_earnings_stress_weight_8e2seed_regime_gate.md
+data/experiment/growth24_shadow_paper/growth24_current_shadow_summary.json
+data/experiment/growth24_shadow_paper/growth24_current_paper_plan.csv
+data/experiment/growth24_shadow_paper/growth24_paper_outcome_summary.json
+```
+
+## 2026-05-28 - Growth24 Maturity Automation and Full-Coverage Shadow Refresh
+
+Objective:
+
+- Add a local reminder/automation path for scoring the Growth24 shadow-paper
+  ledger when the next paper cycles mature, especially the `2026-05-14`
+  stress-weighted top2 plan due around `2026-06-15`.
+- Refresh stale Growth24 AV earnings cache entries and rerun the current
+  stress-weighted shadow forecast only after confirming the panel can emit a
+  full 24-name decision universe.
+
+Automation added:
+
+```text
+Checker: dl_growth24_paper_maturity_check.py
+Wrapper: scripts/run_growth24_paper_maturity_check.cmd
+Scheduled task: \FundMonitorGrowth24PaperScore
+Next run: 2026-06-15 18:30 local time
+Cadence: daily
+Wrapper action: refresh Growth24 AV earnings, refresh Growth24 prices, rebuild
+AV earnings panel, score paper outcomes, write maturity status/alert files.
+```
+
+Coverage diagnosis:
+
+```text
+Initial refreshed run:
+AsOfDate: 2026-05-27
+UniverseCount: 19 / 24
+Missing tickers: AVGO, CSCO, GOOG, NOW, SNPS
+Cause: stale/missing AV earnings feature values at the decision date.
+
+After targeted AV earnings refresh:
+Panel max date: 2026-05-28
+Labeled through: 2026-04-28
+Decision rows: 24
+Feature-gap tickers: 0
+```
+
+Full shadow-paper rerun:
+
+```text
+Command: python dl_growth24_shadow_paper.py --device cpu
+AsOfDate: 2026-05-28
+Train labels through: 2026-04-28
+Status: selected
+UniverseCount: 24
+Selected paper longs: INTC,MU
+Top ranks: INTC, MU, LRCX, NOW, NFLX, AMD, PLTR, ORCL
+Outcome refresh: 2 matured trades, 11 pending trades
+Next maturity alert date: 2026-06-11
+Specific watched plan: 2026-05-14 INTC,MU due 2026-06-15
+```
+
+Interpretation:
+
+- The 19-name run was a data freshness/aliasing problem, not a model capacity
+  problem. The scheduled checker now refreshes the same aliased earnings ticker
+  set used by panel construction, including `GOOG -> GOOGL`.
+- The latest valid full-universe Growth24 shadow forecast remains concentrated
+  in `INTC,MU`; this should stay in the paper lane until the June maturity
+  checks confirm whether the live edge is real out of sample.
+- No production DL promotion is justified from this refresh alone. The next
+  model-improvement work should target robustness, uncertainty gating, and
+  regime-aware breadth rather than chasing a single higher point forecast.
+
+Research-informed next experiment ladder:
+
+```text
+1. Data integrity / universe breadth
+   - Keep Growth24 earnings aliases fresh before every panel rebuild.
+   - Add a panel diagnostic gate that fails a shadow run if the decision-date
+     universe is below 24 or if any champion feature is NaN.
+
+2. Cross-sectional objective upgrade
+   - Current rank-head work is directionally right: trade selection is a
+     cross-sectional ranking problem, not just a return point-forecast problem.
+   - Next architecture should preserve date-grouped batches and optimize top-k
+     excess spread, daily IC, turnover, and drawdown directly.
+
+3. Sequence encoder upgrade
+   - Test a PatchTST-style patched encoder for longer lookback windows and
+     masked pretraining on the Growth24 panel before supervised fine-tuning.
+   - Test a TFT-style gated model for static ticker attributes, known calendar
+     covariates, historical market/earnings inputs, and feature attribution.
+
+4. Foundation-model sidecar, not blind replacement
+   - Evaluate TimesFM/Chronos-style pretrained time-series embeddings as
+     additional features or ensemble members. Treat them as weak learners until
+     walk-forward evidence beats the current rank-head baseline.
+
+5. Institutional-grade ensemble
+   - Add tree/tabular baselines and stack them with the DL rank-head output.
+   - Gu/Kelly/Xiu-style asset-pricing evidence supports nonlinear interactions,
+     but the benchmark must include momentum, liquidity, volatility, and
+     regularized non-DL models so the DL is proving incremental edge.
+
+6. Risk and uncertainty gates
+   - Add conformal/quantile uncertainty and abstention gates so the model can
+     choose "no trade" when rank dispersion is weak or uncertainty is high.
+   - Promotion requires out-of-sample paper plans through at least the June
+     maturity cycle plus stress/regime validation; no single refreshed forecast
+     is enough.
+```
+
+Research references reviewed:
+
+```text
+PatchTST / patched time-series transformer:
+https://arxiv.org/abs/2211.14730
+
+Temporal Fusion Transformer:
+https://arxiv.org/abs/1912.09363
+
+TimesFM foundation model:
+https://research.google/blog/a-decoder-only-foundation-model-for-time-series-forecasting/
+
+Chronos foundation model:
+https://arxiv.org/abs/2403.07815
+
+Empirical Asset Pricing via Machine Learning:
+https://academic.oup.com/rfs/article/33/5/2223/5758276
+
+DeepLOB / market microstructure DL:
+https://arxiv.org/abs/1808.03668
+```
+
+## 2026-05-28 Growth24 Research Ladder Runner And First CUDA Pass
+
+Implementation:
+
+- Added `scripts/run_growth24_research_ladder.ps1` and `.cmd` wrapper to make
+  the next Growth24 ladder reproducible.
+- Ladder stages:
+  - PatchTST/TFT encoder probe.
+  - Foundation sidecar feature build plus augmented panel output.
+  - Current-date two-seed Growth24 shadow runs across spread-loss weights.
+  - Ensemble gate requiring the requested top-N member count.
+  - Optional historical blind loop across the same spread-loss weights.
+
+Current-date two-member ensemble, 8 epochs, seeds `20260506,20260507`,
+`--device cuda --amp`, AsOf `2026-05-28`:
+
+```text
+spread=0.0
+status: trade_allowed
+top2: INTC,NFLX
+score_gap: 0.214535
+forecast_gap_pct: -0.595901
+rank_score_std_top: 0.043658
+raw_forecast_std_top: 2.419933
+validation_score: 1.003957
+validation_daily_ic: 0.310408
+validation_spread: 0.236656
+
+spread=0.1
+status: trade_allowed
+top2: INTC,NFLX
+score_gap: 0.222797
+forecast_gap_pct: -0.436938
+rank_score_std_top: 0.032381
+raw_forecast_std_top: 3.098771
+validation_score: 0.971936
+validation_daily_ic: 0.287407
+validation_spread: 0.234671
+```
+
+Bounded historical blind check, 3 cycles, 3 epochs, two-member ensemble,
+top2/bottom2 paper scoring:
+
+```text
+spread=0.0
+cycles: 2026-02-17, 2026-03-18, 2026-04-17
+mean_long_short_return: 0.257923
+spread_hit_rate: 1.000000
+max_drawdown: 0.000000
+
+spread=0.1
+cycles: 2026-02-17, 2026-03-18, 2026-04-17
+mean_long_short_return: 0.280502
+spread_hit_rate: 1.000000
+max_drawdown: 0.000000
+```
+
+Interpretation:
+
+- The two-member ensemble materially changed the current live top-2 from the
+  single-member result (`INTC,MU`) to `INTC,NFLX`; single-member runs are not
+  enough for uncertainty gating.
+- Spread loss `0.1` is directionally promising on this bounded check: slightly
+  better current score gap, lower rank dispersion, and better 3-cycle blind
+  long-short return. It also has lower validation score/daily IC and higher raw
+  forecast dispersion, so it is not yet a promotion candidate.
+- Next decision point: run the two-member ladder over the larger 12-cycle and
+  36-cycle historical windows before changing the standing paper-trade policy.
+
+## 2026-05-28 Growth24 12-Cycle And 36-Cycle Expansion
+
+Command family:
+
+```text
+scripts/run_growth24_research_ladder.ps1
+  -Device cuda -Amp
+  -Seeds "20260506,20260507"
+  -HistoricalTopN 2
+  -SkipCurrent
+```
+
+12-cycle expansion, 3 epochs, two-member ensemble, top2/bottom2 paper scoring:
+
+```text
+spread=0.0
+asof_start: 2025-05-15
+asof_end: 2026-04-17
+mean_long_short_return: 0.140543
+spread_hit_rate: 0.750000
+max_drawdown: -0.054234
+naive_sharpe: 11.686149
+
+spread=0.1
+asof_start: 2025-05-15
+asof_end: 2026-04-17
+mean_long_short_return: 0.121694
+spread_hit_rate: 0.750000
+max_drawdown: -0.079167
+naive_sharpe: 10.806412
+```
+
+36-cycle expansion, 3 epochs, two-member ensemble, top2/bottom2 paper scoring:
+
+```text
+spread=0.0
+asof_start: 2023-05-11
+asof_end: 2026-04-17
+mean_long_return: 0.097617
+mean_short_return: 0.007533
+mean_long_short_return: 0.090084
+spread_hit_rate: 0.694444
+long_hit_rate: 0.694444
+short_hit_rate: 0.472222
+max_drawdown: -0.146769
+naive_sharpe: 10.240115
+```
+
+36-cycle weakest cycles:
+
+```text
+2024-04-12: -0.048933
+2025-06-16: -0.044306
+2023-11-09: -0.042955
+2024-11-11: -0.038959
+2023-09-12: -0.035470
+2024-03-13: -0.032545
+2025-10-15: -0.024828
+2025-02-13: -0.024532
+```
+
+36-cycle strongest cycles:
+
+```text
+2026-04-17: 0.382150
+2024-10-11: 0.283658
+2025-12-15: 0.254175
+2025-09-16: 0.213015
+2025-08-15: 0.199679
+2026-01-15: 0.159649
+2025-01-14: 0.131421
+2024-06-12: 0.117169
+```
+
+Interpretation:
+
+- The 12-cycle expansion rejects spread-loss `0.1` as a near-term promotion
+  candidate. It underperformed baseline on mean spread, drawdown, and naive
+  Sharpe despite matching hit rate.
+- The 36-cycle baseline remains positive but loses the "insane accuracy" shape
+  seen in the short 2026-only window. The edge is real enough to keep testing,
+  but not stable enough to promote into production or alter live paper policy.
+- The recurring long book is highly concentrated in high-beta/AI-semiconductor
+  names (`PLTR`, `NVDA`, `INTC`, `MU`, `AMD`, `TSLA`), and the short book is
+  often mega-cap quality (`MSFT`, `AAPL`, `META`, `ADBE`, `SNPS`). The next
+  model work should test concentration/turnover/risk penalties and regime
+  abstention before adding more objective weight.
+- Next decision point: run a 36-cycle, 8-epoch baseline two-member ensemble
+  only if compute time is acceptable, then compare against the existing
+  validated 36-cycle/8-epoch single-member policy before changing paper rules.

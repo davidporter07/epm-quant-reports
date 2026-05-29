@@ -312,8 +312,16 @@ if _dl_metrics_before is not None and os.path.exists(_dl_ckpt) and os.path.exist
         else:
             print(" DL guard accepted candidate checkpoint.")
 
-# Commit updated model checkpoint to git so there is a versioned record
-# of how the model evolves over time.
+# Keep a local, versioned record of how the model evolves over time.
+#
+# NOTE: This used to `git add/commit/stash/pull --rebase/push origin main`
+# inside the live daily pipeline. That coupled report generation to VCS state
+# and could (a) leave the working tree half-rebased on a conflict, (b) silently
+# drop work on a failed `stash pop`, and (c) bloat history with multi-MB model
+# binaries. Model versioning must NOT mutate git during the scheduled run.
+# Instead we snapshot the active checkpoint into models/history/<date>/ locally.
+# To version models in git, run scripts/version_models.py manually on a clean
+# checkout (see PR 0 notes).
 _model_files = [
     "models/dl_tcn.pt",
     "models/dl_scaler.json",
@@ -321,35 +329,22 @@ _model_files = [
 ]
 _here = os.path.dirname(os.path.abspath(__file__))
 try:
-    subprocess.run(["git", "add"] + _model_files, cwd=_here, check=True)
-    _commit_msg = f"Update DL model checkpoint: {datetime.now().strftime('%Y-%m-%d')}"
-    result = subprocess.run(
-        ["git", "commit", "-m", _commit_msg],
-        cwd=_here, capture_output=True, text=True
-    )
-    if result.returncode == 0:
-        # Stash only tracked-file changes so pull --rebase can run cleanly.
-        # Avoid --include-untracked: on Windows, Python's logging holds email_log.txt
-        # open, and git's unlink attempt on untracked files triggers an interactive prompt.
-        _stash_result = subprocess.run(
-            ["git", "stash", "-m", "pipeline-auto-stash"],
-            cwd=_here, capture_output=True, text=True
-        )
-        _stashed = (_stash_result.returncode == 0
-                    and "No local changes to save" not in _stash_result.stdout)
-        try:
-            subprocess.run(["git", "pull", "--rebase", "origin", "main"], cwd=_here, check=True)
-            subprocess.run(["git", "push", "origin", "main"], cwd=_here, check=True)
-            print(" DL model checkpoint committed and pushed to git")
-        finally:
-            if _stashed:
-                subprocess.run(["git", "stash", "pop"], cwd=_here)
-    elif "nothing to commit" in result.stdout.lower() or "nothing to commit" in result.stderr.lower():
-        print(" DL model checkpoint unchanged  no git commit needed")
+    import shutil as _shutil_hist
+    _hist_dir = os.path.join(_here, "models", "history", datetime.now().strftime("%Y-%m-%d"))
+    os.makedirs(_hist_dir, exist_ok=True)
+    _snapped = 0
+    for _mf in _model_files:
+        _src = os.path.join(_here, _mf)
+        if os.path.exists(_src):
+            _shutil_hist.copy2(_src, os.path.join(_hist_dir, os.path.basename(_mf)))
+            _snapped += 1
+    if _snapped:
+        print(f" DL model checkpoint snapshotted to {os.path.relpath(_hist_dir, _here)} ({_snapped} files)")
     else:
-        print(f" git commit failed: {result.stderr.strip()}")
-except subprocess.CalledProcessError as e:
-    print(f" Could not version DL model in git: {e}")
+        print(" DL model checkpoint snapshot skipped (no model files present)")
+except Exception as e:
+    # Non-fatal: a missed local snapshot must never block the daily report.
+    print(f" Could not snapshot DL model locally (non-fatal): {e}")
 
 # Wait for background YCharts scrape to finish before features.py needs its CSV.
 # By now build_training_dataset + DL training have been running concurrently,

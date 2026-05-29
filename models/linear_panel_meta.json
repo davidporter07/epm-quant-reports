@@ -1,5 +1,5 @@
 {
-  "trained_through": "2026-05-21",
+  "trained_through": "2026-05-28",
   "features": [
     "ret_5d",
     "ret_21d",
@@ -25,8 +25,8 @@
     "composite_score",
     "quant_score"
   ],
-  "rmse": 0.03220754891493548,
-  "trained_at": "2026-05-21T09:03:08",
+  "rmse": 0.03421645649497309,
+  "trained_at": "2026-05-28T09:00:41",
   "observations": 10395,
-  "backtest_rows": 349
+  "backtest_rows": 350
 }
