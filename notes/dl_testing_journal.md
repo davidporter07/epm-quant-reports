@@ -3921,6 +3921,97 @@ Interpretation:
   only if compute time is acceptable, then compare against the existing
   validated 36-cycle/8-epoch single-member policy before changing paper rules.
 
+## 2026-05-29 Growth24 36-Cycle 8-Epoch Two-Member Baseline
+
+Command:
+
+```text
+scripts/run_growth24_research_ladder.ps1
+  -Device cuda -Amp
+  -Seeds "20260506,20260507"
+  -SpreadWeights "0.0"
+  -HistoricalCycles 36
+  -HistoricalEpochs 8
+  -HistoricalTopN 2
+  -SkipCurrent
+```
+
+New 36-cycle, 8-epoch, two-member ensemble baseline:
+
+```text
+asof_start: 2023-05-11
+asof_end: 2026-04-17
+mean_long_return: 0.094231
+mean_short_return: 0.013312
+mean_long_short_return: 0.080919
+median_long_short_return: 0.025446
+std_long_short_return: 0.160462
+spread_hit_rate: 0.611111
+long_hit_rate: 0.666667
+short_hit_rate: 0.472222
+max_drawdown: -0.155361
+naive_sharpe: 8.005337
+```
+
+Prior validated 36-cycle, 8-epoch, single-member policy:
+
+```text
+asof_start: 2023-04-12
+asof_end: 2026-03-18
+mean_long_return: 0.093732
+mean_short_return: 0.011143
+mean_long_short_return: 0.082589
+median_long_short_return: 0.054513
+std_long_short_return: 0.145669
+spread_hit_rate: 0.750000
+long_hit_rate: 0.694444
+short_hit_rate: 0.500000
+max_drawdown: -0.198607
+naive_sharpe: 9.000265
+```
+
+New 8-epoch two-member weakest cycles:
+
+```text
+2023-11-09: -0.099978
+2024-11-11: -0.079466
+2025-05-15: -0.071168
+2024-12-11: -0.046539
+2025-11-13: -0.035981
+2024-03-13: -0.032865
+2024-07-15: -0.025654
+2025-10-15: -0.024828
+2025-02-13: -0.024532
+2023-07-13: -0.018513
+```
+
+New 8-epoch two-member strongest cycles:
+
+```text
+2026-04-17: 0.403958
+2024-10-11: 0.265303
+2025-12-15: 0.254175
+2025-09-16: 0.213015
+2025-08-15: 0.199679
+2023-05-11: 0.197797
+2024-05-13: 0.184513
+2026-01-15: 0.159649
+2024-06-12: 0.135679
+2025-01-14: 0.131421
+```
+
+Interpretation:
+
+- The 36-cycle/8-epoch two-member ensemble does not beat the prior validated
+  36-cycle/8-epoch single-member policy. Mean spread is slightly lower
+  (`0.080919` vs `0.082589`), hit rate is materially lower (`61.11%` vs
+  `75.00%`), and naive Sharpe is lower (`8.005` vs `9.000`).
+- The two-member run improves max drawdown (`-15.54%` vs `-19.86%`), but the
+  lower hit rate and lower median spread argue against policy promotion.
+- Do not change the live paper rules from this result. The next model work
+  should focus on regime/abstention and concentration controls rather than
+  simply using a larger ensemble or more epochs.
+
 ## 2026-05-29 Growth24 Paper-Only Control Gate Integration
 
 Implementation:
