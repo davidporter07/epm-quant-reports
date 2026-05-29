@@ -1248,16 +1248,31 @@ def health() -> dict:
     checks: dict = {}
     overall_ok = True
 
-    # 1. Commentary present + fresh on market days
+    # 1. Commentary present + fresh on market days.
+    # NOTE: computed inline (not imported from check_site_freshness) — that module is a
+    # laptop-side CLI that probes the live site from OUTSIDE and is not shipped to the
+    # server, so importing it here would ImportError in production and mark health degraded.
     try:
-        from check_site_freshness import market_is_open, today_str
+        from datetime import date as _date, datetime as _dt
+        try:
+            from zoneinfo import ZoneInfo as _ZI
+            today_s = _dt.now(_ZI("America/Chicago")).strftime("%Y-%m-%d")
+        except Exception:
+            today_s = _date.today().isoformat()
+        _td = _date.today()
+        mkt_open = _td.weekday() < 5
+        if mkt_open:
+            try:
+                import holidays as _hol
+                mkt_open = _td not in _hol.US()
+            except Exception:
+                pass
         cpath = DATA_DIR / "latest_commentary.json"
         report_date = None
         if cpath.exists():
             with cpath.open(encoding="utf-8") as fh:
                 report_date = (json.load(fh) or {}).get("report_date")
-        mkt_open = market_is_open()
-        fresh = (report_date == today_str()) if mkt_open else True
+        fresh = (report_date == today_s) if mkt_open else True
         checks["commentary"] = {
             "present": bool(report_date),
             "report_date": report_date,
