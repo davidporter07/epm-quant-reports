@@ -2209,6 +2209,108 @@ def _repair_scenario_labels(scenarios: list) -> int:
     return stripped
 
 
+# Key-asset terms whose hard numbers (levels/percents) the LLM tends to hallucinate
+# in pre_market_bullets. Any LLM bullet (beyond the deterministic opener) that names
+# one of these AND cites a digit is dropped and replaced with a snapshot-derived line.
+_PMB_DATA_TERMS = (
+    "yield", "treasury", "10-yr", "10-year", "10yr",
+    "gold", "dxy", "dollar index", "u.s. dollar", "us dollar",
+    "bitcoin", "btc", "wti", "crude",
+    "s&p", "nasdaq",
+)
+
+
+def _enforce_pre_market_data_bullets(bullets: list, snapshot: dict) -> tuple[list, int]:
+    """Replace LLM-written market-DATA bullets with snapshot-derived deterministic lines.
+
+    Root cause this guards: the LLM free-writes pre_market_bullets[1:] and hallucinates
+    absolute levels (e.g. 10-Yr yield "3.92%", gold "$2,680", DXY "98.42", BTC "$1.28")
+    even though the correct snapshot is in its context. Only bullet[0] is deterministic
+    today, so it is the only reliably-correct numeric bullet.
+
+    Strategy (mirrors the deterministic opener + safety-net fallback):
+      * keep bullet[0] (deterministic opener + LLM catalyst) untouched
+      * drop any later LLM bullet that names a tracked key asset AND cites a digit
+        (these are the hallucination-prone "data" lines; BTC has no snapshot level so
+        a bad BTC line is simply removed)
+      * insert canonical yield / WTI+gold / DXY lines computed from the snapshot
+      * preserve genuine narrative bullets (sector leaders, fear & greed, company news,
+        economic calendar) verbatim — they carry no tracked key-asset hard numbers
+
+    Returns (new_bullets, num_data_bullets_replaced). Idempotent and snapshot-partial safe.
+    """
+    if not isinstance(bullets, list) or not bullets:
+        return bullets, 0
+
+    snapshot = snapshot or {}
+    _DIGIT = re.compile(r"\d")
+
+    def _word(pct: float | None) -> str:
+        if pct is None:
+            return "was little changed"
+        if pct > 0.5:   return "rose"
+        if pct > 0.1:   return "edged higher"
+        if pct < -0.5:  return "fell"
+        if pct < -0.1:  return "edged lower"
+        return "was little changed"
+
+    def _g(key: str, field: str):
+        return (snapshot.get(key) or {}).get(field)
+
+    # Build canonical data bullets from the snapshot (skip any with a missing level).
+    data_bullets: list[str] = []
+
+    tyr_lvl = _g("10-Yr Yield", "level")
+    tyr_chg = _g("10-Yr Yield", "change")
+    if tyr_lvl is not None:
+        bp = round(float(tyr_chg) * 100) if tyr_chg is not None else 0
+        _ylvl = f"{float(tyr_lvl):.3f}%"
+        if bp > 0:
+            data_bullets.append(f"10-Yr Treasury yield rose {bp} bp to {_ylvl}.")
+        elif bp < 0:
+            data_bullets.append(f"10-Yr Treasury yield fell {abs(bp)} bp to {_ylvl}.")
+        else:
+            data_bullets.append(f"10-Yr Treasury yield held steady at {_ylvl}.")
+
+    wti_lvl = _g("WTI Crude", "level")
+    wti_pct = _g("WTI Crude", "pct_change")
+    gld_lvl = _g("Gold", "level")
+    gld_pct = _g("Gold", "pct_change")
+    if wti_lvl is not None and gld_lvl is not None:
+        data_bullets.append(
+            f"WTI crude {_word(wti_pct)} {float(wti_pct or 0):+.2f}% to ${float(wti_lvl):,.2f}; "
+            f"gold {_word(gld_pct)} {float(gld_pct or 0):+.2f}% to ${float(gld_lvl):,.2f}."
+        )
+    elif wti_lvl is not None:
+        data_bullets.append(f"WTI crude {_word(wti_pct)} {float(wti_pct or 0):+.2f}% to ${float(wti_lvl):,.2f}.")
+    elif gld_lvl is not None:
+        data_bullets.append(f"Gold {_word(gld_pct)} {float(gld_pct or 0):+.2f}% to ${float(gld_lvl):,.2f}.")
+
+    dxy_lvl = _g("U.S. Dollar (DXY)", "level")
+    dxy_pct = _g("U.S. Dollar (DXY)", "pct_change")
+    if dxy_lvl is not None:
+        data_bullets.append(
+            f"Dollar Index (DXY) {_word(dxy_pct)} {float(dxy_pct or 0):+.2f}% to {float(dxy_lvl):.2f}."
+        )
+
+    # Nothing to substitute with → leave bullets unchanged rather than gutting them.
+    if not data_bullets:
+        return bullets, 0
+
+    opener = bullets[0]
+    narrative: list[str] = []
+    replaced = 0
+    for bullet in bullets[1:]:
+        btext = str(bullet).lower()
+        is_data = bool(_DIGIT.search(btext)) and any(term in btext for term in _PMB_DATA_TERMS)
+        if is_data:
+            replaced += 1
+        else:
+            narrative.append(bullet)
+
+    return [opener, *data_bullets, *narrative], replaced
+
+
 def call_ollama(payload: dict, snapshot: dict) -> dict:
     """Two-shot generation: narrative sections then outlook/portfolio."""
 
@@ -2442,6 +2544,17 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
             f"DXY {_snap_dir(_dxy_pct)} {_dxy_pct:+.2f}% to {_dxy_lvl:.2f}.",
         ]
         print("  [FALLBACK] Injected deterministic pre_market_bullets (LLM failed to generate).")
+
+    # Replace LLM-hallucinated market-data bullets (levels/percents for yield, WTI,
+    # gold, DXY, BTC) with snapshot-derived deterministic lines. Runs after Call 1,
+    # refinement, AND the fallback so every path is covered. Keeps bullet[0] (the
+    # deterministic opener) and genuine narrative bullets untouched.
+    _pmb_fixed, _pmb_replaced = _enforce_pre_market_data_bullets(
+        part1.get("pre_market_bullets"), snapshot
+    )
+    if _pmb_replaced:
+        part1["pre_market_bullets"] = _pmb_fixed
+        print(f"  [ENFORCE] Replaced {_pmb_replaced} LLM data bullet(s) with snapshot-derived lines.")
 
     # Compact payload for outlook call — items #2 (sectors) and #8 (prior-day continuity)
     outlook_payload = {
