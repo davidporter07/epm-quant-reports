@@ -37,6 +37,7 @@ import json
 import os
 import re
 import sys
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -2092,6 +2093,44 @@ NARRATIVE_KEYS = [
     "session_recap", "watch_today", "international_section",
     "cross_asset_synthesis",
 ]
+
+
+def _warmup_ollama_async() -> threading.Thread:
+    """Fire-and-forget pre-warm of the commentary model.
+
+    On a freshly-restarted or idle Ollama the first real LLM call (the narrative
+    call, which cold-loads at num_ctx=16384) pays a from-scratch model load. On this
+    server qwen3.5:9b (6.6GB) doesn't fully fit the A2000's ~5.75GB VRAM, so the cold
+    load + first inference is slow enough to drop the connection (WinError 10054/10065)
+    and force the deterministic fallback that fails the email gate.
+
+    This loads the model NOW, in a daemon thread, so it warms concurrently with the
+    several-minute market-data gathering in main() and is resident before call_ollama
+    runs. num_ctx MUST match the narrative call (16384) or Ollama reloads the model on
+    the first real call (cold again). keep_alive holds it resident until then. Strictly
+    best-effort: any failure is swallowed — call_ollama's normal retry logic still applies.
+    """
+    def _warm() -> None:
+        try:
+            requests.post(
+                f"{OLLAMA_HOST}/api/chat",
+                json={
+                    "model":    OLLAMA_MODEL,
+                    "messages": [{"role": "user", "content": "ok"}],
+                    "stream":   False,
+                    "think":    False,
+                    "keep_alive": "20m",
+                    "options":  {"num_predict": 1, "num_ctx": 16384},
+                },
+                timeout=OLLAMA_TIMEOUT,
+            )
+            print("  [WARMUP] Ollama commentary model pre-warmed (resident for this run).")
+        except Exception as exc:
+            print(f"  [WARMUP] Pre-warm skipped ({exc}); first LLM call will cold-load.")
+
+    t = threading.Thread(target=_warm, name="ollama-warmup", daemon=True)
+    t.start()
+    return t
 
 
 def _call_ollama_raw(system: str, user_payload: dict, num_ctx: int = 8192) -> dict:
@@ -4367,6 +4406,13 @@ def generate_topic_spotlight(
 # ---------------------------------------------------------------------------
 def main() -> int:
     today = datetime.today().strftime("%Y-%m-%d")
+
+    # Pre-warm the commentary model immediately so it loads concurrently with the
+    # several-minute market-data gathering below and is resident before the first LLM
+    # call. Without this, a cold/idle Ollama cold-loads on the narrative call
+    # (num_ctx=16384); on this VRAM-tight server that load is slow enough to drop the
+    # connection and force the deterministic fallback that blocks the email. Non-blocking.
+    _warmup_ollama_async()
 
     # Load yesterday's stored levels so each instrument's prev_close is the value
     # we actually reported last run.  GUARD: if the existing commentary file is from
