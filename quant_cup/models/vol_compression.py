@@ -3,6 +3,11 @@ VOL_COMPRESSION — Seed #3
 Academic basis: Mandelbrot (1963) volatility clustering, GARCH literature, Carr & Wu (2006).
 When ATR falls below its 20th percentile (compression), the subsequent breakout tends to
 be directional. Enter long/short on the day compression breaks with price confirmation.
+
+RETIRED 2026-06-02 from the Quant Cup tournament (Round 1: -11.7% CAGR, #7 of 8).
+`vol_compression_signal` is no longer in the roster. `vol_compression_features` is
+RETAINED — it still feeds the DL feature panel (build_directional_feature_panel.py,
+feature_candidates.py).
 """
 
 import numpy as np

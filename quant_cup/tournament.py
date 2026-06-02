@@ -1,12 +1,17 @@
 """
 Quant Model Cup — Tournament Runner
-Runs all 8 single-factor models against S&P 500, 2006-2025.
+Runs the active single-factor models against S&P 500, 2006-2025.
 Ranks by CAGR vs SPY buy-and-hold baseline.
 Outputs results/round1.json.
 
+Retired 2026-06-02 (Quant Cup Round 1, bottom 3 of 8 — only negative-return
+strategies): MOMENTUM, VOL_COMPRESSION, GAP_CONTINUATION. Their `_signal`
+functions are dropped from the roster below; the model files stay in place
+because their `_features` extractors still feed the DL feature panel.
+
 Usage:
     python quant_cup/tournament.py
-    python quant_cup/tournament.py --start 2006-01-01 --end 2025-12-31 --models momentum,pead,vol_compression
+    python quant_cup/tournament.py --start 2006-01-01 --end 2025-12-31 --models pead,overnight,pairs_z
     python quant_cup/tournament.py --dev  # 2020-2025 only, faster for iteration
 """
 
@@ -39,14 +44,14 @@ from quant_cup.data_loader import (
 from quant_cup.earnings_av import cache_status as av_cache_status
 from quant_cup.earnings_av import load_earnings_av
 from quant_cup.earnings_fmp import cache_status, load_earnings_fmp
-from quant_cup.models.gap_continuation import gap_continuation_signal
+# Retired 2026-06-02 (negative-return, bottom 3 of Quant Cup Round 1):
+#   momentum_signal, vol_compression_signal, gap_continuation_signal.
+# The modules remain importable for their `_features` extractors (DL panel).
 from quant_cup.models.mean_revert import mean_reversion_signal
-from quant_cup.models.momentum import momentum_signal
 from quant_cup.models.overnight import overnight_signal
 from quant_cup.models.pairs_diverge import pairs_diverge_signal
 from quant_cup.models.pairs_z import pairs_zscore_signal
 from quant_cup.models.pead import pead_signal
-from quant_cup.models.vol_compression import vol_compression_signal
 from quant_cup.sp500_composition import SP500Composition
 
 logging.basicConfig(
@@ -93,13 +98,12 @@ def _run_all(
         )
 
     # (fn, rebalance, extra_kwargs)
+    # MOMENTUM, VOL_COMPRESSION, GAP_CONTINUATION retired 2026-06-02 (bottom 3
+    # of Round 1, only negative-CAGR strategies). See module docstring.
     all_models = {
-        "MOMENTUM":        (momentum_signal,        "monthly", {}),
         "PEAD":            (_pead,                  "daily",   {}),
-        "VOL_COMPRESSION": (vol_compression_signal, "monthly", {}),
         "OVERNIGHT":       (overnight_signal,        "monthly", {"use_overnight_returns": True}),
         "PAIRS_Z":         (_pairs_z,                "daily",   {}),
-        "GAP_CONTINUATION":(gap_continuation_signal, "daily",  {}),
         "MEAN_REVERT":     (mean_reversion_signal,   "monthly", {}),
         "PAIRS_DIVERGE":   (_pairs_diverge,          "daily",   {}),
     }

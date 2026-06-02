@@ -3,6 +3,10 @@ GAP_CONTINUATION — Seed #6
 Practitioner basis: Toby Crabel (1990); CMT curriculum.
 Gap > 2% at open + volume in top 30% of 20-day average → enter in gap direction.
 Intraday hold (close at end of same day). Requires Open + Volume.
+
+RETIRED 2026-06-02 from the Quant Cup tournament (Round 1: -64.0% CAGR, #8 of 8 — worst).
+`gap_continuation_signal` is no longer in the roster. `gap_features` is RETAINED — it
+still feeds the DL feature panel (build_directional_feature_panel.py, feature_candidates.py).
 """
 
 import numpy as np

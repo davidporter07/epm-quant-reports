@@ -5,6 +5,10 @@ Academic basis: Jegadeesh & Titman (1993, 2001) "Returns to Buying Winners and S
 Long top decile, short bottom decile. Monthly rebalance.
 
 Known risk: momentum crashes during sharp reversals (2009, 2020). See Daniel & Moskowitz (2016).
+
+RETIRED 2026-06-02 from the Quant Cup tournament (Round 1: -1.6% CAGR, #6 of 8).
+`momentum_signal` is no longer in the roster. `momentum_features` is RETAINED — it
+still feeds the DL feature panel (build_directional_feature_panel.py, feature_candidates.py).
 """
 
 import numpy as np
