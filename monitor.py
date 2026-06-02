@@ -357,6 +357,30 @@ if _ycharts_proc is not None:
     else:
         print("  YCharts scrape complete.")
 
+# Freshness alarm: regardless of how the scrape was launched (or skipped as "fresh"),
+# verify ycharts_live.json is actually recent. A silent scraper failure (e.g. the
+# 2026-05-08 playwright-missing freeze) leaves a stale cache that flows into fund
+# metrics AND model features for weeks. Warn LOUDLY so it can't go unnoticed again.
+try:
+    import json as _json
+    from datetime import datetime as _dt
+    _yc_path = os.path.join("data", "ycharts_live.json")
+    if os.path.exists(_yc_path):
+        with open(_yc_path, encoding="utf-8") as _yf:
+            _ts = _json.load(_yf).get("scrape_ts")
+        if _ts:
+            _age_h = (_dt.now() - _dt.fromisoformat(_ts)).total_seconds() / 3600.0
+            if _age_h > 30:
+                print("  " + "!" * 64)
+                print(f"  [STALE DATA WARNING] ycharts_live.json is {_age_h/24:.1f} DAYS old "
+                      f"(scrape_ts={_ts[:19]}).")
+                print("  Fund metrics (price, 1M/3M/YTD returns, Sharpe, alpha, beta, MaxDD) and")
+                print("  any model feature derived from YCharts are STALE. Fix the scraper:")
+                print("    pip install playwright && playwright install chromium chromium-headless-shell")
+                print("  " + "!" * 64)
+except Exception as _yc_fresh_exc:
+    print(f"  [WARN] Could not verify YCharts freshness: {_yc_fresh_exc}")
+
 subprocess.run([VENV_PYTHON, "features.py"], check=True)
 
 subprocess.run([VENV_PYTHON, "linear_model.py"], check=True)

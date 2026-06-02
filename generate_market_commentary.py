@@ -486,8 +486,18 @@ def fetch_bonds_table() -> dict[str, dict]:
     return result
 
 
-def fetch_technical_levels() -> dict[str, dict]:
-    """Compute 20d/50d/200d MAs, 52-wk high/low for key assets."""
+def fetch_technical_levels(current_overrides: dict | None = None) -> dict[str, dict]:
+    """Compute 20d/50d/200d MAs, 52-wk high/low for key assets.
+
+    current_overrides maps asset name → canonical current price (from the market
+    snapshot). When supplied, it overrides yfinance's last bar as `current` so the
+    technicals table never disagrees with the snapshot/commodities tables on the
+    displayed price (fixes the 2026-06-01 split where the snapshot showed Gold
+    $4,560.50 / S&P 7,580.06 but the technicals table showed 4,518.40 / 7,612.37
+    from an independent, later/intraday yfinance pull). MAs, 52-wk extremes, and
+    swing levels still come from the daily history — only `current` is reconciled,
+    and support/resistance is then computed against that reconciled price."""
+    current_overrides = current_overrides or {}
     assets = {
         "S&P 500":      "^GSPC",
         "Nasdaq 100":   "^NDX",
@@ -517,6 +527,12 @@ def fetch_technical_levels() -> dict[str, dict]:
                 continue
 
             current = float(arr[-1])
+            _override = current_overrides.get(name)
+            if _override is not None:
+                try:
+                    current = float(_override)
+                except (TypeError, ValueError):
+                    pass
             high52  = float(closes.tail(252).max())
             low52   = float(closes.tail(252).min())
             ma20    = float(closes.tail(20).mean())  if len(arr) >= 20  else None
@@ -716,6 +732,24 @@ FUND_DESCRIPTIONS: dict[str, str] = {
 }
 
 
+# The fresh trailing 1-month return lives in "1M Return_enrich" (yfinance, recomputed
+# every run by features.enrich_features_with_missing_metrics). A merge-suffix collision
+# means it never overwrites the bare "1M Return", which therefore carries the STALE
+# YCharts scrape value (e.g. 2026-06-01 showed XNTK 24.82% stale vs 19.88% fresh). DISPLAY
+# consumers must prefer the enriched column. The bare "1M Return" is deliberately left
+# intact — it is also a model input feature (forecast_common → qc_ret_1m, quantconnect_model),
+# so overwriting it at the source would risk train/serve skew; fix display only.
+_FRESH_1M_COLS = ("1M Return_enrich", "Forward Return", "1M Return")
+
+
+def _fresh_1m_col(columns) -> str | None:
+    """Return the freshest available trailing-1M-return column name, or None."""
+    for c in _FRESH_1M_COLS:
+        if c in columns:
+            return c
+    return None
+
+
 def build_portfolio_spotlight(df: pd.DataFrame) -> tuple[list, list]:
     try:
         from universe_config import get_portfolio_tickers, get_mag7
@@ -726,7 +760,7 @@ def build_portfolio_spotlight(df: pd.DataFrame) -> tuple[list, list]:
     all_port = get_portfolio_tickers()
     funds    = df[df["Ticker"].isin([t for t in all_port if t not in mag7])].copy()
 
-    ret_col = "1M Return" if "1M Return" in funds.columns else None
+    ret_col = _fresh_1m_col(funds.columns)
     if funds.empty or ret_col is None:
         return [], []
 
@@ -820,13 +854,14 @@ def build_tactical_positioning(
         top_funds: list[dict] = []
         bot_funds: list[dict] = []
         factor_read = ""
-        if df is not None and not df.empty and "1M Return" in df.columns:
+        _ret_col = _fresh_1m_col(df.columns) if (df is not None and not df.empty) else None
+        if _ret_col:
             try:
                 from universe_config import get_portfolio_tickers, get_mag7
                 _mag7 = set(get_mag7())
                 _port = [t for t in get_portfolio_tickers() if t not in _mag7]
                 funds = df[df["Ticker"].isin(_port)].copy()
-                funds["_1m_num"] = _pd.to_numeric(funds["1M Return"], errors="coerce")
+                funds["_1m_num"] = _pd.to_numeric(funds[_ret_col], errors="coerce")
                 funds = funds.dropna(subset=["_1m_num"])
                 # Normalize: some rows store decimals (0.087), others percent (8.7).
                 funds["_1m_pct"] = funds["_1m_num"].apply(
@@ -1684,6 +1719,84 @@ def load_recent_earnings_actuals() -> list[dict]:
     return out
 
 
+# Macro series to surface as "recently released" prints, with display formatting.
+# fmt: "k"=raw count→thousands (claims), "kth"=already-thousands (NFP),
+#      "pct"=percent YoY/QoQ, "num"=raw number.
+_MACRO_PRINT_SPEC = [
+    ("Core PCE (YoY)",         "Core PCE (YoY)",            "pct"),
+    ("PCE (YoY)",              "PCE (YoY)",                 "pct"),
+    ("Core CPI (YoY)",         "Core CPI (YoY)",            "pct"),
+    ("CPI (YoY)",              "CPI (YoY)",                 "pct"),
+    ("GDP Growth (QoQ)",       "GDP Growth (QoQ, ann.)",    "pct"),
+    ("Initial Jobless Claims", "Initial Jobless Claims",    "k"),
+    ("Nonfarm Payrolls",       "Nonfarm Payrolls",          "kth"),
+    ("Retail Sales (MoM)",     "Retail Sales (MoM)",        "pct"),
+    ("Unemployment Rate",      "Unemployment Rate",         "pct"),
+]
+
+
+def load_recent_macro_prints(lookback_days: int = 10) -> list[dict]:
+    """Return recently-released macro prints with actual + prior values for the
+    economics recap. Reads data/market_data_arbitrated.json (written by
+    data_arbiter.py). Supplies the ACTUAL figures so economics_commentary recaps
+    real releases (e.g. "Jobless Claims 215k vs 210k prior") instead of
+    hallucinating numbers — the 2026-06-01 report invented "211k in line with
+    211k prior" because no claims value was ever passed to the model.
+
+    Filtered to series whose latest observation date is within lookback_days, so
+    only genuinely-recent releases surface (monthly/quarterly series with stale
+    observation dates are dropped rather than misframed as "this week")."""
+    path = DATA_DIR / "market_data_arbitrated.json"
+    if not path.exists():
+        return []
+    try:
+        econ = (json.loads(path.read_text(encoding="utf-8")) or {}).get("economics") or {}
+    except Exception:
+        return []
+
+    def _fmt(val, kind: str) -> str | None:
+        try:
+            v = float(val)
+        except (TypeError, ValueError):
+            return None
+        if kind == "k":
+            return f"{v/1000:.0f}k"
+        if kind == "kth":
+            return f"{v:.0f}k"
+        if kind == "pct":
+            return f"{v:.1f}%"
+        return f"{v:.1f}"
+
+    cutoff = (datetime.today() - timedelta(days=lookback_days)).date()
+    out: list[dict] = []
+    for src_key, label, kind in _MACRO_PRINT_SPEC:
+        rec = econ.get(src_key)
+        if not isinstance(rec, dict):
+            continue
+        actual = _fmt(rec.get("value"), kind)
+        prior  = _fmt(rec.get("prev_value"), kind)
+        if actual is None:
+            continue
+        date_str = str(rec.get("date", ""))[:10]
+        try:
+            obs_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            obs_date = None
+        # Weekly series (claims) carry a recent observation date; monthly/quarterly
+        # series lag — keep the latter only if their observation is within lookback.
+        is_recent = obs_date is not None and obs_date >= cutoff
+        out.append({
+            "indicator": label,
+            "actual":    actual,
+            "prior":     prior,
+            "as_of":     date_str,
+            "recent":    is_recent,
+        })
+    # Recent releases first, then by indicator order already established.
+    out.sort(key=lambda r: (not r["recent"],))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # LLM prompts  split into two focused calls to stay within 14B model limits
 # ---------------------------------------------------------------------------
@@ -1702,6 +1815,12 @@ ONE-SHOT CALIBRATION — geopolitical tone (follow this pattern exactly):
   BAD: "Mounting costs of the Iran war strain U.S. finances as the conflict widens."
   GOOD: "Markets are pricing a higher risk premium after reports of expanded strikes near Iranian facilities; diplomatic talks remain unresolved."
   Rule: mirror the payload's exact language — do not upgrade 'strikes' to 'war', do not assert fiscal or political consequences as fact, do not name a conflict as an ongoing war unless the payload explicitly uses that word.
+UNCONFIRMED EVENTS ARE NOT FACTS (critical): A ceasefire, truce, peace deal, or agreement is NOT confirmed until a payload headline states it has been signed/finalized/reached. Until then, frame it as expectation, not accomplishment: "ceasefire hopes", "reported/expected ceasefire", "if the truce holds", "markets are pricing a ceasefire". NEVER write that an unconfirmed event "validates", "confirms", "eases", or "removes" anything, and NEVER cite a "memorandum", "agreement", or "deal" as a settled driver unless a headline names it as signed. The same restraint applies symmetrically to de-escalation and escalation.
+  ONE-SHOT CALIBRATION — unconfirmed ceasefire (follow exactly):
+    Headline in payload: "Markets still expect a US-Iran ceasefire in coming days; the two sides again exchanged limited strikes"
+    BAD: "The 60-day truce memorandum validates the soft-landing narrative; the ceasefire eases supply fears."
+    GOOD: "Stocks held gains on continued ceasefire hopes even as the two sides exchanged limited strikes; a signed truce remains the key unconfirmed catalyst."
+WINDOW & SUPERLATIVE FIDELITY: any claim about a multi-day window or a superlative MUST match the sign of that window's data. Do NOT say the dollar made its "biggest weekly gain", "best week", or "hit a six-week high" when DXY's daily or weekly pct_change is negative — if the dollar fell, say it fell. Do NOT say "rising yields"/"higher yields" as a current driver when the 10-Yr bp_change is <= 0 on the day and on the week. A DECLINE can never be attributed to a bullish driver: if WTI fell, do NOT explain it with "supply shocks", "renewed tensions", or "supply disruption" — a falling price reflects easing supply fear, not rising it. Match driver polarity to the move.
 Do NOT cite foreign central banks (BoE, ECB, BoJ, PBoC, RBA, BoC, SNB) or foreign sovereign yields (Gilts, Bunds, JGBs) as drivers of US asset moves unless a US-asset headline in the payload explicitly names that institution. Foreign monetary policy may move foreign assets in the international section; for US equities, US bonds, and US dollar commentary, drivers must come from the US payload.
 COMMITTED VOICE: take a side. The reader pays to know what YOU think, not which way it could go. Forbidden: "investors should watch", "remains to be seen", "wait-and-see", "could go either way", "markets face headwinds", "cautious optimism", "the outlook is mixed", "uncertainty persists". State the directional view, then the conditions that would invalidate it.
 CAUSAL LINKAGE: every commentary section must name a cause and effect, not just describe a level. Wrong: "the 10-year yield fell 6 bp to 4.50%." Right: "the 10-year yield fell 6 bp to 4.50% as falling oil prices eased the inflation impulse, providing relief to growth-name multiples." Connect at least one named driver and one downstream effect.
@@ -1762,7 +1881,7 @@ commodities_commentary: 5-6 sentences. WTI direction and level first, then gold.
 
 currencies_commentary: 4-5 sentences. DXY direction and level. Rate differential or trade-flow driver. EUR/USD and JPY if notable. EM implication.
 
-economics_commentary: 4-5 sentences. If recent_headlines contains any economic data release that ALREADY occurred (Retail Sales, jobless claims, CPI, PPI, industrial production, PMI, GDP), cite the actual result vs consensus and interpret the beat or miss — but mark it clearly as a PAST release (e.g., "Last Thursday's Jobless Claims came in at 211k, in line with the 211k prior."). NEVER cite a past headline release as an upcoming event. Most important release first. Macro cycle context (soft landing, slowdown, re-acceleration). Fed rate trajectory implication.
+economics_commentary: 4-5 sentences. RECAP LATEST READINGS FIRST: recent_macro_prints is a list of {indicator, actual, prior, as_of} carrying the ACTUAL figures — open by recapping the 1-2 most important entries (prioritise Core PCE, GDP, jobless claims, CPI, payrolls), citing indicator + actual + prior and interpreting the beat/miss vs prior. PHRASING: weekly jobless claims may be called "the latest weekly jobless claims (215k vs 210k prior)"; monthly/quarterly series MUST be referred to as "the latest [indicator] reading" (e.g. "the latest Core PCE reading at 3.3% YoY vs 3.2% prior") — do NOT assert a specific release weekday for them, because the payload gives the observation period, not the publication date. NUMBER SOURCE (non-negotiable): cite macro figures ONLY from recent_macro_prints — NEVER invent or round a number outside that list (the prior report fabricated "211k in line with 211k prior"; the real value was 215k vs 210k). If recent_macro_prints is empty, cite no specific macro figure. Never frame a past reading as an upcoming release. After the recap, give macro-cycle context (soft landing, slowdown, re-acceleration) and the Fed rate-trajectory implication. Do NOT reproduce the example numbers above as literal output.
   DATE GUARD (critical): If todays_economic_events is EMPTY there is NO release scheduled today — do NOT write that any report is "scheduled today", "due this morning", or "at 8:30 AM ET today", and do NOT invent a release that is not in todays_economic_events or week_ahead_econ_events. Refer to any upcoming release by its WEEKDAY (e.g., "Thursday's GDP report"), and anchor the paragraph in the macro cycle rather than a fictitious same-day calendar.
 
 ONE-SHOT EXAMPLE — bullet format reference ONLY. Use payload-specific numbers; do NOT copy these specifics:
@@ -2457,6 +2576,7 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
         "news_by_category":         news_trimmed,
         "recent_headlines":         flat_headlines,   # flat list kept as fallback
         "recent_earnings_actuals":  payload.get("recent_earnings_actuals") or [],
+        "recent_macro_prints":      payload.get("recent_macro_prints") or [],
         # items #2–#6
         "sector_top3":              _sector_top3,
         "sector_bottom3":           _sector_bottom3,
@@ -2492,6 +2612,9 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
             sign_fixes = _correct_sign_mismatches(part1, snapshot)
             if sign_fixes:
                 print(f"  [CORRECT] Auto-corrected {sign_fixes} sign mismatch(es) in Call 1 output.")
+            dir_fixes = _correct_direction_words(part1, snapshot)
+            if dir_fixes:
+                print(f"  [CORRECT] Auto-corrected {dir_fixes} direction-word/superlative contradiction(s) in Call 1 output.")
             _call1_required = {
                 "pre_market_bullets", "equities_commentary", "fixed_income_commentary",
                 "currencies_commentary", "commodities_commentary", "economics_commentary",
@@ -2502,14 +2625,18 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
                 continue
             numeric = _check_numeric_consistency(part1, snapshot)
             causal = _check_causal_logic(part1, snapshot)
+            direction = _check_direction_words(part1, snapshot)
+            corp_actions = _check_fabricated_corporate_actions(part1)
             # When there are NO economic releases dated today, the narrative must not
             # frame any release as "today"/"this morning" — catches the LLM pulling a
             # week-ahead catalyst (e.g. Thursday's GDP) forward and dating it today.
             dating = _check_event_dating(part1, today_has_econ=bool(today_econ))
             move_sig = _check_move_significance(part1, snapshot)
             superlatives = _check_unsourced_superlatives(part1, flat_headlines)
+            editorial = _check_editorial_contradictions(part1, snapshot)
             if (not banned and not leaks and not numeric and not causal and not dating
-                    and not move_sig and not superlatives):
+                    and not move_sig and not superlatives and not direction and not corp_actions
+                    and not editorial):
                 break
             if banned:
                 print(f"  [RETRY] Attempt {attempt + 1} still contained banned phrases after scrub: {banned}. Retrying...")
@@ -2525,6 +2652,12 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
                 print(f"  [RETRY] Attempt {attempt + 1} framed a noise-level move as direction: {move_sig}. Retrying...")
             if superlatives:
                 print(f"  [RETRY] Attempt {attempt + 1} made unsourced superlative/geopolitical claims: {superlatives}. Retrying...")
+            if direction:
+                print(f"  [RETRY] Attempt {attempt + 1} had direction-word/superlative contradictions: {direction}. Retrying...")
+            if corp_actions:
+                print(f"  [RETRY] Attempt {attempt + 1} made fabricated corporate-action claims: {corp_actions}. Retrying...")
+            if editorial:
+                print(f"  [RETRY] Attempt {attempt + 1} had editorial contradictions vs snapshot: {editorial}. Retrying...")
         except Exception as exc:
             print(f"  [WARN] Narrative call failed (attempt {attempt + 1}): {exc}")
             part1 = {}
@@ -2622,7 +2755,14 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
             echo = _check_equities_rationale_echo(part2)
             move_sig = _check_move_significance(part2, snapshot)
             superlatives = _check_unsourced_superlatives(part2, flat_headlines)
-            if not banned and not leaks and not echo and not move_sig and not superlatives:
+            dir_fixes = _correct_direction_words(part2, snapshot)
+            if dir_fixes:
+                print(f"  [CORRECT] Auto-corrected {dir_fixes} direction-word/superlative contradiction(s) in Call 2/3 output.")
+            direction = _check_direction_words(part2, snapshot)
+            corp_actions = _check_fabricated_corporate_actions(part2)
+            editorial = _check_editorial_contradictions(part2, snapshot)
+            if (not banned and not leaks and not echo and not move_sig and not superlatives
+                    and not direction and not corp_actions and not editorial):
                 break
             if banned:
                 print(f"  [RETRY] Attempt {attempt + 1} still contained banned phrases after scrub: {banned}. Retrying...")
@@ -2634,6 +2774,12 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
                 print(f"  [RETRY] Attempt {attempt + 1} framed a noise-level move as direction: {move_sig}. Retrying...")
             if superlatives:
                 print(f"  [RETRY] Attempt {attempt + 1} made unsourced superlative/geopolitical claims: {superlatives}. Retrying...")
+            if direction:
+                print(f"  [RETRY] Attempt {attempt + 1} had direction-word/superlative contradictions: {direction}. Retrying...")
+            if corp_actions:
+                print(f"  [RETRY] Attempt {attempt + 1} made fabricated corporate-action claims: {corp_actions}. Retrying...")
+            if editorial:
+                print(f"  [RETRY] Attempt {attempt + 1} had editorial contradictions vs snapshot: {editorial}. Retrying...")
         except Exception as exc:
             print(f"  [WARN] Outlook call failed (attempt {attempt + 1}): {exc}")
             part2 = {}
@@ -3646,6 +3792,342 @@ def _correct_yield_pct_to_bp(data: dict, snapshot: dict) -> int:
     return fixes
 
 
+# --- direction-word / superlative correction -------------------------------
+# Guards a failure class the percent-sign correctors miss: prose whose cited
+# percent has the CORRECT sign but whose directional VERB or recency SUPERLATIVE
+# contradicts the snapshot. Regression: 2026-06-01 shipped
+#   "Gold slipped 1.36% to $4,560.50, falling to a two-month low"
+# while gold was +1.36% (up). "1.36%" is bare-positive and matches the snapshot,
+# so _correct_sign_mismatches/_correct_magnitude_mismatches both pass it — only
+# the verb ("slipped"/"falling") and superlative ("two-month low") are wrong.
+_DIR_DOWN_TO_UP = {
+    "slipped": "rose", "slip": "rise", "slips": "rises", "slipping": "rising",
+    "slid": "climbed", "slide": "climb", "slides": "climbs", "sliding": "climbing",
+    "fell": "rose", "fall": "rise", "falls": "rises", "falling": "rising", "fallen": "risen",
+    "declined": "advanced", "decline": "advance", "declines": "advances", "declining": "advancing",
+    "dropped": "climbed", "drop": "climb", "drops": "climbs", "dropping": "climbing",
+    "eased": "firmed", "ease": "firm", "eases": "firms", "easing": "firming",
+    "retreated": "advanced", "retreat": "advance", "retreats": "advances", "retreating": "advancing",
+    "sank": "surged", "sink": "surge", "sinks": "surges", "sinking": "surging",
+    "weakened": "strengthened", "weaken": "strengthen", "weakens": "strengthens", "weakening": "strengthening",
+    "softened": "firmed", "soften": "firm", "softens": "firms", "softening": "firming",
+    "tumbled": "surged", "tumble": "surge", "tumbles": "surges", "tumbling": "surging",
+    "plunged": "soared", "plunge": "soar", "plunges": "soars", "plunging": "soaring",
+    "sold off": "rallied",
+}
+_DIR_UP_TO_DOWN = {
+    "rose": "fell", "rise": "fall", "rises": "falls", "rising": "falling", "risen": "fallen",
+    "climbed": "slid", "climb": "slide", "climbs": "slides", "climbing": "sliding",
+    "gained": "lost", "gain": "lose", "gains": "loses", "gaining": "losing",
+    "advanced": "declined", "advance": "decline", "advances": "declines", "advancing": "declining",
+    "jumped": "dropped", "jump": "drop", "jumps": "drops", "jumping": "dropping",
+    "surged": "tumbled", "surge": "tumble", "surges": "tumbles", "surging": "tumbling",
+    "soared": "plunged", "soar": "plunge", "soars": "plunges", "soaring": "plunging",
+    "rallied": "sold off", "rallies": "sold off", "rallying": "selling off",
+    "firmed": "eased", "firm": "ease", "firms": "eases", "firming": "easing",
+    "strengthened": "weakened", "strengthen": "weaken",
+}
+
+# Subordinating/causal conjunctions that introduce a NEW clause about drivers or context
+# (not the asset's price move). The rewrite scope stops here so "easing tensions" /
+# "rising fears" in a driver clause are never mistaken for the asset's own direction.
+_DIR_CLAUSE_BOUNDARY_RE = re.compile(
+    r"\b(?:as|that|which|because|since|amid|reflecting|validat\w+|driven|fueled|powered|"
+    r"despite|although|though|while|due|owing)\b",
+    re.IGNORECASE,
+)
+
+
+def _dir_scope_len(tail: str, snap_key: str) -> int:
+    """Length of the rewrite scope inside `tail` (which starts at an asset keyword):
+    capped at the first causal/driver conjunction or the next *different* asset keyword."""
+    tl = tail.lower()
+    cut = len(tail)
+    m = _DIR_CLAUSE_BOUNDARY_RE.search(tail, 1)
+    if m:
+        cut = min(cut, m.start())
+    for okw, osnap in _DIR_KW_MAP:
+        if osnap == snap_key:
+            continue
+        p = tl.find(okw, 1)
+        if p != -1:
+            cut = min(cut, p)
+    return cut
+
+
+# Snapshot keys that carry a pct_change usable for direction checks (yields excluded —
+# their level ≠ their pct_change, handled by the causal/bp correctors instead).
+_DIR_KW_MAP = [
+    ("gold", "Gold"),
+    ("wti", "WTI Crude"),
+    ("crude", "WTI Crude"),
+    ("s&p", "S&P 500"),
+    ("nasdaq", "Nasdaq 100"),
+    ("dollar index", "U.S. Dollar (DXY)"),
+    ("dxy", "U.S. Dollar (DXY)"),
+]
+
+
+def _flip_direction_words(text: str, truth_pct: float) -> tuple[str, bool]:
+    """Flip directional verbs + recency superlatives in `text` to agree with truth_pct's sign.
+    Snapshot UP → fix down-words ("slipped"→"rose") and "...-month low"→"...-month high".
+    Snapshot DOWN → the inverse. Case-preserving. Returns (new_text, changed)."""
+    if not isinstance(text, str) or not text:
+        return text, False
+    up = truth_pct >= 0
+    flip_map = _DIR_DOWN_TO_UP if up else _DIR_UP_TO_DOWN
+    super_from, super_to = ("low", "high") if up else ("high", "low")
+    changed = False
+
+    verb_re = re.compile(r"\b(" + "|".join(re.escape(k) for k in flip_map) + r")\b", re.IGNORECASE)
+
+    def _verb_sub(m: "re.Match") -> str:
+        nonlocal changed
+        w = m.group(0)
+        repl = flip_map.get(w.lower())
+        if not repl:
+            return w
+        changed = True
+        return repl[0].upper() + repl[1:] if w[:1].isupper() else repl
+
+    text = verb_re.sub(_verb_sub, text)
+
+    # Recency/extreme superlative: "two-month low", "record low", "fresh 6-week low", etc.
+    super_re = re.compile(
+        r"((?:record|all-time|fresh|new|multi-(?:day|week|month|year)|"
+        r"(?:one|two|three|four|five|six|seven|eight|nine|ten|\d+)[\-\s]?(?:day|week|month|year))[\-\s]?)"
+        r"(" + super_from + r")\b",
+        re.IGNORECASE,
+    )
+
+    def _super_sub(m: "re.Match") -> str:
+        nonlocal changed
+        changed = True
+        orig = m.group(2)
+        tail = super_to[0].upper() + super_to[1:] if orig[:1].isupper() else super_to
+        return m.group(1) + tail
+
+    text = super_re.sub(_super_sub, text)
+    return text, changed
+
+
+def _correct_direction_words(data: dict, snapshot: dict) -> int:
+    """Rewrite directional verbs/superlatives that contradict the snapshot sign even when
+    the cited percent's sign is already correct. Mutates data in place. Idempotent.
+    Scoped per-sentence, per-asset, and capped at the next other-asset mention so one
+    asset's correction never touches another's clause. Returns number of fields corrected.
+    """
+    if not snapshot:
+        return 0
+    fixes = 0
+
+    def _fix_field(text: str) -> str:
+        nonlocal fixes
+        if not isinstance(text, str) or not text:
+            return text
+        out_sents = []
+        for sent in re.split(r"(?<=[.!?])\s+", text):
+            new_sent = sent
+            handled: set[str] = set()
+            for kw, snap_key in _DIR_KW_MAP:
+                if snap_key in handled:
+                    continue
+                sl = new_sent.lower()
+                idx = sl.find(kw)
+                if idx == -1:
+                    continue
+                truth_pct = (snapshot.get(snap_key) or {}).get("pct_change")
+                if truth_pct is None or abs(truth_pct) < 0.02:
+                    continue
+                head, tail = new_sent[:idx], new_sent[idx:]
+                cut = _dir_scope_len(tail, snap_key)
+                scope, rest = tail[:cut], tail[cut:]
+                scope2, changed = _flip_direction_words(scope, truth_pct)
+                if changed:
+                    new_sent = head + scope2 + rest
+                    handled.add(snap_key)
+                    fixes += 1
+            out_sents.append(new_sent)
+        return " ".join(out_sents)
+
+    for field in (
+        "equities_commentary", "commodities_commentary", "currencies_commentary",
+        "cross_asset_synthesis", "market_outlook_rationale", "international_section",
+    ):
+        val = data.get(field)
+        if isinstance(val, str):
+            nv = _fix_field(val)
+            if nv != val:
+                data[field] = nv
+
+    aco = data.get("asset_class_outlooks")
+    if isinstance(aco, dict):
+        for av in aco.values():
+            if isinstance(av, dict) and isinstance(av.get("rationale"), str):
+                nv = _fix_field(av["rationale"])
+                if nv != av["rationale"]:
+                    av["rationale"] = nv
+
+    recap = data.get("session_recap")
+    if isinstance(recap, list):
+        data["session_recap"] = [
+            _fix_field(x) if isinstance(x, str) else x for x in recap
+        ]
+
+    return fixes
+
+
+def _check_direction_words(data: dict, snapshot: dict) -> list[str]:
+    """Detect residual direction-word/superlative contradictions (post-correction = none).
+    A clause is a violation if _flip_direction_words would still change it. Defense-in-depth
+    so the retry loop catches anything the corrector could not scope safely."""
+    if not snapshot:
+        return []
+    violations: list[str] = []
+    fields = (
+        "equities_commentary", "commodities_commentary", "currencies_commentary",
+        "cross_asset_synthesis", "market_outlook_rationale",
+    )
+    for field in fields:
+        text = data.get(field)
+        if not isinstance(text, str) or not text:
+            continue
+        for sent in re.split(r"(?<=[.!?])\s+", text):
+            sl = sent.lower()
+            seen: set[str] = set()
+            for kw, snap_key in _DIR_KW_MAP:
+                if snap_key in seen or kw not in sl:
+                    continue
+                truth_pct = (snapshot.get(snap_key) or {}).get("pct_change")
+                if truth_pct is None or abs(truth_pct) < 0.02:
+                    continue
+                idx = sl.find(kw)
+                tail = sent[idx:]
+                cut = _dir_scope_len(tail, snap_key)
+                _, changed = _flip_direction_words(tail[:cut], truth_pct)
+                if changed:
+                    seen.add(snap_key)
+                    violations.append(
+                        f"{field}: {snap_key} snapshot {truth_pct:+.2f}% but prose uses "
+                        f"contradictory direction/superlative — '{sent.strip()[:80]}'"
+                    )
+    return violations[:4]
+
+
+# --- fabricated corporate-action guard -------------------------------------
+# The report has NO dividend / buyback / split data feed, so any corporate-action
+# claim in the narrative is a hallucination. Regression: 2026-06-01 shipped
+#   "Nvidia's 2,400% dividend hike reshapes S&P 500 income streams"
+# echoed into the Equities outlook and the XNTK spotlight. Detect → force retry;
+# scrub the offending clause as a deterministic safety net if retries exhaust.
+_CORP_ACTION_RE = re.compile(
+    r"\b(?:dividend|buyback|buybacks|share\s+repurchase|stock\s+split|"
+    r"special\s+dividend|payout)\b",
+    re.IGNORECASE,
+)
+
+
+def _check_fabricated_corporate_actions(data: dict) -> list[str]:
+    """Flag unsupported corporate-action claims (dividend/buyback/split) in narrative prose.
+    No such data feed exists, so any mention is fabricated. Returns violation strings."""
+    fields = (
+        "equities_commentary", "fixed_income_commentary", "commodities_commentary",
+        "currencies_commentary", "economics_commentary", "market_outlook_rationale",
+        "cross_asset_synthesis", "international_section",
+    )
+    violations: list[str] = []
+    for field in fields:
+        text = data.get(field)
+        if isinstance(text, str) and _CORP_ACTION_RE.search(text):
+            m = _CORP_ACTION_RE.search(text)
+            ctx = text[max(0, m.start() - 30): m.end() + 20].strip()
+            violations.append(f"{field}: unsupported corporate-action claim — '{ctx}'")
+    # spotlight commentary is a list of dicts
+    for list_key in ("portfolio_spotlight_winners", "portfolio_spotlight_watch"):
+        for entry in data.get(list_key, []) or []:
+            c = entry.get("commentary") if isinstance(entry, dict) else None
+            if isinstance(c, str) and _CORP_ACTION_RE.search(c):
+                violations.append(
+                    f"{list_key}[{entry.get('ticker', '?')}]: unsupported corporate-action claim"
+                )
+    # asset_class_outlooks rationales
+    aco = data.get("asset_class_outlooks")
+    if isinstance(aco, dict):
+        for name, av in aco.items():
+            r = av.get("rationale") if isinstance(av, dict) else None
+            if isinstance(r, str) and _CORP_ACTION_RE.search(r):
+                violations.append(f"asset_class_outlooks[{name}]: unsupported corporate-action claim")
+    return violations[:6]
+
+
+def _scrub_fabricated_corporate_actions(data: dict) -> int:
+    """Deterministic safety net: surgically remove fabricated corporate-action clauses.
+    Strips the offending clause (not the whole sentence) and tidies leftover punctuation.
+    Mutates data in place. Returns number of fields scrubbed."""
+    fixes = 0
+
+    def _clean(text: str) -> tuple[str, bool]:
+        if not isinstance(text, str) or not _CORP_ACTION_RE.search(text):
+            return text, False
+        kept: list[str] = []
+        for sent in re.split(r"(?<=[.!?])\s+", text):
+            m = _CORP_ACTION_RE.search(sent)
+            if not m:
+                kept.append(sent)
+                continue
+            # Embedded clause? Find the nearest *clause* comma before the action — one
+            # followed by whitespace, so thousands separators ("2,400") never count.
+            comma = -1
+            for cm in re.finditer(r",(?=\s)", sent[:m.start()]):
+                comma = cm.start()
+            if comma != -1:
+                rest = sent[m.end():]
+                nxt = re.search(r",(?=\s)", rest)
+                end = m.end() + nxt.start() if nxt else len(sent)
+                cleaned = (sent[:comma] + sent[end:]).strip()
+                cleaned = re.sub(r"\s+([.,;])", r"\1", cleaned)
+                # Restore terminal punctuation if the excision removed it.
+                if cleaned and cleaned[-1] not in ".!?":
+                    cleaned += "."
+                if cleaned and not _CORP_ACTION_RE.search(cleaned):
+                    kept.append(cleaned)
+                # else: clause couldn't be isolated → drop the whole sentence
+            # No preceding clause comma → action is the main subject/predicate → drop sentence.
+        new = " ".join(s for s in kept if s).strip()
+        return new, (new != text)
+
+    for field in (
+        "equities_commentary", "fixed_income_commentary", "commodities_commentary",
+        "currencies_commentary", "economics_commentary", "market_outlook_rationale",
+        "cross_asset_synthesis", "international_section",
+    ):
+        val = data.get(field)
+        if isinstance(val, str):
+            nv, changed = _clean(val)
+            if changed:
+                data[field] = nv
+                fixes += 1
+
+    for list_key in ("portfolio_spotlight_winners", "portfolio_spotlight_watch"):
+        for entry in data.get(list_key, []) or []:
+            if isinstance(entry, dict) and isinstance(entry.get("commentary"), str):
+                nv, changed = _clean(entry["commentary"])
+                if changed:
+                    entry["commentary"] = nv
+                    fixes += 1
+
+    aco = data.get("asset_class_outlooks")
+    if isinstance(aco, dict):
+        for av in aco.values():
+            if isinstance(av, dict) and isinstance(av.get("rationale"), str):
+                nv, changed = _clean(av["rationale"])
+                if changed:
+                    av["rationale"] = nv
+                    fixes += 1
+
+    return fixes
+
+
 def _check_causal_logic(data: dict, snapshot: dict) -> list[str]:
     """Detect causal-logic inversions: driver implies one direction but prose says the opposite.
     Checks sentence-level contradictions in fixed_income_commentary only (the highest-error section).
@@ -3682,6 +4164,112 @@ def _check_causal_logic(data: dict, snapshot: dict) -> list[str]:
             break
 
     return violations
+
+
+# --- editorial contradiction guard -----------------------------------------
+# Catches window/superlative/causal claims that contradict the snapshot even though
+# no single percent is wrong. Regressions seen 2026-06-01:
+#   • "rising yields powering the dollar's biggest weekly gain in months" — 10Y was
+#     flat on the day and DOWN 13bp on the week; DXY was down on day and week.
+#   • "the dollar hits a six-week high" — DXY fell -0.11% (same paragraph says "fell").
+#   • "WTI Crude fell … as renewed Middle East tensions fuel inflation fears and supply
+#     shocks" — a price DECLINE cannot be driven by a bullish supply-shock/escalation story.
+_DOLLAR_STRENGTH_RE = re.compile(
+    r"\b(?:biggest|largest|strongest|best)\b[^.;]*\b(?:weekly\s+)?(?:gain|advance|rally|week|run)\b"
+    r"|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|multi|\d+)[\-\s]?(?:week|month)[\-\s]?high\b"
+    r"|\bhits?\s+a\s+(?:fresh|new|multi[\-\s]?\w+|\d+[\-\s]?(?:week|month))[\-\s]?high\b",
+    re.IGNORECASE,
+)
+# Generic "rising yields"/"higher rates" used as a market DRIVER. Deliberately the
+# adjective form only — a tenor-specific factual move ("the 30-year yield rose 1 bp")
+# is legitimate and must NOT be flagged just because the 10-Yr was flat.
+_YIELD_RISING_RE = re.compile(
+    r"\b(?:rising|climbing|surging)\s+(?:treasury\s+)?(?:yields|rates)\b"
+    r"|\bhigher\s+(?:treasury\s+)?(?:yields|rates)\b(?!\s+(?:would|could|may|might))",
+    re.IGNORECASE,
+)
+_OIL_BULL_DRIVER_RE = re.compile(
+    r"supply\s+shock|supply\s+disruption|renewed\b[^.;]{0,24}\btension|escalat|fuel[^.;]{0,20}inflation",
+    re.IGNORECASE,
+)
+_OIL_DOWN_VERB_RE = re.compile(r"\b(?:fell|declined|slid|dropped|lower|sank|tumbled)\b", re.IGNORECASE)
+
+_EDITORIAL_FIELDS = (
+    "equities_commentary", "fixed_income_commentary", "commodities_commentary",
+    "currencies_commentary", "cross_asset_synthesis", "market_outlook_rationale",
+    "international_section",
+)
+
+
+def _editorial_violations_in_sentence(sent: str, snapshot: dict) -> list[str]:
+    """Return editorial-contradiction tags for one sentence given the snapshot."""
+    sl = sent.lower()
+    out: list[str] = []
+    snap = snapshot or {}
+
+    dxy = snap.get("U.S. Dollar (DXY)") or {}
+    dxy_d, dxy_1w = dxy.get("pct_change"), dxy.get("pct_change_1w")
+    dxy_fell = (dxy_1w is not None and dxy_1w < -0.05) or (dxy_d is not None and dxy_d < -0.05)
+    if dxy_fell and ("dollar" in sl or "dxy" in sl) and _DOLLAR_STRENGTH_RE.search(sent):
+        out.append("dollar-strength superlative but DXY fell on the day/week")
+
+    y = snap.get("10-Yr Yield") or {}
+    bp, bp1w = y.get("bp_change"), y.get("bp_change_1w")
+    yields_not_up = (bp is None or bp <= 0) and (bp1w is None or bp1w <= 0) and not (bp is None and bp1w is None)
+    if yields_not_up and _YIELD_RISING_RE.search(sent):
+        out.append("'rising yields' claim but 10Y was flat/down on the day and week")
+
+    wti = snap.get("WTI Crude") or {}
+    wti_pct = wti.get("pct_change")
+    if (wti_pct is not None and wti_pct < -0.05
+            and ("wti" in sl or "crude" in sl or " oil" in sl)
+            and _OIL_DOWN_VERB_RE.search(sl) and _OIL_BULL_DRIVER_RE.search(sl)):
+        out.append("oil decline attributed to a bullish supply-shock/escalation driver")
+    return out
+
+
+def _check_editorial_contradictions(data: dict, snapshot: dict) -> list[str]:
+    """Flag window/superlative/causal contradictions vs the snapshot (empty = clean)."""
+    if not snapshot:
+        return []
+    violations: list[str] = []
+    for field in _EDITORIAL_FIELDS:
+        text = data.get(field)
+        if not isinstance(text, str) or not text:
+            continue
+        for sent in re.split(r"(?<=[.!?])\s+", text):
+            for tag in _editorial_violations_in_sentence(sent, snapshot):
+                violations.append(f"{field}: {tag} — '{sent.strip()[:80]}'")
+    return violations[:6]
+
+
+def _scrub_false_weekly_claims(data: dict, snapshot: dict) -> int:
+    """Deterministic safety net: drop sentences that make a dollar-strength superlative
+    while DXY fell on the day/week. These are pure embellishment — the factual currency
+    levels live in other sentences, so dropping them is safe (and today's offending
+    sentence also carries the "rising yields are powering …" clause, removed with it).
+    'rising yields' alone and oil-causality are NOT scrubbed (they can sit in otherwise
+    useful/factual sentences) — left to the retry loop + prompt. Returns fields changed."""
+    if not snapshot:
+        return 0
+    fixes = 0
+    for field in ("currencies_commentary", "fixed_income_commentary",
+                  "cross_asset_synthesis", "market_outlook_rationale"):
+        text = data.get(field)
+        if not isinstance(text, str) or not text:
+            continue
+        kept = []
+        changed = False
+        for sent in re.split(r"(?<=[.!?])\s+", text):
+            tags = _editorial_violations_in_sentence(sent, snapshot)
+            if any("dollar-strength" in t for t in tags):
+                changed = True
+                continue
+            kept.append(sent)
+        if changed:
+            data[field] = " ".join(kept).strip()
+            fixes += 1
+    return fixes
 
 
 def _atomic_write_json(path: Path, data: dict) -> None:
@@ -3815,6 +4403,15 @@ def validate_commentary(data: dict, known_tickers: set = None, snapshot: dict = 
         bp_fixes = _correct_yield_pct_to_bp(data, snapshot)
         if bp_fixes:
             print(f"[CORRECT] Auto-corrected {bp_fixes} yield-pct-to-bp citation(s) in merged commentary.")
+        dir_fixes = _correct_direction_words(data, snapshot)
+        if dir_fixes:
+            print(f"[CORRECT] Auto-corrected {dir_fixes} direction-word/superlative contradiction(s) in merged commentary.")
+        corp_scrubbed = _scrub_fabricated_corporate_actions(data)
+        if corp_scrubbed:
+            print(f"[CORRECT] Scrubbed {corp_scrubbed} fabricated corporate-action claim(s) in merged commentary.")
+        weekly_scrubbed = _scrub_false_weekly_claims(data, snapshot)
+        if weekly_scrubbed:
+            print(f"[CORRECT] Scrubbed {weekly_scrubbed} false weekly/superlative claim(s) in merged commentary.")
         violations = _check_numeric_consistency(data, snapshot)
         if violations:
             print(f"[VALIDATE] Numeric consistency violations vs market_snapshot: {violations}")
@@ -3822,6 +4419,14 @@ def validate_commentary(data: dict, known_tickers: set = None, snapshot: dict = 
         causal_violations = _check_causal_logic(data, snapshot)
         if causal_violations:
             print(f"[VALIDATE] Causal logic inversions: {causal_violations}")
+            return False
+        direction_violations = _check_direction_words(data, snapshot)
+        if direction_violations:
+            print(f"[VALIDATE] Direction-word/superlative contradictions: {direction_violations}")
+            return False
+        corp_violations = _check_fabricated_corporate_actions(data)
+        if corp_violations:
+            print(f"[VALIDATE] Fabricated corporate-action claims: {corp_violations}")
             return False
     # Normalize market_outlook_label
     label = str(data.get("market_outlook_label", "")).strip()
@@ -4490,8 +5095,17 @@ def main() -> int:
     except Exception as _enrich_exc:
         print(f"  [WARN] Historical enrichment skipped: {_enrich_exc}")
 
-    tech_levels      = fetch_technical_levels()
-    print(f"  [OK] Technical levels: {len(tech_levels)} assets")
+    # Reconcile technical "current" with the canonical snapshot prices so the page-8
+    # moving-average table never shows a different price than pages 1-3 (fixes the
+    # 2026-06-01 split: snapshot Gold $4,560.50 / S&P 7,580.06 vs technicals 4,518.40 /
+    # 7,612.37). 10-Yr is additionally pinned to Treasury.gov just below.
+    _tech_current_overrides = {
+        name: (snapshot.get(name) or {}).get("level")
+        for name in ("S&P 500", "Nasdaq 100", "Gold", "WTI Crude", "10-Yr Yield")
+        if (snapshot.get(name) or {}).get("level") is not None
+    }
+    tech_levels      = fetch_technical_levels(current_overrides=_tech_current_overrides)
+    print(f"  [OK] Technical levels: {len(tech_levels)} assets (current reconciled to snapshot)")
 
     # Sync the technical-table 10-Yr "current" to the same authoritative Treasury.gov
     # value used for the snapshot, so the page-8 moving-average table can't disagree
@@ -4702,6 +5316,7 @@ def main() -> int:
         "earnings_calendar":         _top_earnings,
         "news_sentiment_summary":    sent_summary,
         "recent_earnings_actuals":   load_recent_earnings_actuals(),
+        "recent_macro_prints":       load_recent_macro_prints(),
         "sector_performance":        sector_perf,
         # item #8: prior-day continuity for outlook call
         "prior_day_label":           _prev.get("market_outlook_label"),

@@ -473,7 +473,8 @@ def run_scraper() -> dict:
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
-        print("[YCharts] playwright not installed  pip install playwright && playwright install chromium")
+        print("[YCharts][ERROR] playwright not installed — run: pip install playwright && "
+              "playwright install chromium. Scrape FAILED (stale cache will be reused).")
         return {}
 
     creds = _load_creds()
@@ -576,6 +577,16 @@ def run_scraper() -> dict:
     # ---------------------------------------------------------------------- #
     # 5. Write output
     # ---------------------------------------------------------------------- #
+    # Guard against clobbering the last-good cache with an empty/failed scrape
+    # (e.g. login failure). A run with no funds is a FAILURE — keep the prior file
+    # so downstream still has data, but signal the failure via an empty return so
+    # the caller exits non-zero and the staleness becomes visible.
+    _good_funds = {k: v for k, v in results["funds"].items() if not v.get("error")}
+    if not _good_funds:
+        print("[YCharts][ERROR] No funds scraped successfully — preserving last-good "
+              f"cache, NOT overwriting {OUT_FILE.name}. Scrape FAILED.")
+        return {}
+
     OUT_FILE.parent.mkdir(exist_ok=True)
     with open(OUT_FILE, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2, default=str)
@@ -583,9 +594,13 @@ def run_scraper() -> dict:
     print(f"\n[YCharts] Saved -> {OUT_FILE}")
     print(f"  Yield curve:  {len(results['yield_curve'])} indicators")
     print(f"  Economic:     {len(results['economic'])} indicators")
-    print(f"  Funds:        {len(results['funds'])} tickers")
+    print(f"  Funds:        {len(_good_funds)}/{len(results['funds'])} tickers OK")
     return results
 
 
 if __name__ == "__main__":
-    run_scraper()
+    import sys as _sys
+    _res = run_scraper()
+    # Non-zero exit on failure so monitor.py / schedulers can DETECT a failed scrape
+    # instead of silently reusing a stale ycharts_live.json (the 2026-05-08 freeze).
+    _sys.exit(0 if (_res and _res.get("funds")) else 1)

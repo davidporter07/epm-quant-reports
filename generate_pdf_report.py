@@ -2030,6 +2030,18 @@ def load_features_df() -> pd.DataFrame:
             df = df.sort_values("Date").groupby("Ticker", as_index=False).tail(1)
         else:
             df = df.drop_duplicates(subset=["Ticker"], keep="last")
+        # DISPLAY-ONLY reconcile: the bare "1M Return" carries the stale YCharts scrape;
+        # the fresh yfinance trailing-1M return is in "1M Return_enrich" (merge-suffix
+        # collision keeps it from overwriting). Prefer the fresh value for every PDF table
+        # (forecast table + fund-metrics table). This df is the PDF's own copy — model
+        # pipelines read features.parquet directly, so their "1M Return" feature is untouched.
+        for _fresh in ("1M Return_enrich", "Forward Return"):
+            if _fresh in df.columns:
+                df["1M Return"] = pd.to_numeric(df[_fresh], errors="coerce").where(
+                    pd.to_numeric(df[_fresh], errors="coerce").notna(),
+                    df.get("1M Return"),
+                )
+                break
         return df
     except Exception as e:
         print(f"[WARN]  Could not load features.parquet: {e}")

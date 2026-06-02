@@ -411,8 +411,25 @@ def run_arbitration(yf_commentary: dict | None = None) -> dict:
         "economics":         _arbitrate_economics(merged_econ),
     }
 
-    # Build features CSV from scraper funds data (use even if slightly stale)
+    # Build features CSV from scraper funds data. Fund risk metrics (Sharpe/alpha/beta/
+    # MaxDD) come ONLY from YCharts, so there is no fallback — but if the scrape is stale
+    # these freeze (the 2026-05-08 freeze sat undetected for weeks). Warn LOUDLY so the
+    # staleness is visible; the 1M return is separately refreshed from yfinance in
+    # features.enrich_features_with_missing_metrics and consumed via _fresh_1m_col().
     if live.get("funds"):
+        if not yc_fresh:
+            _scr = live.get("scrape_date", "?")
+            try:
+                _age_d = (datetime.now() - datetime.strptime(_scr, "%Y-%m-%d")).days
+                _age_s = f"{_age_d} days"
+            except Exception:
+                _age_s = "unknown age"
+            print("[Arbiter] " + "!" * 56)
+            print(f"[Arbiter] STALE FUND METRICS: building features_from_ycharts.csv from a "
+                  f"YCharts scrape dated {_scr} ({_age_s} old).")
+            print("[Arbiter] Price / returns / Sharpe / alpha / beta / MaxDD are FROZEN. "
+                  "Fix the scraper (playwright) to refresh.")
+            print("[Arbiter] " + "!" * 56)
         _build_features_csv(live["funds"])
 
     with open(ARBITRATED, "w", encoding="utf-8") as f:

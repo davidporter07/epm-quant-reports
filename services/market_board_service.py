@@ -228,7 +228,13 @@ class MarketBoardService:
         portfolio_symbols = self._safe_symbol_list(self._load_portfolio_symbols())
 
         mag7_set = {s.upper() for s in mag7_symbols}
-        watchlist_symbols = [s for s in portfolio_symbols if s.upper() not in mag7_set][:4]
+        # Mirror the report's data-driven "Names to Watch" (refreshed daily by the
+        # pipeline); fall back to the static portfolio slice if the commentary is
+        # unavailable. Cards still refresh intraday via build_symbol_cards + the
+        # 600s cache TTL, so membership updates daily and prices update intraday.
+        watch_dynamic = [s for s in self._load_names_to_watch() if s.upper() not in mag7_set]
+        watchlist_symbols = (watch_dynamic or
+                             [s for s in portfolio_symbols if s.upper() not in mag7_set])[:4]
         payload = {
             "generated_at": self._today_iso(),
             "market_strip": self._decorate_index_cards(self.build_symbol_cards(market_strip_symbols[:7], period="3m")),
@@ -872,6 +878,28 @@ class MarketBoardService:
             except Exception:
                 pass
         return ["BUFR", "CGDV", "FLQM", "AUSF", "DIVO", "IXJ", "JAAA", "EFAA", "PFF", "XNTK", "RLY"]
+
+    def _load_names_to_watch(self) -> list[str]:
+        """Tickers from the daily data-driven 'Names to Watch' so the website watchlist
+        MIRRORS the report instead of showing a static config slice. Reads the report
+        spotlight watch list (fresh each pipeline run); falls back to the tactical
+        bottom funds. Returns [] if the commentary is unavailable so the caller can
+        fall back to the static portfolio slice."""
+        path = _DATA_DIR / "latest_commentary.json"
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        out: list[str] = []
+        for entry in (data.get("portfolio_spotlight_watch") or []):
+            if isinstance(entry, dict) and entry.get("ticker"):
+                out.append(str(entry["ticker"]))
+        if not out:
+            tactical = data.get("tactical_positioning") or {}
+            for entry in (tactical.get("bottom_funds") or []):
+                if isinstance(entry, dict) and entry.get("ticker"):
+                    out.append(str(entry["ticker"]))
+        return self._safe_symbol_list(out)
 
     def _load_mag7(self) -> list[str]:
         if callable(get_mag7):
