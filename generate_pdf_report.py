@@ -2069,6 +2069,21 @@ def main() -> None:
         print("[INFO]  Commentary not generated today  keeping previous PDF.")
         return
 
+    # Defense-in-depth: re-run the deterministic guard pass before rendering so the PDF is
+    # sanitized even if the commentary was produced by older code or a bypassed gen-time
+    # guard (dollar/Fed-hike/direction/foreign-macro/safe-haven/geopolitics). In-memory only.
+    try:
+        import generate_market_commentary as _gmc
+        _n = _gmc.sanitize_commentary(
+            commentary,
+            commentary.get("market_snapshot") or {},
+            source_text=str(commentary.get("_source_headlines") or ""),
+        )
+        if _n:
+            print(f"[SANITIZE] Applied {_n} deterministic correction(s) to commentary before PDF render.")
+    except Exception as _e:
+        print(f"[WARN] Render-time sanitize skipped: {_e}")
+
     print(" Loading feature data...")
     features_df = load_features_df()
     if features_df.empty:

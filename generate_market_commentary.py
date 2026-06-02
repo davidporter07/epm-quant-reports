@@ -4511,9 +4511,9 @@ _FED_HIKE_SUBS = [
     (re.compile(r"\b(?:rate[\-\s]?hike|hike)\s+bias\b", re.IGNORECASE),
      "higher-for-longer bias"),
     (re.compile(r"\bfed\s+rate\s+hikes?\b", re.IGNORECASE),
-     "a higher-for-longer Fed"),
+     "a higher-for-longer Fed stance"),
     (re.compile(r"\brate\s+hikes?\b", re.IGNORECASE),
-     "a higher-for-longer rate path"),
+     "higher-for-longer rates"),
 ]
 
 
@@ -4530,6 +4530,121 @@ def _correct_fed_hike_language(data: dict) -> int:
             text = rx.sub(_sub, text)
         return text
     return _map_all_prose(data, _fix)
+
+
+# --- foreign-macro trivia scrub (Fix: US econ recap polluted by foreign data) -
+# economics_commentary must recap U.S. releases from recent_macro_prints; foreign
+# context belongs in international_section. Regression 2026-06-02: the econ recap led
+# with "Australian government spending flat in Q1". Drop any sentence whose subject is a
+# foreign economy's macro release.
+_FOREIGN_ECON_RE = re.compile(
+    r"\b(?:australia|australian|china|chinese|japan|japanese|europe|european|eurozone|germany|"
+    r"german|france|french|u\.?k\.?|british|britain|canada|canadian|india|indian|brazil|"
+    r"brazilian|mexico|mexican|korea|korean|spain|spanish|italy|italian)\b",
+    re.IGNORECASE)
+_MACRO_NOUN_RE = re.compile(
+    r"\b(?:spending|gdp|inflation|cpi|ppi|pmi|retail\s+sales|industrial\s+production|output|"
+    r"unemployment|payrolls?|jobless|sentiment|trade\s+balance|current\s+account|"
+    r"manufacturing|services\s+index|housing\s+starts|exports?|imports?)\b",
+    re.IGNORECASE)
+
+
+def _scrub_foreign_macro_lead(data: dict) -> int:
+    """Drop foreign-economy macro-data sentences from economics_commentary (US-centric)."""
+    text = data.get("economics_commentary")
+    if not isinstance(text, str) or not text:
+        return 0
+    kept, changed = [], False
+    for sent in re.split(r"(?<=[.!?])\s+", text):
+        if _FOREIGN_ECON_RE.search(sent) and _MACRO_NOUN_RE.search(sent):
+            changed = True
+            continue
+        kept.append(sent)
+    if changed:
+        data["economics_commentary"] = " ".join(kept).strip()
+        return 1
+    return 0
+
+
+# --- safe-haven causal-inversion scrub -------------------------------------
+# A risk/volatility driver pushes capital TOWARD safe havens, not toward equities/oil.
+# Regression 2026-06-02 session_recap: "Gold fell ... as a stronger dollar and geopolitical
+# volatility drove investors toward oil and equities" — geopolitical volatility driving a
+# risk-ON rotation is reversed. Strip the offending trailing clause (keep the factual lead).
+_SAFE_HAVEN_DRIVER_RE = re.compile(
+    r"\b(?:geopolitical\s+(?:volatility|risk|tension|uncertainty|turmoil)|"
+    r"safe[\-\s]haven\s+(?:demand|buying)|risk[\-\s]off|war\s+fears?|escalat\w+)\b",
+    re.IGNORECASE)
+_RISK_ON_TARGET_RE = re.compile(
+    r"\b(?:drove|driving|pushed|pushing|sent|sending|steer\w+|propell\w+|lured?|luring)\b"
+    r"[^.;]{0,40}\b(?:toward|towards|into)\b[^.;]{0,40}"
+    r"\b(?:equit|stocks?|oil|crude|risk\s+assets?|cyclical)",
+    re.IGNORECASE)
+_SAFE_HAVEN_CLAUSE_BOUNDARY_RE = re.compile(
+    r"\s+(?:as|amid|because|since|with|while)\b", re.IGNORECASE)
+
+
+def _scrub_safe_haven_inversion(data: dict) -> int:
+    """Remove reversed safe-haven causality (risk driver -> risk-on rotation)."""
+    def _clean(sent: str):
+        if not (_SAFE_HAVEN_DRIVER_RE.search(sent) and _RISK_ON_TARGET_RE.search(sent)):
+            return sent
+        best = None
+        for m in _SAFE_HAVEN_CLAUSE_BOUNDARY_RE.finditer(sent):
+            head, tail = sent[:m.start()], sent[m.start():]
+            if (_SAFE_HAVEN_DRIVER_RE.search(tail) and _RISK_ON_TARGET_RE.search(tail)
+                    and not _SAFE_HAVEN_DRIVER_RE.search(head) and len(head.strip()) > 15):
+                best = m.start()
+        if best is not None:
+            h = sent[:best].rstrip(" ,;:")
+            return (h + ".") if h and h[-1] not in ".!?" else h
+        return None  # whole sentence is the inversion → drop
+
+    fixes = 0
+    for field in ("equities_commentary", "commodities_commentary", "currencies_commentary",
+                  "market_outlook_rationale", "cross_asset_synthesis"):
+        text = data.get(field)
+        if not isinstance(text, str) or not text:
+            continue
+        kept = [cs for sent in re.split(r"(?<=[.!?])\s+", text) if (cs := _clean(sent))]
+        nv = " ".join(kept).strip()
+        if nv != text:
+            data[field] = nv
+            fixes += 1
+    recap = data.get("session_recap")
+    if isinstance(recap, list):
+        new = [(_clean(s) if isinstance(s, str) else s) for s in recap]
+        new = [s for s in new if s]
+        if new != recap:
+            data["session_recap"] = new
+            fixes += 1
+    return fixes
+
+
+def sanitize_commentary(data: dict, snapshot: dict | None = None, source_text: str = "") -> int:
+    """Run the full deterministic corrector/scrubber pass over a commentary dict.
+
+    Idempotent and non-failing (never discards the narrative — only mutates prose to match
+    the data). Wired into validate_commentary at generation AND into the PDF/email renderers
+    as defense-in-depth, so the rendered report is sanitized even if a generation-time guard
+    was bypassed (e.g. an older latest_commentary.json or a future schema change). Returns
+    the total number of field-level corrections applied. `source_text` (headline corpus) is
+    only needed for the off-narrative geopolitics scrub; it is skipped when empty."""
+    total = 0
+    if snapshot:
+        total += _correct_sign_mismatches(data, snapshot)
+        total += _correct_magnitude_mismatches(data, snapshot)
+        total += _correct_yield_pct_to_bp(data, snapshot)
+        total += _correct_direction_words(data, snapshot)
+        total += _correct_dollar_direction(data, snapshot)
+        total += _scrub_false_weekly_claims(data, snapshot)
+    total += _correct_fed_hike_language(data)
+    total += _scrub_fabricated_corporate_actions(data)
+    total += _scrub_foreign_macro_lead(data)
+    total += _scrub_safe_haven_inversion(data)
+    if source_text:
+        total += _scrub_offnarrative_geopolitics(data, source_text)
+    return total
 
 
 def _atomic_write_json(path: Path, data: dict) -> None:
@@ -4678,6 +4793,12 @@ def validate_commentary(data: dict, known_tickers: set = None, snapshot: dict = 
         fed_fixes = _correct_fed_hike_language(data)
         if fed_fixes:
             print(f"[CORRECT] Reframed {fed_fixes} unsupported Fed rate-hike claim(s) to higher-for-longer.")
+        foreign_scrubbed = _scrub_foreign_macro_lead(data)
+        if foreign_scrubbed:
+            print(f"[CORRECT] Dropped foreign-macro trivia from economics_commentary.")
+        haven_scrubbed = _scrub_safe_haven_inversion(data)
+        if haven_scrubbed:
+            print(f"[CORRECT] Scrubbed {haven_scrubbed} safe-haven causal-inversion(s) in merged commentary.")
         violations = _check_numeric_consistency(data, snapshot)
         if violations:
             print(f"[VALIDATE] Numeric consistency violations vs market_snapshot: {violations}")
@@ -5729,6 +5850,18 @@ def main() -> int:
             )
         except Exception as _exc:
             print(f"[WARN] Topic spotlight generation failed: {_exc}")
+
+    # Persist a compact headline corpus so the PDF/email renderers' defense-in-depth
+    # sanitize pass can re-verify off-narrative geopolitical claims at render time too.
+    try:
+        _hl = [str(a.get("title") or a.get("headline") or "") for a in (world_news or [])]
+        for _arts in (merged_buckets or {}).values():
+            for _a in (_arts or []):
+                _hl.append(_a if isinstance(_a, str)
+                           else str(_a.get("headline") or _a.get("title") or ""))
+        existing["_source_headlines"] = " ".join(h for h in _hl if h)[:6000]
+    except Exception:
+        pass
 
     if llm_ok and commentary:
         existing.update(commentary)

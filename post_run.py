@@ -117,11 +117,16 @@ def _scp_dir(local: Path, remote: str, key_args: list[str]) -> int:
         return 1
 
 
-def sync_to_server():
+def sync_to_server() -> bool:
+    """Push outputs + app files to the server. Returns True only if EVERY transfer
+    succeeded. Previously this returned None unconditionally, so a total failure (e.g.
+    the server offline — every scp times out) looked identical to success and the
+    deploy silently no-op'd. Now it tallies successes and shouts on any failure."""
     print("\n[SYNC] Pushing output to server...")
     dest = f"{SERVER_USER}@{SERVER_HOST}"
     key_args = ["-i", SSH_KEY, "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=20", "-O"]
     errors = 0
+    ok = 0
 
     # Push directories
     for d in SYNC_DIRS:
@@ -132,6 +137,7 @@ def sync_to_server():
         rc = _scp_dir(local, f"{dest}:{SERVER_PATH}/{d}", key_args)
         if rc == 0:
             print(f"[SYNC] {d}/ -> server [OK]")
+            ok += 1
         else:
             print(f"[SYNC] {d}/ -> server [FAILED]")
             errors += 1
@@ -148,14 +154,25 @@ def sync_to_server():
             rc = 1
         if rc == 0:
             print(f"[SYNC] {fname} -> server [OK]")
+            ok += 1
         else:
             print(f"[SYNC] {fname} -> server [FAILED]")
             errors += 1
 
     if errors == 0:
-        print("[SYNC] All directories synced successfully.")
+        print(f"[SYNC] All {ok} target(s) synced successfully.")
+        return True
+
+    # Failure path — make it impossible to miss (this masked the 2026-06-02 offline deploy).
+    print("  " + "!" * 64)
+    if ok == 0:
+        print(f"  [SYNC][FAILED] ALL {errors} transfer(s) failed — the server is UNREACHABLE.")
+        print("  NOTHING was deployed. Check the network / Tailscale and that epm-server is online,")
+        print("  then re-run the sync. Do NOT assume the deploy succeeded.")
     else:
-        print(f"[SYNC] {errors} director(ies) failed to sync.")
+        print(f"  [SYNC][PARTIAL] {errors} of {ok + errors} transfer(s) FAILED — deploy is INCOMPLETE.")
+    print("  " + "!" * 64)
+    return False
 
 
 def main():
@@ -229,9 +246,13 @@ def main():
         except Exception as _e:
             print(f"[WARN] Commentary archive failed: {_e}")
 
-    # Sync output to server
-    sync_to_server()
+    # Sync output to server — surface a failed deploy loudly (non-zero exit) instead of
+    # silently "succeeding" while nothing transferred.
+    if not sync_to_server():
+        print("[post_run] Server sync FAILED — see banner above. Outputs are NOT deployed.")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)

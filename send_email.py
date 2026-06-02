@@ -958,6 +958,21 @@ def build_commentary_email_blocks(commentary):
 # --- Build HTML email ---
 def build_email():
     commentary = load_commentary_snapshot()
+
+    # Defense-in-depth: re-run the deterministic guard pass before building the email so the
+    # narrative is sanitized even if produced by older code or a bypassed gen-time guard.
+    try:
+        import generate_market_commentary as _gmc
+        _n = _gmc.sanitize_commentary(
+            commentary,
+            commentary.get("market_snapshot") or {},
+            source_text=str(commentary.get("_source_headlines") or ""),
+        )
+        if _n:
+            print(f"[SANITIZE] Applied {_n} deterministic correction(s) to commentary before email build.")
+    except Exception as _e:
+        print(f"[WARN] Render-time sanitize skipped: {_e}")
+
     commentary_html, commentary_text = build_commentary_email_blocks(commentary)
 
     html = f"""

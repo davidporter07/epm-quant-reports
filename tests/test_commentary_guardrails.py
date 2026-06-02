@@ -462,3 +462,71 @@ def test_fed_hike_idempotent():
     once = data["economics_commentary"]
     gmc._correct_fed_hike_language(data)
     assert data["economics_commentary"] == once
+
+
+# --- foreign-macro trivia scrub --------------------------------------------
+def test_foreign_macro_lead_dropped():
+    data = {"economics_commentary":
+            "JOLTS at 6.88 matched consensus. Australian government spending was flat in Q1. The Fed stays patient."}
+    assert gmc._scrub_foreign_macro_lead(data) == 1
+    out = data["economics_commentary"]
+    assert "Australian" not in out and "JOLTS" in out and "Fed stays patient" in out
+
+
+def test_us_macro_not_dropped():
+    data = {"economics_commentary": "U.S. payrolls grew 115k and manufacturing held firm."}
+    assert gmc._scrub_foreign_macro_lead(data) == 0
+
+
+# --- safe-haven causal-inversion scrub -------------------------------------
+def test_safe_haven_inversion_clause_stripped():
+    data = {"session_recap": [
+        "Gold fell 1.87% to $4475.20 as geopolitical volatility drove investors toward oil and equities."]}
+    gmc._scrub_safe_haven_inversion(data)
+    assert data["session_recap"][0] == "Gold fell 1.87% to $4475.20."
+
+
+def test_safe_haven_legit_kept():
+    data = {"commodities_commentary": "Gold rose as safe-haven demand increased on war fears."}
+    assert gmc._scrub_safe_haven_inversion(data) == 0
+    assert "safe-haven demand" in data["commodities_commentary"]
+
+
+# --- sanitize_commentary orchestrator --------------------------------------
+def test_sanitize_commentary_idempotent_and_clean():
+    snap = {"U.S. Dollar (DXY)": {"pct_change": 0.29, "pct_change_1w": -0.4}}
+    data = {"session_recap": ["A weaker dollar lifted exporters as Fed hike expectations returned."]}
+    n1 = gmc.sanitize_commentary(data, snap)
+    n2 = gmc.sanitize_commentary(data, snap)
+    assert n1 > 0 and n2 == 0
+    s = data["session_recap"][0]
+    assert "stronger dollar" in s and "higher-for-longer" in s and "hike" not in s.lower()
+
+
+def test_sanitize_scrubs_geo_with_source_text():
+    data = {"pre_market_bullets": ["Markets held gains despite reports of Russian attacks on Kyiv."]}
+    n = gmc.sanitize_commentary(data, {}, source_text="US-Iran ceasefire; OPEC oil output")
+    assert n >= 1 and "Russian" not in data["pre_market_bullets"][0]
+
+
+def test_sanitize_no_source_text_skips_geo():
+    data = {"pre_market_bullets": ["Markets held gains despite Russian attacks on Kyiv."]}
+    gmc.sanitize_commentary(data, {}, source_text="")
+    assert "Russian" in data["pre_market_bullets"][0]  # geo scrub needs the corpus
+
+
+# --- post_run.sync_to_server failure signalling (Fix: silent exit-0 deploy) -
+def test_sync_to_server_returns_false_on_failure(monkeypatch):
+    post_run = pytest.importorskip("post_run")
+    monkeypatch.setattr(post_run, "SYNC_DIRS", ["data"])  # real dir, so .exists() is True
+    monkeypatch.setattr(post_run, "SYNC_PY_FILES", [])
+    monkeypatch.setattr(post_run, "_scp_dir", lambda *a, **k: 1)  # every transfer fails
+    assert post_run.sync_to_server() is False
+
+
+def test_sync_to_server_returns_true_on_success(monkeypatch):
+    post_run = pytest.importorskip("post_run")
+    monkeypatch.setattr(post_run, "SYNC_DIRS", ["data"])
+    monkeypatch.setattr(post_run, "SYNC_PY_FILES", [])
+    monkeypatch.setattr(post_run, "_scp_dir", lambda *a, **k: 0)
+    assert post_run.sync_to_server() is True
