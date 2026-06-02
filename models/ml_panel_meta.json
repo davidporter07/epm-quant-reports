@@ -1,5 +1,5 @@
 {
-  "trained_through": "2026-04-28",
+  "trained_through": "2026-04-30",
   "features": [
     "ret_5d",
     "ret_21d",
@@ -26,8 +26,8 @@
     "quant_score"
   ],
   "selected_algorithm": "GradientBoosting",
-  "validation_rmse": 0.03476717910264502,
-  "trained_at": "2026-05-28T09:01:41",
+  "validation_rmse": 0.034910028309457844,
+  "trained_at": "2026-06-01T22:02:11",
   "rows": 10395,
   "backtest_rows": 21
 }
