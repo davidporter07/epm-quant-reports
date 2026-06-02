@@ -338,3 +338,127 @@ def test_editorial_clean_prose_passes():
     data = {"currencies_commentary": "The dollar fell -0.11% to 98.91 as peace talks progressed."}
     assert gmc._check_editorial_contradictions(data, _SNAP_EDIT) == []
     assert gmc._scrub_false_weekly_claims(data, _SNAP_EDIT) == 0
+
+
+# --- Fix #1: dollar direction + window in recap arrays (2026-06-02) ----------
+# DXY rose +0.29% on the day but fell on the week.
+_SNAP_DXY_UP_WEEK_DOWN = {
+    "U.S. Dollar (DXY)": {"pct_change": 0.29, "pct_change_1w": -0.4, "level": 99.20},
+}
+
+
+def test_weaker_dollar_flipped_to_stronger_in_session_recap():
+    data = {"session_recap": [
+        "Gold fell 1.87% as a weaker dollar drove investors toward oil and equities."]}
+    n = gmc._correct_dollar_direction(data, _SNAP_DXY_UP_WEEK_DOWN)
+    assert n == 1
+    assert "stronger dollar" in data["session_recap"][0]
+    assert "weaker dollar" not in data["session_recap"][0]
+
+
+def test_dollar_weekly_gain_becomes_daily_when_week_down():
+    data = {"session_recap": [
+        "Rising yields powered the dollar's weekly gain and rate expectations firmed."]}
+    gmc._correct_dollar_direction(data, _SNAP_DXY_UP_WEEK_DOWN)
+    assert "daily gain" in data["session_recap"][0]
+    assert "weekly gain" not in data["session_recap"][0]
+
+
+def test_dollar_verb_after_token_flipped():
+    data = {"currencies_commentary": "The dollar weakened on the session."}
+    gmc._correct_dollar_direction(data, _SNAP_DXY_UP_WEEK_DOWN)
+    assert "strengthened" in data["currencies_commentary"]
+
+
+def test_dollar_direction_in_pre_market_bullets():
+    data = {"pre_market_bullets": ["DXY context: a softer dollar capped gold."]}
+    gmc._correct_dollar_direction(data, _SNAP_DXY_UP_WEEK_DOWN)
+    assert "firmer dollar" in data["pre_market_bullets"][0]
+
+
+def test_dollar_correct_prose_left_alone():
+    data = {"currencies_commentary": "The dollar strengthened 0.29% as yields firmed."}
+    before = data["currencies_commentary"]
+    assert gmc._correct_dollar_direction(data, _SNAP_DXY_UP_WEEK_DOWN) == 0
+    assert data["currencies_commentary"] == before
+
+
+def test_dollar_direction_idempotent():
+    data = {"session_recap": ["A weaker dollar lifted exporters."]}
+    gmc._correct_dollar_direction(data, _SNAP_DXY_UP_WEEK_DOWN)
+    once = data["session_recap"][0]
+    gmc._correct_dollar_direction(data, _SNAP_DXY_UP_WEEK_DOWN)
+    assert data["session_recap"][0] == once
+
+
+def test_dollar_direction_noop_on_empty_snapshot():
+    data = {"session_recap": ["A weaker dollar lifted exporters."]}
+    assert gmc._correct_dollar_direction(data, {}) == 0
+
+
+# --- Fix #2: off-narrative geopolitical hallucination scrub ------------------
+_HEADLINES_US_IRAN = "US-Iran ceasefire talks resume; Israel Hezbollah; NVDA Computex AI chips"
+
+
+def test_offnarrative_russia_clause_stripped_from_bullet():
+    data = {"pre_market_bullets": [
+        "Markets held gains as ceasefire hopes persisted despite reports of heavy Russian attacks on Ukrainian cities."]}
+    n = gmc._scrub_offnarrative_geopolitics(data, _HEADLINES_US_IRAN)
+    assert n == 1
+    out = data["pre_market_bullets"][0]
+    assert "Russian" not in out and "Ukrainian" not in out
+    assert "ceasefire hopes persisted" in out
+
+
+def test_offnarrative_russia_clause_stripped_from_prose():
+    data = {"equities_commentary":
+            "The VIX stayed contained at 16.08, reflecting calm despite headlines of heavy Russian attacks on Ukraine."}
+    gmc._scrub_offnarrative_geopolitics(data, _HEADLINES_US_IRAN)
+    assert "Russian" not in data["equities_commentary"]
+    assert "VIX stayed contained" in data["equities_commentary"]
+
+
+def test_offnarrative_main_subject_sentence_dropped():
+    data = {"equities_commentary":
+            "Stocks rose on tech strength. Russian forces shelled Kyiv overnight. The S&P held 7,600."}
+    gmc._scrub_offnarrative_geopolitics(data, _HEADLINES_US_IRAN)
+    assert "Russian" not in data["equities_commentary"]
+    assert "tech strength" in data["equities_commentary"]
+    assert "held 7,600" in data["equities_commentary"]
+
+
+def test_geopolitics_kept_when_present_in_headlines():
+    data = {"pre_market_bullets": ["Oil rose as Russian export sanctions tightened."]}
+    n = gmc._scrub_offnarrative_geopolitics(data, "Russia oil export sanctions widen; OPEC meets")
+    assert n == 0
+    assert "Russian" in data["pre_market_bullets"][0]
+
+
+# --- Fix #3: Fed rate-hike language reframed to higher-for-longer ------------
+def test_fed_hike_expectations_reframed():
+    data = {"fixed_income_commentary": "Yields rose as Fed hike expectations returned."}
+    n = gmc._correct_fed_hike_language(data)
+    assert n == 1
+    assert "hike" not in data["fixed_income_commentary"].lower()
+    assert "higher-for-longer rate expectations" in data["fixed_income_commentary"]
+
+
+def test_fed_hike_midsentence_not_capitalized():
+    data = {"session_recap": ["The 10-year yield rose as Fed hike expectations returned."]}
+    gmc._correct_fed_hike_language(data)
+    assert "as higher-for-longer" in data["session_recap"][0]
+    assert "Higher-for-longer" not in data["session_recap"][0]
+
+
+def test_rate_cut_language_untouched():
+    data = {"fixed_income_commentary": "Yields fell as rate cut hopes returned."}
+    assert gmc._correct_fed_hike_language(data) == 0
+    assert "rate cut hopes" in data["fixed_income_commentary"]
+
+
+def test_fed_hike_idempotent():
+    data = {"economics_commentary": "Rate hike fears drove the dollar up."}
+    gmc._correct_fed_hike_language(data)
+    once = data["economics_commentary"]
+    gmc._correct_fed_hike_language(data)
+    assert data["economics_commentary"] == once

@@ -1732,6 +1732,8 @@ _MACRO_PRINT_SPEC = [
     ("Nonfarm Payrolls",       "Nonfarm Payrolls",          "kth"),
     ("Retail Sales (MoM)",     "Retail Sales (MoM)",        "pct"),
     ("Unemployment Rate",      "Unemployment Rate",         "pct"),
+    ("PPI (YoY)",              "PPI (YoY)",                 "pct"),
+    ("Consumer Sentiment",     "Consumer Sentiment",        "raw"),
 ]
 
 
@@ -1810,6 +1812,7 @@ Do not invent figures or events not in the payload.
 Do NOT attribute geopolitical actions, policy proposals, or peace initiatives to specific companies or financial institutions — if a headline mentions a bank alongside a geopolitical event, the bank is a commentator or stakeholder, not the actor proposing the policy.
 Do NOT escalate the severity of geopolitical events beyond the exact language in the payload — if headlines say "tensions" or "conflict", do not write "war"; if they say "negotiations", do not write "deal reached".
 NARRATIVE COHERENCE: All sections must describe the same geopolitical reality. If one section cites escalating risk ("expanded strikes", "rising tensions"), no other section may simultaneously frame the same situation as de-escalating ("easing tensions", "peace deal hopes", "ceasefire optimism"). Pick the dominant tone from the headlines payload and apply it consistently across every section.
+LEAD WITH THE MARKET DRIVER, NOT ONE HEADLINE: identify what actually moved the tape from the DATA — the leading/lagging sectors (sector_top3/sector_bottom3) and the biggest single-name movers — and lead with that. Do NOT frame the entire session around one geopolitical storyline (e.g., a ceasefire) when sector and price action point elsewhere: if Technology leads on AI/earnings while geopolitics is a side note, the lead is the tech/AI move and geopolitics is secondary context — not the headline. Avoid monothematic commentary where every section repeats the same single theme; each section should add a distinct, data-grounded angle.
 ONE-SHOT CALIBRATION — geopolitical tone (follow this pattern exactly):
   Headline in payload: "U.S. and Israel expand strikes near Iranian facilities; diplomatic talks stall"
   BAD: "Mounting costs of the Iran war strain U.S. finances as the conflict widens."
@@ -1883,6 +1886,7 @@ currencies_commentary: 4-5 sentences. DXY direction and level. Rate differential
 
 economics_commentary: 4-5 sentences. RECAP LATEST READINGS FIRST: recent_macro_prints is a list of {indicator, actual, prior, as_of} carrying the ACTUAL figures — open by recapping the 1-2 most important entries (prioritise Core PCE, GDP, jobless claims, CPI, payrolls), citing indicator + actual + prior and interpreting the beat/miss vs prior. PHRASING: weekly jobless claims may be called "the latest weekly jobless claims (215k vs 210k prior)"; monthly/quarterly series MUST be referred to as "the latest [indicator] reading" (e.g. "the latest Core PCE reading at 3.3% YoY vs 3.2% prior") — do NOT assert a specific release weekday for them, because the payload gives the observation period, not the publication date. NUMBER SOURCE (non-negotiable): cite macro figures ONLY from recent_macro_prints — NEVER invent or round a number outside that list (the prior report fabricated "211k in line with 211k prior"; the real value was 215k vs 210k). If recent_macro_prints is empty, cite no specific macro figure. Never frame a past reading as an upcoming release. After the recap, give macro-cycle context (soft landing, slowdown, re-acceleration) and the Fed rate-trajectory implication. Do NOT reproduce the example numbers above as literal output.
   DATE GUARD (critical): If todays_economic_events is EMPTY there is NO release scheduled today — do NOT write that any report is "scheduled today", "due this morning", or "at 8:30 AM ET today", and do NOT invent a release that is not in todays_economic_events or week_ahead_econ_events. Refer to any upcoming release by its WEEKDAY (e.g., "Thursday's GDP report"), and anchor the paragraph in the macro cycle rather than a fictitious same-day calendar.
+  RELEVANCE GUARD (critical): The recap MUST center on the most market-relevant U.S. macro releases in recent_macro_prints. Do NOT lead with, or feature, a minor or foreign data point (e.g., a foreign government's quarterly spending, an overseas survey) — if it is not in recent_macro_prints it does not belong in the recap at all. Do NOT open economics_commentary with an event that is still UPCOMING today (e.g., a JOLTS or ADP print due later today) framed as if it already printed; upcoming releases belong in watch_today as forward catalysts, not in the recap.
 
 ONE-SHOT EXAMPLE — bullet format reference ONLY. Use payload-specific numbers; do NOT copy these specifics:
 {"pre_market_bullets":["Markets closed mixed — S&P 500 -0.12%, Nasdaq 100 +0.08%; megacap tech offset weakness in regional banks after Q1 deposit guidance.","Hang Seng rose 0.9% as PBoC drained liquidity at a slower pace, easing Q2 tightening fears.","Key data today: ISM Services PMI (high importance) at 10:00 AM ET — consensus 52.0 vs prior 51.4; a beat would reinforce the soft-landing thesis and add upward pressure to long-end yields.","10-yr yield fell 3 bps to 4.36%; breakevens widened on stronger jobless claims.","WTI rose 1.2% to $77.40 on OPEC+ extending production cuts through Q3."],"equities_commentary":"...","fixed_income_commentary":"...","commodities_commentary":"...","currencies_commentary":"...","economics_commentary":"..."}"""
@@ -2051,6 +2055,7 @@ Rules:
 - has_spotlight=false for generic broad-market moves (routine S&P daily move, standard Fed statement, typical earnings).
 - Topics must have direct investment implications: an IPO filing, geopolitical event affecting energy/trade/rates, sector breakthrough, macro regime shift.
 - If no single dominant topic, set has_spotlight=false and all other fields to empty strings or empty arrays.
+- PREFER THE MARKET DRIVER: sector_leaders shows what actually moved the tape. If a sector posted a clear move (>=1.5%) AND headlines corroborate a theme behind it (e.g., Technology leading with AI/chip/Computex headlines), choose THAT theme over a geopolitical storyline that did not drive prices. A geopolitical topic should win only when it BOTH dominates the headlines AND is consistent with the day's sector/price action — do not default to the loudest geopolitical headline when the data points to a different driver.
 
 ONE-SHOT EXAMPLE:
 Input headlines include 6 articles about SpaceX filing an IPO prospectus.
@@ -2975,6 +2980,13 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
     for alias, canonical in LLM_KEY_ALIASES.items():
         if alias in merged and canonical not in merged:
             merged[canonical] = merged.pop(alias)
+
+    # Scrub hallucinated off-narrative conflicts (e.g. "Russian attacks on Ukrainian
+    # cities" injected into a US-Iran session) — any conflict entity absent from the
+    # source headline corpus is fabricated. Runs here where flat_headlines is in scope.
+    geo_scrubbed = _scrub_offnarrative_geopolitics(merged, " ".join(flat_headlines))
+    if geo_scrubbed:
+        print(f"[VALIDATE] Scrubbed off-narrative geopolitical hallucination from {geo_scrubbed} field(s).")
 
     # Strip any keys not in the expected output schema — prevents LLM "response",
     # "portfolio_spotlight_losers", "summary", and other hallucinated fields from
@@ -3968,11 +3980,12 @@ def _correct_direction_words(data: dict, snapshot: dict) -> int:
                 if nv != av["rationale"]:
                     av["rationale"] = nv
 
-    recap = data.get("session_recap")
-    if isinstance(recap, list):
-        data["session_recap"] = [
-            _fix_field(x) if isinstance(x, str) else x for x in recap
-        ]
+    for list_field in ("session_recap", "pre_market_bullets"):
+        recap = data.get(list_field)
+        if isinstance(recap, list):
+            data[list_field] = [
+                _fix_field(x) if isinstance(x, str) else x for x in recap
+            ]
 
     return fixes
 
@@ -4272,6 +4285,253 @@ def _scrub_false_weekly_claims(data: dict, snapshot: dict) -> int:
     return fixes
 
 
+# --- shared prose-field iteration for deterministic correctors --------------
+# session_recap + pre_market_bullets are list fields generated on a separate LLM
+# call (Call 3 / Call 1) that the earlier per-field correctors only partially
+# covered. Regression 2026-06-02: every direction/window/hallucination error this
+# run lived in session_recap or pre_market_bullets while the structured narrative
+# was clean. This helper lets the new correctors sweep EVERY rendered text field.
+_ALL_PROSE_FIELDS = (
+    "equities_commentary", "fixed_income_commentary", "commodities_commentary",
+    "currencies_commentary", "economics_commentary", "cross_asset_synthesis",
+    "market_outlook_rationale", "international_section",
+)
+_ALL_PROSE_LISTS = ("session_recap", "pre_market_bullets", "watch_today")
+
+
+def _map_all_prose(data: dict, fn) -> int:
+    """Apply fn(str)->str to every prose field, recap/bullet list item, and each
+    asset_class_outlooks rationale. Returns the number of fields/lists changed."""
+    changed = 0
+    for field in _ALL_PROSE_FIELDS:
+        v = data.get(field)
+        if isinstance(v, str) and v:
+            nv = fn(v)
+            if nv != v:
+                data[field] = nv
+                changed += 1
+    for field in _ALL_PROSE_LISTS:
+        lst = data.get(field)
+        if isinstance(lst, list):
+            new, any_ch = [], False
+            for it in lst:
+                if isinstance(it, str):
+                    ni = fn(it)
+                    if ni != it:
+                        any_ch = True
+                    new.append(ni)
+                else:
+                    new.append(it)
+            if any_ch:
+                data[field] = new
+                changed += 1
+    aco = data.get("asset_class_outlooks")
+    if isinstance(aco, dict):
+        for av in aco.values():
+            if isinstance(av, dict) and isinstance(av.get("rationale"), str) and av["rationale"]:
+                nv = fn(av["rationale"])
+                if nv != av["rationale"]:
+                    av["rationale"] = nv
+                    changed += 1
+    return changed
+
+
+# --- dollar direction + window correction (Fix: recap arrays bypass guards) -
+# _DIR_KW_MAP only matches "dollar index"/"dxy", so bare-"dollar" prose slipped the
+# direction-word corrector, and a multi-day WINDOW claim is invisible to a day-change
+# check. Regression 2026-06-02 session_recap: "rising yields powered the dollar's
+# weekly gain" (DXY +0.29% on the DAY but DOWN on the WEEK) and "a weaker dollar ...
+# drove investors toward oil" (DXY rose on the day). Rewrite bare-dollar adjectives +
+# verbs to the day sign, and "weekly gain/loss" to "daily" when the week disagrees.
+_DOLLAR_TOKEN_RE = re.compile(r"\b(?:dollar|greenback|dxy)\b", re.IGNORECASE)
+_DOLLAR_ADJ_UP = {  # snapshot UP → flip these weak adjectives to strong
+    "weaker": "stronger", "softer": "firmer", "weak": "strong", "soft": "firm",
+    "weakening": "strengthening", "softening": "firming",
+}
+_DOLLAR_ADJ_DOWN = {v: k for k, v in _DOLLAR_ADJ_UP.items()}  # snapshot DOWN → inverse
+_DOLLAR_VERB_UP = {  # snapshot UP → flip these down-verbs to up
+    "weakened": "strengthened", "softened": "firmed", "slipped": "rose", "fell": "rose",
+    "slid": "climbed", "eased": "firmed", "declined": "advanced", "dropped": "climbed",
+    "lost": "gained", "sank": "surged",
+}
+_DOLLAR_VERB_DOWN = {  # snapshot DOWN → flip these up-verbs to down
+    "strengthened": "weakened", "firmed": "softened", "rose": "fell", "climbed": "slid",
+    "advanced": "declined", "gained": "lost", "rallied": "fell", "jumped": "dropped",
+    "surged": "sank",
+}
+_DOLLAR_GAIN_NOUNS = ("gains", "gain", "advance", "rally", "run", "strength")
+_DOLLAR_LOSS_NOUNS = ("losses", "loss", "decline", "weakness", "drop", "slide", "pullback")
+
+
+def _correct_dollar_direction(data: dict, snapshot: dict) -> int:
+    """Rewrite bare-dollar direction adjectives/verbs to the DXY day sign and convert
+    'weekly gain/loss' to 'daily' when the week's sign disagrees. Mutates in place."""
+    if not snapshot:
+        return 0
+    dxy = snapshot.get("U.S. Dollar (DXY)") or {}
+    day = dxy.get("pct_change")
+    wk = dxy.get("pct_change_1w")
+    if day is not None and abs(day) < 0.02:
+        day = None
+    if day is None and wk is None:
+        return 0
+
+    adj_map = verb_map = None
+    if day is not None:
+        adj_map = _DOLLAR_ADJ_UP if day > 0 else _DOLLAR_ADJ_DOWN
+        verb_map = _DOLLAR_VERB_UP if day > 0 else _DOLLAR_VERB_DOWN
+        adj_re = re.compile(
+            r"\b(" + "|".join(map(re.escape, adj_map)) + r")(\s+(?:u\.?s\.?\s+)?(?:dollar|greenback|dxy))",
+            re.IGNORECASE)
+        verb_re = re.compile(
+            r"((?:dollar|greenback|dxy)(?:'s)?\s+(?:\w+\s+){0,1})("
+            + "|".join(map(re.escape, verb_map)) + r")\b",
+            re.IGNORECASE)
+    win_re = None
+    if wk is not None and abs(wk) >= 0.05:
+        nouns = _DOLLAR_GAIN_NOUNS if wk < 0 else _DOLLAR_LOSS_NOUNS
+        win_re = re.compile(r"\bweekly(\s+(?:" + "|".join(nouns) + r"))\b", re.IGNORECASE)
+
+    def _case(repl: str, orig: str) -> str:
+        return repl[0].upper() + repl[1:] if orig[:1].isupper() else repl
+
+    def _fix(text: str) -> str:
+        out = []
+        for sent in re.split(r"(?<=[.!?])\s+", text):
+            if not _DOLLAR_TOKEN_RE.search(sent):
+                out.append(sent)
+                continue
+            new = sent
+            if adj_map:
+                new = adj_re.sub(lambda m: _case(adj_map[m.group(1).lower()], m.group(1)) + m.group(2), new)
+                new = verb_re.sub(lambda m: m.group(1) + _case(verb_map[m.group(2).lower()], m.group(2)), new)
+            if win_re is not None:
+                new = win_re.sub(
+                    lambda m: ("Daily" if m.group(0)[:1].isupper() else "daily") + m.group(1), new)
+            out.append(new)
+        return " ".join(out)
+
+    return _map_all_prose(data, _fix)
+
+
+# --- off-narrative geopolitical hallucination scrub ------------------------
+# Regression 2026-06-02: a US-Iran/Middle-East session had "heavy Russian attacks on
+# Ukrainian cities" injected into pre_market_bullets + equities_commentary — a conflict
+# absent from every source headline. A named conflict entity that appears NOWHERE in the
+# source corpus is a hallucination: strip the subordinate clause that carries it, or drop
+# the whole sentence/bullet if the entity is the main subject.
+_GEO_ENTITY_RES = [
+    re.compile(r"\b(?:russia|russian|moscow|kremlin|putin|ukraine|ukrainian|kyiv|kiev|zelensky)\b", re.IGNORECASE),
+    re.compile(r"\b(?:north\s+korea|north\s+korean|pyongyang|kim\s+jong)\b", re.IGNORECASE),
+    re.compile(r"\b(?:venezuela|venezuelan|maduro|caracas)\b", re.IGNORECASE),
+]
+_GEO_CLAUSE_BOUNDARY_RE = re.compile(
+    r"\s+(?:despite|amid|as|while|after|following|even\s+as|though|although|on\s+reports|on\s+news)\b",
+    re.IGNORECASE)
+
+
+def _scrub_offnarrative_geopolitics(data: dict, source_text: str) -> int:
+    """Remove conflict-entity mentions that are absent from the source corpus."""
+    src = (source_text or "").lower()
+    off = [rx for rx in _GEO_ENTITY_RES if not rx.search(src)]
+    if not off:
+        return 0
+
+    def _present(s: str) -> bool:
+        return any(rx.search(s) for rx in off)
+
+    def _clean_sentence(sent: str):
+        if not _present(sent):
+            return sent
+        best = None
+        for m in _GEO_CLAUSE_BOUNDARY_RE.finditer(sent):
+            head, tail = sent[:m.start()], sent[m.start():]
+            if _present(tail) and not _present(head) and len(head.strip()) > 15:
+                best = m.start()
+        if best is not None:
+            h = sent[:best].rstrip(" ,;:")
+            if h and h[-1] not in ".!?":
+                h += "."
+            return h
+        return None  # entity in main clause → drop sentence
+
+    fixes = 0
+    for field in _ALL_PROSE_FIELDS:
+        v = data.get(field)
+        if not isinstance(v, str) or not v or not _present(v):
+            continue
+        kept = [cs for sent in re.split(r"(?<=[.!?])\s+", v)
+                if (cs := _clean_sentence(sent))]
+        nv = " ".join(kept).strip()
+        if nv != v:
+            data[field] = nv
+            fixes += 1
+    for field in _ALL_PROSE_LISTS:
+        lst = data.get(field)
+        if not isinstance(lst, list):
+            continue
+        new, ch = [], False
+        for it in lst:
+            if isinstance(it, str) and _present(it):
+                ch = True
+                cs = _clean_sentence(it)
+                if cs:
+                    new.append(cs)
+            else:
+                new.append(it)
+        if ch:
+            data[field] = new
+            fixes += 1
+    aco = data.get("asset_class_outlooks")
+    if isinstance(aco, dict):
+        for av in aco.values():
+            if isinstance(av, dict) and isinstance(av.get("rationale"), str) and _present(av["rationale"]):
+                kept = [cs for sent in re.split(r"(?<=[.!?])\s+", av["rationale"])
+                        if (cs := _clean_sentence(sent))]
+                nv = " ".join(kept).strip()
+                if nv != av["rationale"]:
+                    av["rationale"] = nv
+                    fixes += 1
+    return fixes
+
+
+# --- Fed "rate hike" language correction -----------------------------------
+# The report has no rate-expectations feed, and in the current regime the Fed is not
+# expected to HIKE — the live debate is cuts vs. higher-for-longer. Regression 2026-06-02:
+# "Fed hike expectations returned/renewed" across fixed_income/currencies/economics/
+# session_recap. Reframe to the defensible "higher-for-longer" (preserving the hawkish
+# polarity that matched the day's +yield/+dollar). Idempotent — leaves no "hike" to re-hit.
+_FED_HIKE_SUBS = [
+    (re.compile(r"\b(?:renewed|rising|growing|fresh)\s+(?:rate[\-\s]?hike|fed[\-\s]?hike|hike)\s+expectations\b", re.IGNORECASE),
+     "renewed higher-for-longer rate expectations"),
+    (re.compile(r"\b(?:rate[\-\s]?hike|fed[\-\s]?hike|hike)\s+expectations\b", re.IGNORECASE),
+     "higher-for-longer rate expectations"),
+    (re.compile(r"\b(?:rate[\-\s]?hike|hike)\s+fears\b", re.IGNORECASE),
+     "higher-for-longer rate concerns"),
+    (re.compile(r"\b(?:rate[\-\s]?hike|hike)\s+bias\b", re.IGNORECASE),
+     "higher-for-longer bias"),
+    (re.compile(r"\bfed\s+rate\s+hikes?\b", re.IGNORECASE),
+     "a higher-for-longer Fed"),
+    (re.compile(r"\brate\s+hikes?\b", re.IGNORECASE),
+     "a higher-for-longer rate path"),
+]
+
+
+def _correct_fed_hike_language(data: dict) -> int:
+    """Reframe unsupported Fed rate-HIKE claims as 'higher-for-longer'. Mutates in place.
+    Capitalizes the replacement only at a sentence start (the matched token is often the
+    proper noun 'Fed', which must not force a mid-sentence capital)."""
+    def _fix(text: str) -> str:
+        for rx, repl in _FED_HIKE_SUBS:
+            def _sub(m, r=repl, _t=text):
+                prev = _t[:m.start()].rstrip()
+                at_start = (not prev) or prev[-1] in ".!?:"
+                return (r[0].upper() + r[1:]) if at_start else r
+            text = rx.sub(_sub, text)
+        return text
+    return _map_all_prose(data, _fix)
+
+
 def _atomic_write_json(path: Path, data: dict) -> None:
     """Write JSON atomically via a temp file + os.replace to avoid partial writes."""
     tmp = path.with_suffix(".json.tmp")
@@ -4412,6 +4672,12 @@ def validate_commentary(data: dict, known_tickers: set = None, snapshot: dict = 
         weekly_scrubbed = _scrub_false_weekly_claims(data, snapshot)
         if weekly_scrubbed:
             print(f"[CORRECT] Scrubbed {weekly_scrubbed} false weekly/superlative claim(s) in merged commentary.")
+        dollar_fixes = _correct_dollar_direction(data, snapshot)
+        if dollar_fixes:
+            print(f"[CORRECT] Auto-corrected {dollar_fixes} dollar direction/window claim(s) in merged commentary.")
+        fed_fixes = _correct_fed_hike_language(data)
+        if fed_fixes:
+            print(f"[CORRECT] Reframed {fed_fixes} unsupported Fed rate-hike claim(s) to higher-for-longer.")
         violations = _check_numeric_consistency(data, snapshot)
         if violations:
             print(f"[VALIDATE] Numeric consistency violations vs market_snapshot: {violations}")
@@ -4788,9 +5054,16 @@ def generate_topic_spotlight(
         return None
 
     # ── LLM topic scan ────────────────────────────────────────────────────────
+    _scan_sectors = [
+        {"name": s.get("name"), "pct_change": s.get("pct_change")}
+        for s in (payload.get("sector_performance") or [])
+        if s.get("name") and s.get("pct_change") is not None
+    ]
     scan_payload = {
         "headlines": [{"index": i, "text": h["text"][:300]} for i, h in enumerate(headline_corpus[:40])],
         "date": payload.get("date", ""),
+        "sector_leaders": (sorted(_scan_sectors, key=lambda s: s["pct_change"], reverse=True)[:3]
+                           + sorted(_scan_sectors, key=lambda s: s["pct_change"])[:2]),
     }
     scan_result: dict = {}
     try:
