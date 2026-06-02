@@ -129,6 +129,16 @@ def init_db() -> None:
             conn.execute("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0")
             conn.commit()
 
+        # Migration: daily-recap email subscription. email_opt_in = user asked to
+        # receive the daily email; email_confirmed = they clicked the double-opt-in
+        # link. A user only receives mail when BOTH are 1 (see get_confirmed_subscribers).
+        if "email_opt_in" not in existing_prefs_cols:
+            conn.execute("ALTER TABLE user_prefs ADD COLUMN email_opt_in INTEGER NOT NULL DEFAULT 0")
+            conn.commit()
+        if "email_confirmed" not in existing_prefs_cols:
+            conn.execute("ALTER TABLE user_prefs ADD COLUMN email_confirmed INTEGER NOT NULL DEFAULT 0")
+            conn.commit()
+
 
 # ---------------------------------------------------------------------------
 # Shared error type
@@ -160,8 +170,13 @@ def _verify_password(plain: str, stored_hash: str) -> bool:
 # User management
 # ---------------------------------------------------------------------------
 
-def register_user(username: str, password: str, email: str) -> dict[str, Any]:
-    """Create a new user. Returns the user dict. Raises AuthError on failure."""
+def register_user(username: str, password: str, email: str, email_opt_in: bool = False) -> dict[str, Any]:
+    """Create a new user. Returns the user dict. Raises AuthError on failure.
+
+    email_opt_in records the signup-form "email me the daily recap" checkbox. It
+    only sets the opt-in flag; the user must still confirm via the double-opt-in
+    link before any mail is sent (email_confirmed stays 0 here).
+    """
     username = username.strip()
     email = email.strip().lower()
 
@@ -182,7 +197,10 @@ def register_user(username: str, password: str, email: str) -> dict[str, Any]:
                 (username, pw_hash, email),
             )
             user_id = cur.lastrowid
-            conn.execute("INSERT INTO user_prefs (user_id) VALUES (?)", (user_id,))
+            conn.execute(
+                "INSERT INTO user_prefs (user_id, email_opt_in) VALUES (?, ?)",
+                (user_id, 1 if email_opt_in else 0),
+            )
             conn.commit()
     except sqlite3.IntegrityError as exc:
         msg = str(exc).lower()
@@ -224,6 +242,18 @@ def get_user_by_email(email: str) -> dict[str, Any] | None:
     return {"id": row["id"], "username": row["username"], "email": row["email"]}
 
 
+def get_user_by_id(user_id: int) -> dict[str, Any] | None:
+    """Look up a user by id. Returns None if not found."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT id, username, email FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {"id": row["id"], "username": row["username"], "email": row["email"]}
+
+
 # ---------------------------------------------------------------------------
 # JWT
 # ---------------------------------------------------------------------------
@@ -255,6 +285,106 @@ def decode_token(token: str) -> dict[str, Any]:
         raise AuthError("Session expired. Please log in again.", status_code=401)
     except jwt.InvalidTokenError:
         raise AuthError("Invalid session token.", status_code=401)
+
+
+# ---------------------------------------------------------------------------
+# Email subscription tokens (stateless — signed with the same JWT secret).
+# Used for double-opt-in confirmation and one-click unsubscribe links. No DB
+# table needed: the token IS the proof. `purpose` namespaces the two link types
+# so a confirm token can't be replayed as an unsubscribe and vice-versa.
+# ---------------------------------------------------------------------------
+
+EMAIL_PURPOSE_CONFIRM = "email_confirm"
+EMAIL_PURPOSE_UNSUB = "email_unsub"
+
+
+def make_email_token(user_id: int, purpose: str, ttl_hours: int | None = None) -> str:
+    """Mint a signed token for an email link. ttl_hours=None → no expiry
+    (unsubscribe links must keep working indefinitely)."""
+    payload: dict[str, Any] = {"sub": str(user_id), "purpose": purpose}
+    if ttl_hours is not None:
+        payload["exp"] = datetime.now(tz=timezone.utc) + timedelta(hours=ttl_hours)
+    return jwt.encode(payload, _JWT_SECRET, algorithm=_TOKEN_ALGORITHM)
+
+
+def verify_email_token(token: str, purpose: str) -> int:
+    """Validate an email token for the expected purpose. Returns user_id.
+    Raises AuthError if invalid, expired, or the purpose doesn't match."""
+    try:
+        payload = jwt.decode(token, _JWT_SECRET, algorithms=[_TOKEN_ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise AuthError("This link has expired. Please request a new one.", status_code=400)
+    except jwt.InvalidTokenError:
+        raise AuthError("This link is invalid or malformed.", status_code=400)
+    if payload.get("purpose") != purpose:
+        raise AuthError("This link is invalid.", status_code=400)
+    try:
+        return int(payload["sub"])
+    except (KeyError, ValueError, TypeError):
+        raise AuthError("This link is invalid.", status_code=400)
+
+
+# ---------------------------------------------------------------------------
+# Email subscription state
+# ---------------------------------------------------------------------------
+
+def _ensure_prefs_row(user_id: int) -> None:
+    with _get_conn() as conn:
+        conn.execute("INSERT OR IGNORE INTO user_prefs (user_id) VALUES (?)", (user_id,))
+        conn.commit()
+
+
+def set_email_opt_in(user_id: int, opted_in: bool) -> None:
+    """Turn the daily-recap subscription on/off. Turning it off does NOT clear
+    email_confirmed, so re-subscribing a previously confirmed address skips the
+    double-opt-in step."""
+    _ensure_prefs_row(user_id)
+    with _get_conn() as conn:
+        conn.execute(
+            "UPDATE user_prefs SET email_opt_in = ? WHERE user_id = ?",
+            (1 if opted_in else 0, user_id),
+        )
+        conn.commit()
+
+
+def set_email_confirmed(user_id: int, confirmed: bool = True) -> None:
+    _ensure_prefs_row(user_id)
+    with _get_conn() as conn:
+        conn.execute(
+            "UPDATE user_prefs SET email_confirmed = ? WHERE user_id = ?",
+            (1 if confirmed else 0, user_id),
+        )
+        conn.commit()
+
+
+def get_email_subscription(user_id: int) -> dict[str, bool]:
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT email_opt_in, email_confirmed FROM user_prefs WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+    if row is None:
+        return {"email_opt_in": False, "email_confirmed": False}
+    return {
+        "email_opt_in": bool(row["email_opt_in"]),
+        "email_confirmed": bool(row["email_confirmed"]),
+    }
+
+
+def get_confirmed_subscribers() -> list[dict[str, Any]]:
+    """All users who opted in AND confirmed AND have an email. This is the
+    daily-recap recipient list, served to the laptop via the internal endpoint."""
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT u.id AS user_id, u.username, u.email "
+            "FROM users u JOIN user_prefs p ON p.user_id = u.id "
+            "WHERE p.email_opt_in = 1 AND p.email_confirmed = 1 "
+            "AND u.email IS NOT NULL AND u.email != ''"
+        ).fetchall()
+    return [
+        {"user_id": r["user_id"], "username": r["username"], "email": r["email"]}
+        for r in rows
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -332,16 +462,22 @@ def reset_password(user_id: int, new_password: str) -> None:
 def get_user_prefs(user_id: int) -> dict[str, Any]:
     with _get_conn() as conn:
         row = conn.execute(
-            "SELECT featured_tickers, tape_tickers, profile_color, profile_avatar FROM user_prefs WHERE user_id = ?",
+            "SELECT featured_tickers, tape_tickers, profile_color, profile_avatar, "
+            "email_opt_in, email_confirmed FROM user_prefs WHERE user_id = ?",
             (user_id,),
         ).fetchone()
     if row is None:
-        return {"featured_tickers": [], "tape_tickers": [], "profile_color": "#2563eb", "profile_avatar": ""}
+        return {
+            "featured_tickers": [], "tape_tickers": [], "profile_color": "#2563eb",
+            "profile_avatar": "", "email_opt_in": False, "email_confirmed": False,
+        }
     return {
         "featured_tickers": json.loads(row["featured_tickers"] or "[]"),
         "tape_tickers": json.loads(row["tape_tickers"] or "[]"),
         "profile_color": row["profile_color"] or "#2563eb",
         "profile_avatar": row["profile_avatar"] or "",
+        "email_opt_in": bool(row["email_opt_in"]),
+        "email_confirmed": bool(row["email_confirmed"]),
     }
 
 

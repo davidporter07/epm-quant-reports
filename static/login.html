@@ -407,6 +407,16 @@
           </div>
         </div>
 
+        <div class="form-group" id="emailOptInGroup" style="display:none;">
+          <label class="remember-row">
+            <input type="checkbox" class="remember-check" id="emailOptIn" name="email_opt_in" />
+            <span class="remember-label">Email me the daily market recap</span>
+          </label>
+          <div style="font-size:11px;color:var(--text-3,#526886);margin-top:5px;">
+            We'll send a confirmation link first. Unsubscribe anytime.
+          </div>
+        </div>
+
         <div class="form-group">
           <label class="form-label" for="passwordInput">Password</label>
           <input class="form-input" type="password" id="passwordInput" name="password"
@@ -562,6 +572,7 @@
         document.getElementById('modeToggleText').textContent  = 'Already have an account?';
         document.getElementById('modeToggleLink').textContent  = 'Sign in';
         document.getElementById('emailGroup').style.display    = '';
+        document.getElementById('emailOptInGroup').style.display = '';
         rememberRow.style.display = 'none';
         document.getElementById('passwordInput').autocomplete  = 'new-password';
       } else {
@@ -571,6 +582,7 @@
         document.getElementById('modeToggleText').textContent  = "Don't have an account?";
         document.getElementById('modeToggleLink').textContent  = 'Create one';
         document.getElementById('emailGroup').style.display    = 'none';
+        document.getElementById('emailOptInGroup').style.display = 'none';
         rememberRow.style.display = '';
         document.getElementById('passwordInput').autocomplete  = 'current-password';
       }
@@ -634,8 +646,9 @@
       msgEl.className = 'form-message';
 
       const endpoint = isRegisterMode ? '/api/auth/register' : '/api/auth/login';
+      const emailOptIn = isRegisterMode && document.getElementById('emailOptIn').checked;
       const payload  = isRegisterMode
-        ? { username, password, email }
+        ? { username, password, email, email_opt_in: emailOptIn }
         : { username, password, remember_me: rememberMe };
 
       try {

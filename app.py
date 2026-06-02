@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hmac
 import json
 import os
 import re
@@ -15,7 +16,7 @@ import pandas as pd
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -24,19 +25,32 @@ from services.market_board_service import MarketBoardService
 from services.ticker_page_service import TickerPageService
 from services.auth_service import (
     AuthError,
+    EMAIL_PURPOSE_CONFIRM,
+    EMAIL_PURPOSE_UNSUB,
     change_username,
     consume_reset_token,
     create_reset_token,
     create_token,
     decode_token,
+    get_confirmed_subscribers,
+    get_email_subscription,
     get_user_by_email,
+    get_user_by_id,
     get_user_prefs,
+    make_email_token,
     register_user,
     reset_password,
+    set_email_confirmed,
+    set_email_opt_in,
     set_user_prefs,
+    verify_email_token,
     verify_login,
 )
-from services.email_service import EmailError, send_password_reset_email
+from services.email_service import (
+    EmailError,
+    send_password_reset_email,
+    send_subscription_confirmation_email,
+)
 from deep_analysis_worker import (cancel_job, enqueue, get_job_status, get_today_cached_job,
                                    invalidate_today_cache, start_worker, stop_worker, worker_status)
 
@@ -46,6 +60,25 @@ DATA_DIR = BASE_DIR / "data"
 
 # Cookie security: set SECURE_COOKIES=false in local dev (HTTP); always true in production (HTTPS).
 _SECURE_COOKIES = os.environ.get("SECURE_COOKIES", "true").lower() not in ("false", "0", "no")
+
+# Public site origin used to build email links (confirm/unsubscribe). Falls back to
+# the request's own base_url when unset. MUST be the public domain in production so
+# links in emails point at epm-market-intelligence.com, not an internal host.
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").strip().rstrip("/")
+
+# Shared secret guarding the internal subscriber-list endpoint the laptop pipeline
+# calls over Tailscale. If unset, the endpoint is disabled (returns 403).
+INTERNAL_API_KEY = os.environ.get("INTERNAL_API_KEY", "").strip()
+
+
+def _public_base_url(request: Request | None = None) -> str:
+    """Origin for links embedded in emails. Prefers PUBLIC_BASE_URL; falls back to
+    the request's base_url."""
+    if PUBLIC_BASE_URL:
+        return PUBLIC_BASE_URL
+    if request is not None:
+        return str(request.base_url).rstrip("/")
+    return ""
 
 _COOKIE_MAX_AGE_SHORT = 72 * 3600    # 3 days (no remember-me)
 _COOKIE_MAX_AGE_LONG  = 720 * 3600   # 30 days (remember-me)
@@ -1009,6 +1042,11 @@ class RegisterRequest(BaseModel):
     username: str
     password: str
     email: str
+    email_opt_in: bool = False
+
+
+class EmailPrefsUpdate(BaseModel):
+    email_opt_in: bool
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -1084,17 +1122,26 @@ async def api_login(body: LoginRequest) -> JSONResponse:
 
 
 @app.post("/api/auth/register")
-async def api_register(body: RegisterRequest) -> JSONResponse:
+async def api_register(request: Request, body: RegisterRequest) -> JSONResponse:
     try:
-        user = register_user(body.username, body.password, body.email)
+        user = register_user(body.username, body.password, body.email, email_opt_in=body.email_opt_in)
     except AuthError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc))
+    # If they opted in at signup, send the double-opt-in confirmation. Never let a
+    # mail failure break account creation.
+    if body.email_opt_in:
+        try:
+            token = make_email_token(user["id"], EMAIL_PURPOSE_CONFIRM, ttl_hours=168)
+            confirm_url = f"{_public_base_url(request)}/email/confirm?t={token}"
+            send_subscription_confirmation_email(user["email"], user["username"], confirm_url)
+        except Exception:
+            pass
     token = create_token(user, remember_me=False)
     response = JSONResponse({
         "ok": True,
         "remember_me": False,
         "user": {"id": user["id"], "username": user["username"]},
-        "prefs": {"featured_tickers": [], "tape_tickers": []},
+        "prefs": get_user_prefs(user["id"]),
     })
     _set_auth_cookie(response, token, remember_me=False)
     return response
@@ -1174,6 +1221,115 @@ async def api_set_prefs(request: Request, body: UserPrefsUpdate) -> JSONResponse
         profile_avatar=body.profile_avatar,
     )
     return JSONResponse({"ok": True, "prefs": prefs})
+
+
+@app.post("/api/user/email-prefs")
+async def api_set_email_prefs(request: Request, body: EmailPrefsUpdate) -> JSONResponse:
+    """Toggle the daily-recap subscription. Turning it on for an unconfirmed
+    address triggers a double-opt-in confirmation email."""
+    payload = _require_user(request)
+    user_id = int(payload["sub"])
+    set_email_opt_in(user_id, body.email_opt_in)
+    sub = get_email_subscription(user_id)
+    confirmation_sent = False
+    if body.email_opt_in and not sub["email_confirmed"]:
+        user = get_user_by_id(user_id)
+        if user and user.get("email"):
+            try:
+                token = make_email_token(user_id, EMAIL_PURPOSE_CONFIRM, ttl_hours=168)
+                confirm_url = f"{_public_base_url(request)}/email/confirm?t={token}"
+                send_subscription_confirmation_email(user["email"], user["username"], confirm_url)
+                confirmation_sent = True
+            except Exception:
+                pass
+    return JSONResponse({
+        "ok": True,
+        "email_opt_in": sub["email_opt_in"],
+        "email_confirmed": sub["email_confirmed"],
+        "confirmation_sent": confirmation_sent,
+    })
+
+
+def _email_action_page(title: str, message: str) -> str:
+    """Minimal standalone HTML page for confirm/unsubscribe landings."""
+    return f"""<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title} — EPM Market Intelligence</title>
+<style>
+  body{{font-family:Inter,system-ui,sans-serif;background:#f5f8fd;margin:0;padding:0;color:#0d1c2e;}}
+  .card{{max-width:520px;margin:64px auto;background:#fff;border:1px solid #dfe6f0;border-radius:16px;
+        box-shadow:0 4px 24px rgba(0,0,0,.07);overflow:hidden;}}
+  .hd{{background:#061326;padding:24px 32px;color:#c8a84b;font-size:13px;font-weight:700;
+       letter-spacing:.08em;text-transform:uppercase;}}
+  .bd{{padding:32px;}} h1{{font-size:22px;margin:0 0 12px;}} p{{color:#3a5070;line-height:1.6;margin:0 0 8px;}}
+  a{{color:#3b82f6;}}
+</style></head>
+<body><div class="card"><div class="hd">EPM Market Intelligence</div>
+<div class="bd"><h1>{title}</h1><p>{message}</p>
+<p style="margin-top:20px;"><a href="{_public_base_url()}/">Return to EPM Market Intelligence</a></p>
+</div></div></body></html>"""
+
+
+@app.get("/email/confirm")
+async def email_confirm(t: str = "") -> HTMLResponse:
+    """Double-opt-in landing: validates the signed token and marks the address confirmed."""
+    try:
+        user_id = verify_email_token(t, EMAIL_PURPOSE_CONFIRM)
+    except AuthError as exc:
+        return HTMLResponse(_email_action_page("Link invalid", str(exc)), status_code=400)
+    set_email_confirmed(user_id, True)
+    set_email_opt_in(user_id, True)
+    return HTMLResponse(_email_action_page(
+        "Subscription confirmed",
+        "You're all set — you'll receive the EPM daily market recap. You can unsubscribe "
+        "anytime from the footer of any email or your profile.",
+    ))
+
+
+@app.get("/unsubscribe")
+async def unsubscribe_get(t: str = "") -> HTMLResponse:
+    """One-click unsubscribe landing (browser GET)."""
+    try:
+        user_id = verify_email_token(t, EMAIL_PURPOSE_UNSUB)
+    except AuthError as exc:
+        return HTMLResponse(_email_action_page("Link invalid", str(exc)), status_code=400)
+    set_email_opt_in(user_id, False)
+    return HTMLResponse(_email_action_page(
+        "Unsubscribed",
+        "You've been unsubscribed from the EPM daily market recap. You can re-subscribe "
+        "anytime from your profile.",
+    ))
+
+
+@app.post("/unsubscribe")
+async def unsubscribe_post(t: str = "") -> PlainTextResponse:
+    """RFC 8058 one-click unsubscribe (List-Unsubscribe-Post). Mail clients POST here."""
+    try:
+        user_id = verify_email_token(t, EMAIL_PURPOSE_UNSUB)
+    except AuthError:
+        return PlainTextResponse("Invalid link.", status_code=400)
+    set_email_opt_in(user_id, False)
+    return PlainTextResponse("Unsubscribed.", status_code=200)
+
+
+@app.get("/api/internal/daily-recipients")
+async def internal_daily_recipients(request: Request) -> JSONResponse:
+    """Server-internal: the confirmed-opt-in recipient list with per-user unsubscribe
+    URLs, fetched by the laptop pipeline over Tailscale right before the daily send.
+    Guarded by INTERNAL_API_KEY (constant-time compare); disabled if the key is unset."""
+    key = request.headers.get("X-Internal-Key", "")
+    if not INTERNAL_API_KEY or not hmac.compare_digest(key, INTERNAL_API_KEY):
+        raise HTTPException(status_code=403, detail="Forbidden.")
+    base = _public_base_url(request)
+    recipients = []
+    for sub in get_confirmed_subscribers():
+        tok = make_email_token(sub["user_id"], EMAIL_PURPOSE_UNSUB)
+        recipients.append({
+            "email": sub["email"],
+            "username": sub["username"],
+            "unsubscribe_url": f"{base}/unsubscribe?t={tok}",
+        })
+    return JSONResponse({"ok": True, "recipients": recipients})
 
 
 @app.put("/api/user/username")

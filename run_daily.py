@@ -15,8 +15,9 @@ silently fall behind the email:
 Observability: every terminal outcome is written to logs/run_daily_status.json
 (structured) and appended to logs/run_daily.log (one line per run). /api/health and
 an operator can read the status file to see the last run's result without scraping
-stdout. No alert EMAIL is sent from here — that would risk duplicate mails and needs
-SMTP creds; the status file + marker are the low-risk alert surface.
+stdout. On a hard failure (report/email step or post-sync site staleness) a short
+alert email is also sent to ALERT_EMAIL via the shared mailer — guarded on creds
+being present and wrapped so alerting can never break the run.
 
 Designed for testability: the subprocess runner and the freshness checker are
 injectable, so tests exercise the orchestration without sending email or deploying.
@@ -64,6 +65,33 @@ def _record_status(stage: str, ok: bool, detail: str, *, status_file: Path = STA
         print(f"[run_daily] (status write failed: {exc})")
 
 
+def _send_alert(stage: str, detail: str) -> None:
+    """Email a short failure alert to ALERT_EMAIL. Never raises — alerting must
+    not break the run. No-ops silently if no mail creds are configured."""
+    import os
+    alert_to = os.getenv("ALERT_EMAIL", "").strip()
+    if not alert_to:
+        return
+    try:
+        from services import email_service
+        if not email_service.mail_configured():
+            print("[run_daily] (alert skipped: no mail creds configured)")
+            return
+        subject = f"[EPM ALERT] daily run failed at '{stage}'"
+        body = (
+            f"The EPM daily pipeline failed.\n\n"
+            f"Stage: {stage}\n"
+            f"Detail: {detail}\n"
+            f"Time: {datetime.now(timezone.utc).isoformat()}\n\n"
+            f"Check logs/run_daily.log and logs/run_daily_status.json."
+        )
+        html = f"<pre style='font-family:monospace;font-size:13px'>{body}</pre>"
+        email_service.send_message(alert_to, subject, html, body)
+        print(f"[run_daily] alert email sent to {alert_to}")
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"[run_daily] (alert email failed: {exc})")
+
+
 def _default_runner(cmd: list[str]) -> int:
     print("[run_daily] >", " ".join(cmd))
     try:
@@ -93,6 +121,7 @@ def main(
         msg = f"send_email.py exited {rc} — report not deployed. Aborting."
         print(f"[run_daily] {msg}")
         _record_status("send_email", False, msg)
+        _send_alert("send_email", msg)
         return 1
 
     # 2. Post-run tasks + sync to server. A sync hiccup is non-fatal here because
@@ -120,6 +149,7 @@ def main(
                f"website is behind. Re-run `python post_run.py` and check sync logs.")
         print(f"[run_daily] {msg}")
         _record_status("freshness", False, msg)
+        _send_alert("freshness", msg)
         return 2
 
     ok_detail = detail + (f" (warning: {post_run_warn})" if post_run_warn else "")

@@ -18,7 +18,11 @@ def _ok_run(*a, **k):
 def _no_real_io(monkeypatch):
     # Never write the real sent-log or build a real email during these tests.
     monkeypatch.setattr(se, "mark_sent_today", lambda: None)
-    monkeypatch.setattr(se, "build_email", lambda: types.SimpleNamespace(as_string=lambda: "msg"))
+    monkeypatch.setattr(se, "build_email",
+                        lambda *a, **k: types.SimpleNamespace(as_string=lambda: "msg"))
+    # Single internal recipient so the send loop never touches the network for the list.
+    monkeypatch.setattr(se, "get_daily_recipients",
+                        lambda: [{"email": se.TO, "unsubscribe_url": None}])
 
 
 def test_already_sent_returns_zero_and_does_not_run(monkeypatch):
@@ -60,10 +64,10 @@ def test_smtp_failure_returns_nonzero(monkeypatch):
     monkeypatch.setattr(se.subprocess, "run", _ok_run)
     monkeypatch.setattr(se, "_check_commentary_fresh", lambda today: None)  # fresh
 
-    def _smtp_boom(*a, **k):
+    def _send_boom(*a, **k):
         raise OSError("smtp down")
 
-    monkeypatch.setattr(se.smtplib, "SMTP_SSL", _smtp_boom)
+    monkeypatch.setattr(se.email_service, "send_raw", _send_boom)
     assert se.main([]) == 1
 
 
@@ -76,12 +80,9 @@ def test_success_returns_zero_and_marks_sent(monkeypatch):
     marked = {"v": False}
     monkeypatch.setattr(se, "mark_sent_today", lambda: marked.__setitem__("v", True))
 
-    class _Server:
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
-        def login(self, *a, **k): pass
-        def sendmail(self, *a, **k): pass
-
-    monkeypatch.setattr(se.smtplib, "SMTP_SSL", lambda *a, **k: _Server())
+    sent = {"n": 0}
+    monkeypatch.setattr(se.email_service, "send_raw",
+                        lambda *a, **k: sent.__setitem__("n", sent["n"] + 1))
     assert se.main([]) == 0
     assert marked["v"] is True
+    assert sent["n"] == 1

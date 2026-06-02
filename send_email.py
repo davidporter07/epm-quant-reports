@@ -19,13 +19,33 @@ from email.mime.text import MIMEText
 from email.mime.image import MIMEImage
 from email.mime.application import MIMEApplication
 
+try:
+    import requests
+except Exception:
+    requests = None
+
+from services import email_service
+
 # Always resolve paths relative to this file (critical for Task Scheduler)
 ROOT = Path(__file__).resolve().parent
 TZ = ZoneInfo('America/Chicago')
 
 # --- Configuration ---
-FROM = "davidporter0731@gmail.com"
-TO = "dporter@epmfinancial.com"
+# Sender is resolved at send time from the mailer config (Resend on the domain, or
+# the legacy Gmail fallback). FROM here is only a last-resort default.
+FROM = os.getenv("MAIL_FROM", "").strip() or "davidporter0731@gmail.com"
+# Always-on internal recipient — receives every daily email regardless of the DB
+# opt-in list, and is never given an unsubscribe link.
+TO = os.getenv("INTERNAL_RECIPIENT", "dporter@epmfinancial.com")
+
+# Where to fetch the confirmed-subscriber list (server, over Tailscale). The send
+# falls back to the internal recipient only if this is unreachable or the key is unset.
+EPM_SERVER_URL = os.getenv("EPM_SERVER_URL", "http://100.101.63.65:8000").rstrip("/")
+INTERNAL_RECIPIENTS_URL = os.getenv(
+    "INTERNAL_RECIPIENTS_URL", f"{EPM_SERVER_URL}/api/internal/daily-recipients"
+)
+# CAN-SPAM: a physical postal address must appear in the footer of bulk mail.
+MAIL_PHYSICAL_ADDRESS = os.getenv("MAIL_PHYSICAL_ADDRESS", "EPM Financial")
 def _build_subject():
     """Dynamic subject line: EPM Markets Recap with S&P direction.
 
@@ -956,7 +976,52 @@ def build_commentary_email_blocks(commentary):
 
 
 # --- Build HTML email ---
-def build_email():
+def _footer_html(unsubscribe_url: "str | None" = None) -> str:
+    """CAN-SPAM-compliant footer: physical address always; unsubscribe link when
+    the recipient is a subscriber (the internal recipient gets no unsubscribe)."""
+    parts = [
+        '<hr style="border:none;border-top:1px solid #e8eef6;margin:24px 0 12px 0;" />',
+        f'<p style="margin:0 0 4px 0;color:#9aa7bd;font-size:11px;line-height:1.5;">'
+        f'EPM Market Intelligence &middot; {html_lib.escape(MAIL_PHYSICAL_ADDRESS)}</p>',
+    ]
+    if unsubscribe_url:
+        parts.append(
+            f'<p style="margin:0;color:#9aa7bd;font-size:11px;line-height:1.5;">'
+            f'You are receiving this because you subscribed to the EPM daily recap. '
+            f'<a href="{html_lib.escape(unsubscribe_url)}" style="color:#6b7280;">Unsubscribe</a>.</p>'
+        )
+    return "".join(parts)
+
+
+def get_daily_recipients() -> list[dict]:
+    """The daily-email recipient list: the always-on internal recipient plus the
+    confirmed opt-in subscribers fetched from the server. Falls back to the internal
+    recipient alone if the server is unreachable or no internal key is configured —
+    the daily email must never fail to go out to the internal recipient."""
+    recipients = [{"email": TO, "unsubscribe_url": None}]
+    key = os.getenv("INTERNAL_API_KEY", "").strip()
+    if not key or requests is None:
+        return recipients
+    try:
+        resp = requests.get(
+            INTERNAL_RECIPIENTS_URL,
+            headers={"X-Internal-Key": key},
+            timeout=20,
+        )
+        resp.raise_for_status()
+        seen = {TO.lower()}
+        for r in resp.json().get("recipients", []):
+            email = (r.get("email") or "").strip()
+            if email and email.lower() not in seen:
+                seen.add(email.lower())
+                recipients.append({"email": email, "unsubscribe_url": r.get("unsubscribe_url")})
+        print(f"[RECIPIENTS] {len(recipients)} recipient(s): internal + {len(recipients) - 1} subscriber(s).")
+    except Exception as exc:
+        print(f"[WARN] Could not fetch subscriber list ({exc}); sending to internal recipient only.")
+    return recipients
+
+
+def build_email(to_addr: "str | None" = None, unsubscribe_url: "str | None" = None):
     commentary = load_commentary_snapshot()
 
     # Defense-in-depth: re-run the deterministic guard pass before building the email so the
@@ -991,6 +1056,7 @@ def build_email():
           <p style="margin:20px 0 6px 0;">
             <a href="{GITHUB_LINK}" style="display:inline-block;padding:11px 24px;background:#1d4ed8;color:#fff;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;">Open Today's Report</a>
           </p>
+          {_footer_html(unsubscribe_url)}
         </div>
       </body>
     </html>
@@ -999,13 +1065,20 @@ def build_email():
     plain_text = (
         "The daily quant report is available on GitHub Pages.\n\n"
         + commentary_text
-        + f"View today's report: {GITHUB_LINK}"
+        + f"View today's report: {GITHUB_LINK}\n\n"
+        + f"EPM Market Intelligence · {MAIL_PHYSICAL_ADDRESS}\n"
     )
+    if unsubscribe_url:
+        plain_text += f"Unsubscribe from the daily recap: {unsubscribe_url}\n"
 
     msg = MIMEMultipart("related")
-    msg["From"] = FROM
-    msg["To"] = TO
+    msg["From"] = email_service.get_mail_from() or FROM
+    msg["To"] = to_addr or TO
     msg["Subject"] = SUBJECT
+    if unsubscribe_url:
+        # RFC 8058 one-click unsubscribe — required by Gmail/Apple for bulk senders.
+        msg["List-Unsubscribe"] = f"<{unsubscribe_url}>"
+        msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
 
     alt = MIMEMultipart("alternative")
     alt.attach(MIMEText(plain_text, "plain"))
@@ -1132,15 +1205,25 @@ def main(argv=None) -> int:
                 print(f" [WARN] PDF regen failed ({_pdf_err}) — sending with existing PDF.")
 
         logging.info(" Preparing and sending email...")
-        msg = build_email()
-        context = ssl.create_default_context()
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
-            server.login(FROM, os.getenv("GMAIL_APP_PASSWORD"))
-            server.sendmail(FROM, TO, msg.as_string())
+        recipients = get_daily_recipients()
+        sent = 0
+        for rec in recipients:
+            try:
+                msg = build_email(to_addr=rec["email"], unsubscribe_url=rec.get("unsubscribe_url"))
+                email_service.send_raw(msg, [rec["email"]])
+                sent += 1
+            except Exception as send_exc:
+                logging.error(f" Failed to send to {rec['email']}: {send_exc}")
+                print(f" [WARN] Failed to send to {rec['email']}: {send_exc}")
 
-        logging.info(" Email sent successfully.")
+        if sent == 0:
+            logging.error(" Email send failed for ALL recipients.")
+            print(" [ERROR] Email send failed for all recipients.")
+            return 1
+
+        logging.info(f" Email sent to {sent}/{len(recipients)} recipient(s).")
         mark_sent_today()
-        print(" Email sent successfully.")
+        print(f" Email sent to {sent}/{len(recipients)} recipient(s).")
         return 0
     except Exception as e:
         logging.error(f" Error in workflow: {e}")

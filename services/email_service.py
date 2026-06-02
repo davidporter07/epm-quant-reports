@@ -1,9 +1,24 @@
 """
-Transactional email service — password reset only.
+Transactional + outbound email service.
 
-Uses the same Gmail account and GMAIL_APP_PASSWORD env var as send_email.py,
-but is completely isolated from it. No subprocess calls, no monitor.py,
-no daily report pipeline. Import-safe.
+Single send path for ALL outbound mail (password reset, daily-recap subscriber
+sends, and pipeline failure alerts). Provider config is env-driven:
+
+  - If RESEND_API_KEY is set → send via Resend SMTP (smtp.resend.com:465, user
+    "resend"), From = MAIL_FROM (a verified sender on epm-market-intelligence.com).
+  - Otherwise → fall back to the legacy Gmail app-password path
+    (GMAIL_APP_PASSWORD), preserving the original behaviour so nothing breaks
+    before the domain sender is provisioned.
+
+Env vars (see .env.example):
+  RESEND_API_KEY      Resend API key (acts as the SMTP password when present)
+  MAIL_FROM           e.g. "EPM Market Intelligence <reports@epm-market-intelligence.com>"
+  MAIL_SMTP_HOST      override (default smtp.resend.com or smtp.gmail.com)
+  MAIL_SMTP_PORT      override (default 465)
+  MAIL_SMTP_USER      override (default "resend" or the gmail address)
+  GMAIL_APP_PASSWORD  legacy fallback password
+
+Import-safe. No subprocess calls, no pipeline imports.
 """
 from __future__ import annotations
 
@@ -12,9 +27,12 @@ import smtplib
 import ssl
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import parseaddr
 from pathlib import Path
 
-_FROM = "davidporter0731@gmail.com"
+# Legacy default sender, used only when no MAIL_FROM is configured and we are on
+# the Gmail fallback path.
+_LEGACY_GMAIL_FROM = "davidporter0731@gmail.com"
 _SMTP_HOST = "smtp.gmail.com"
 _SMTP_PORT = 465
 
@@ -27,6 +45,7 @@ class EmailError(Exception):
 
 
 def _get_app_password() -> str:
+    """Legacy accessor kept for backwards compatibility / explicit Gmail use."""
     pw = os.getenv("GMAIL_APP_PASSWORD", "").strip()
     if not pw:
         raise EmailError(
@@ -34,6 +53,103 @@ def _get_app_password() -> str:
             "Password reset emails cannot be sent."
         )
     return pw
+
+
+def _mail_config() -> dict:
+    """Resolve the active SMTP provider config from the environment.
+
+    Prefers Resend (domain sender) when RESEND_API_KEY is present; otherwise
+    falls back to the legacy Gmail app-password path so existing deployments
+    keep working until the domain sender is provisioned.
+    """
+    api_key = os.getenv("RESEND_API_KEY", "").strip()
+    if api_key:
+        return {
+            "host": os.getenv("MAIL_SMTP_HOST", "smtp.resend.com"),
+            "port": int(os.getenv("MAIL_SMTP_PORT", "465")),
+            "user": os.getenv("MAIL_SMTP_USER", "resend"),
+            "password": api_key,
+            "from": os.getenv("MAIL_FROM", "").strip()
+            or "EPM Market Intelligence <onboarding@resend.dev>",
+            "provider": "resend",
+        }
+    # Legacy Gmail fallback
+    return {
+        "host": os.getenv("MAIL_SMTP_HOST", _SMTP_HOST),
+        "port": int(os.getenv("MAIL_SMTP_PORT", str(_SMTP_PORT))),
+        "user": os.getenv("MAIL_SMTP_USER", _LEGACY_GMAIL_FROM),
+        "password": os.getenv("GMAIL_APP_PASSWORD", "").strip(),
+        "from": os.getenv("MAIL_FROM", "").strip() or _LEGACY_GMAIL_FROM,
+        "provider": "gmail",
+    }
+
+
+def mail_configured() -> bool:
+    """True when outbound mail has working credentials (Resend or Gmail).
+
+    Callers that must never break the run (e.g. failure alerting) check this
+    before attempting a send.
+    """
+    return bool(_mail_config()["password"])
+
+
+def get_mail_from() -> str:
+    """The configured From header value (display-name form)."""
+    return _mail_config()["from"]
+
+
+def _envelope_addr(addr: str) -> str:
+    """Bare email for the SMTP envelope, stripping any display name."""
+    return parseaddr(addr)[1] or addr
+
+
+def send_raw(msg, to_addrs: list[str] | str, from_addr: str | None = None) -> None:
+    """Send a pre-built MIME message via the configured SMTP provider.
+
+    Used by send_email.py, which builds a rich multipart/related message
+    (inline logo + PDF attachment) and just needs the shared credentials.
+    """
+    cfg = _mail_config()
+    if not cfg["password"]:
+        raise EmailError(
+            "No mail credentials configured (set RESEND_API_KEY or GMAIL_APP_PASSWORD)."
+        )
+    if isinstance(to_addrs, str):
+        to_addrs = [to_addrs]
+    sender = from_addr or cfg["from"]
+    envelope_from = _envelope_addr(sender)
+    try:
+        context = ssl.create_default_context()
+        with smtplib.SMTP_SSL(cfg["host"], cfg["port"], context=context) as server:
+            server.login(cfg["user"], cfg["password"])
+            server.sendmail(envelope_from, to_addrs, msg.as_string())
+    except EmailError:
+        raise
+    except Exception as exc:
+        raise EmailError(f"Failed to send email: {exc}") from exc
+
+
+def send_message(
+    to_email: str,
+    subject: str,
+    html: str,
+    plain: str,
+    headers: dict | None = None,
+    from_addr: str | None = None,
+) -> None:
+    """Send a simple multipart/alternative email via the configured provider.
+
+    Used for password-reset, double-opt-in confirmation, and failure alerts.
+    """
+    msg = MIMEMultipart("alternative")
+    msg["From"] = from_addr or get_mail_from()
+    msg["To"] = to_email
+    msg["Subject"] = subject
+    for key, value in (headers or {}).items():
+        msg[key] = value
+    msg.attach(MIMEText(plain, "plain"))
+    msg.attach(MIMEText(html, "html"))
+    send_raw(msg, [to_email], from_addr=msg["From"])
 
 
 def send_password_reset_email(to_email: str, username: str, reset_url: str) -> None:
@@ -135,19 +251,80 @@ def send_password_reset_email(to_email: str, username: str, reset_url: str) -> N
         f"— EPM Financial"
     )
 
-    msg = MIMEMultipart("alternative")
-    msg["From"] = _FROM
-    msg["To"] = to_email
-    msg["Subject"] = subject
-    msg.attach(MIMEText(plain, "plain"))
-    msg.attach(MIMEText(html, "html"))
+    send_message(to_email, subject, html, plain)
 
-    try:
-        context = ssl.create_default_context()
-        with smtplib.SMTP_SSL(_SMTP_HOST, _SMTP_PORT, context=context) as server:
-            server.login(_FROM, _get_app_password())
-            server.sendmail(_FROM, to_email, msg.as_string())
-    except EmailError:
-        raise
-    except Exception as exc:
-        raise EmailError(f"Failed to send email: {exc}") from exc
+
+def send_subscription_confirmation_email(to_email: str, username: str, confirm_url: str) -> None:
+    """Double-opt-in: confirm the user controls this address before any daily
+    recap is sent to it."""
+    subject = "Confirm your EPM Market Intelligence daily email"
+
+    html = f"""
+    <html>
+    <body style="font-family:Inter,system-ui,sans-serif;background:#f5f8fd;margin:0;padding:0;">
+      <table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f8fd;padding:40px 20px;">
+        <tr><td align="center">
+          <table width="520" cellpadding="0" cellspacing="0"
+                 style="background:#ffffff;border-radius:16px;border:1px solid #dfe6f0;
+                        box-shadow:0 4px 24px rgba(0,0,0,0.07);overflow:hidden;">
+            <tr>
+              <td style="background:#061326;padding:28px 36px;text-align:left;">
+                <span style="color:#c8a84b;font-size:13px;font-weight:700;
+                             letter-spacing:0.08em;text-transform:uppercase;">
+                  EPM Market Intelligence
+                </span>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:36px 36px 28px;">
+                <h2 style="margin:0 0 12px;font-size:22px;color:#0d1c2e;font-weight:700;">
+                  Confirm your subscription
+                </h2>
+                <p style="margin:0 0 10px;color:#3a5070;font-size:15px;line-height:1.6;">
+                  Hi <strong>{username}</strong>,
+                </p>
+                <p style="margin:0 0 24px;color:#3a5070;font-size:15px;line-height:1.6;">
+                  Confirm this address to start receiving the EPM daily market recap.
+                  You can unsubscribe at any time from the footer of any email or your profile.
+                </p>
+                <table cellpadding="0" cellspacing="0" style="margin-bottom:28px;">
+                  <tr>
+                    <td style="border-radius:10px;background:linear-gradient(135deg,#1d4ed8,#3b82f6);">
+                      <a href="{confirm_url}"
+                         style="display:inline-block;padding:14px 32px;color:#fff;
+                                font-size:15px;font-weight:600;text-decoration:none;
+                                border-radius:10px;letter-spacing:0.01em;">
+                        Confirm Subscription
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+                <p style="margin:0 0 6px;color:#7a94b4;font-size:13px;line-height:1.5;">
+                  If the button doesn't work, paste this link into your browser:
+                </p>
+                <p style="margin:0 0 24px;font-size:12px;color:#3b82f6;word-break:break-all;">
+                  <a href="{confirm_url}" style="color:#3b82f6;">{confirm_url}</a>
+                </p>
+                <hr style="border:none;border-top:1px solid #e8eef6;margin:0 0 20px;" />
+                <p style="margin:0;color:#b0bcd0;font-size:12px;line-height:1.5;">
+                  If you didn't request this, you can safely ignore this email — no emails
+                  will be sent unless you confirm.
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td></tr>
+      </table>
+    </body>
+    </html>
+    """
+
+    plain = (
+        f"Hi {username},\n\n"
+        f"Confirm your subscription to the EPM Market Intelligence daily recap:\n"
+        f"{confirm_url}\n\n"
+        f"If you didn't request this, you can safely ignore this email.\n\n"
+        f"— EPM Financial"
+    )
+
+    send_message(to_email, subject, html, plain)
