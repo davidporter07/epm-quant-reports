@@ -1233,11 +1233,88 @@ async function runAnalysis(event) {
     });
     statusEl.textContent = `Loaded snapshot for ${ticker}.`;
     window.initDeepAnalysis?.(ticker);
+    renderAboutResearch(ticker);
   } catch (err) {
     window.EPMTickerValidation?.markTickerInvalid?.(ticker);
     setDockVisibleImmediate(false);
     statusEl.textContent = `Error: ${err.message}`;
   }
+}
+
+function _escHtml(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function _sourceHost(url) {
+  try { return new URL(url).hostname.replace(/^www\./, ""); } catch (e) { return "source"; }
+}
+
+function _researchRow(label, text, entry) {
+  if (!text) return "";
+  const srcs = (entry && entry.sources || []).slice(0, 3).map(
+    (u) => `<a href="${_escHtml(u)}" target="_blank" rel="noopener noreferrer">${_escHtml(_sourceHost(u))}</a>`
+  ).join(" · ");
+  const date = entry && entry.researched ? entry.researched : "";
+  const prov = (date || srcs)
+    ? `<div class="about-prov">${date ? `researched ${_escHtml(date)}` : ""}${date && srcs ? " · " : ""}${srcs}</div>`
+    : "";
+  return `<div class="about-item"><span class="about-key">${_escHtml(label)}:</span> ${_escHtml(text)}${prov}</div>`;
+}
+
+// Display-only enrichment panel. Reads the research cache populated by deep
+// analysis; renders nothing (and stays hidden) when there's nothing to show.
+async function renderAboutResearch(ticker) {
+  const section = document.getElementById("aboutResearchSection");
+  const body = document.getElementById("aboutResearchBody");
+  const label = document.getElementById("aboutResearchLabel");
+  if (!section || !body) return;
+  section.style.display = "none";
+  body.innerHTML = "";
+  let data;
+  try {
+    data = await fetchJson(`/api/research/${encodeURIComponent(ticker)}`);
+  } catch (e) {
+    return;
+  }
+  if (!data || !data.ok) return;
+  const r = data.research || {};
+  const p = data.profile || {};
+  const isFund = !!data.is_fund;
+  let html = "";
+
+  if (isFund) {
+    label.textContent = "About this fund";
+    const meta = [];
+    if (p.category) meta.push(_escHtml(p.category));
+    if (p.expense_ratio_pct != null) meta.push(`${Number(p.expense_ratio_pct).toFixed(2)}% expense`);
+    if (p.fund_family) meta.push(_escHtml(p.fund_family));
+    if (meta.length) html += `<div class="about-item about-meta">${meta.join(" · ")}</div>`;
+    if (r.manager) {
+      const t = r.manager.tenure_years != null ? ` (~${Math.round(r.manager.tenure_years)} yrs)` : "";
+      html += _researchRow("Management" + t, r.manager.summary, r.manager);
+    }
+    html += _researchRow("Strategy", r.strategy && r.strategy.summary, r.strategy);
+    html += _researchRow("Recent developments", r.developments && r.developments.summary, r.developments);
+    html += _researchRow("Asset flows", r.flows && r.flows.summary, r.flows);
+    if (Array.isArray(p.top_holdings) && p.top_holdings.length) {
+      const top = p.top_holdings.slice(0, 5).map(
+        (h) => `${_escHtml(h.symbol || h.name || "")}${h.weight_pct != null ? ` ${Number(h.weight_pct).toFixed(1)}%` : ""}`
+      ).join(", ");
+      const conc = p.top10_concentration_pct != null ? ` <span class="about-prov">top-10 ${Number(p.top10_concentration_pct).toFixed(1)}%</span>` : "";
+      html += `<div class="about-item"><span class="about-key">Top holdings:</span> ${top}${conc}</div>`;
+    }
+  } else {
+    label.textContent = "About this company";
+    html += _researchRow("Management changes", r.management_changes && r.management_changes.summary, r.management_changes);
+    html += _researchRow("Legal / regulatory", r.legal_regulatory && r.legal_regulatory.summary, r.legal_regulatory);
+    html += _researchRow("Analyst actions", r.analyst_actions && r.analyst_actions.summary, r.analyst_actions);
+    html += _researchRow("M&A activity", r.mna && r.mna.summary, r.mna);
+  }
+
+  if (!html.trim()) return;   // nothing relevant -> stay hidden
+  body.innerHTML = html;
+  section.style.display = "";
 }
 
 function syncStickyHeaderOffset() {

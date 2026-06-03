@@ -2447,6 +2447,60 @@ def deep_report_page() -> FileResponse:
     return _page("deep-report.html")
 
 
+@app.get("/api/research/{symbol}")
+def research_profile(symbol: str, request: Request) -> JSONResponse:
+    """Display-only: cached web-research enrichment + Phase-1 fund profile for a
+    symbol. Does NOT trigger fresh research — that happens during deep analysis."""
+    _require_user(request)
+    s = symbol.strip().upper()
+    if not _DEEP_TICKER_RE.match(s):
+        raise HTTPException(status_code=400, detail="Invalid symbol.")
+
+    from services import research_store
+    import deep_analysis as _da
+
+    provider = getattr(engine, "provider", None)
+    base: dict = {}
+    if provider is not None:
+        try:
+            base = provider.get_profile(s) or {}
+        except Exception:
+            base = {}
+
+    try:
+        fund = _da._get_fund_profile(s) or {}
+    except Exception:
+        fund = {}
+    is_fund = bool(fund)
+
+    research: dict = {}
+    for topic, row in research_store.get_fresh_for_symbol(s).items():
+        content = row.get("content") or {}
+        if not content.get("found"):
+            continue
+        entry = {k: v for k, v in content.items() if k != "found"}
+        entry["sources"] = row.get("sources") or []
+        entry["researched"] = str(row.get("fetched_at") or "")[:10]
+        research[topic] = entry
+
+    profile = {
+        "name":                    fund.get("name") or base.get("name") or s,
+        "category":                fund.get("category"),
+        "fund_family":             fund.get("fund_family"),
+        "expense_ratio_pct":       fund.get("expense_ratio_pct"),
+        "top_holdings":            fund.get("top_holdings"),
+        "top10_concentration_pct": fund.get("top10_concentration_pct"),
+        "objective":               fund.get("objective") or base.get("long_description"),
+        "sector":                  base.get("sector"),
+        "industry":                base.get("industry_category"),
+    }
+    return JSONResponse({
+        "ok": True, "symbol": s, "is_fund": is_fund,
+        "asset_type": fund.get("issue_type") or base.get("issue_type"),
+        "profile": profile, "research": research, "has_research": bool(research),
+    })
+
+
 @app.post("/api/deep/{ticker}")
 def deep_analysis_start(ticker: str, request: Request) -> JSONResponse:
     _require_user(request)

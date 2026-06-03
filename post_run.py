@@ -53,6 +53,7 @@ SYNC_PY_FILES = [
     "earnings_refresh.py",
     "local_council.py",
     "pm_research.py",
+    "research_service.py",
 ]
 
 
