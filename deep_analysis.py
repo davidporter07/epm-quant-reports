@@ -20,17 +20,17 @@ import pandas as pd
 import requests
 import yfinance as yf
 
+import research_service
 from earnings_refresh import load_recent_earnings_release, ticker_variants
 from news_store import load_news_store
-from pm_research import looks_actively_managed, research_fund_management
 from universe_config import get_portfolio_tickers
 
 KRONOS_URL = "http://127.0.0.1:8100"
 DATA_DIR = Path("data")
 
-# Hard ceiling (seconds) on the background PM-discovery research per deep-analysis
-# build. It runs concurrently with data collection, so this is the join timeout.
-PM_RESEARCH_TIMEOUT = int(os.getenv("PM_RESEARCH_TIMEOUT_SEC", "75"))
+# Hard ceiling (seconds) on the background web-research enrichment per deep-analysis
+# build. Topics run concurrently inside enrich(), so this is the outer join timeout.
+RESEARCH_TIMEOUT = int(os.getenv("RESEARCH_TIMEOUT_SEC", os.getenv("PM_RESEARCH_TIMEOUT_SEC", "120")))
 
 _EPM_MODEL_FILES: Dict[str, Tuple[str, str]] = {
     "Linear Regression":  ("linear_forecasts.csv",       "Linear Model Forecast (%)"),
@@ -652,23 +652,25 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> Tuple[str, Dict[str, Any]]
     ticker = ticker.upper()
     today  = datetime.now().strftime("%Y-%m-%d")
 
-    # Fund profile first; for actively-managed funds kick off PM discovery in a
-    # background thread so the slow web+LLM research overlaps the data fetches.
+    # Profile + fund detection first, then kick off web research (funds AND
+    # stocks) in a background thread so the slow search+LLM enrichment overlaps
+    # the price/forecast data collection below. Falls back to {} when SearxNG
+    # is down or the topics yield nothing.
+    co_info      = _get_company_info(ticker)
     fund         = _get_fund_profile(ticker)
     is_fund      = bool(fund)
-    pm_future, pm_executor = None, None
-    if is_fund and looks_actively_managed(
-        name=fund.get("name", ""), category=fund.get("category", ""),
-        objective=fund.get("objective", ""), issue_type=fund.get("issue_type", ""),
-        expense_ratio_pct=fund.get("expense_ratio_pct"),
-    ):
-        try:
-            from concurrent.futures import ThreadPoolExecutor
-            pm_executor = ThreadPoolExecutor(max_workers=1)
-            pm_future = pm_executor.submit(
-                research_fund_management, ticker, fund.get("name") or ticker)
-        except Exception:
-            pm_future = None
+    research_future, research_executor = None, None
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+        research_executor = ThreadPoolExecutor(max_workers=1)
+        research_future = research_executor.submit(
+            research_service.enrich, ticker,
+            name=(co_info.get("name") or ticker),
+            asset_kind=("fund" if is_fund else "stock"),
+            fund_profile=(fund or None),
+        )
+    except Exception:
+        research_future = None
 
     ohlcv    = _get_ohlcv(ticker, days=252)
     if not ohlcv:
@@ -679,7 +681,6 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> Tuple[str, Dict[str, Any]]
     tech         = _compute_technicals(ohlcv)
     epm          = _get_epm_forecasts(ticker)
     headlines    = _get_news_headlines(ticker)
-    co_info      = _get_company_info(ticker)
     vix          = _get_vix()
     spy          = _get_spy_trend()
     earnings     = _get_earnings_info(ticker)
@@ -1169,26 +1170,83 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> Tuple[str, Dict[str, Any]]
             )
     lines.append("")
 
-    # ── MANAGEMENT & MANDATE ─────────────────────────────────────────────────
-    # Collect the concurrent PM-discovery result (time-boxed). Empty when the
-    # fund is passive, SearxNG is down, or nothing was found — then no section.
-    pm_info: Dict[str, Any] = {}
-    if pm_future is not None:
+    # ── WEB-RESEARCH ENRICHMENT ──────────────────────────────────────────────
+    # Collect the concurrent research result (time-boxed). Empty when SearxNG is
+    # down or nothing was found — then no sections render.
+    research: Dict[str, Any] = {}
+    if research_future is not None:
         try:
-            pm_info = pm_future.result(timeout=PM_RESEARCH_TIMEOUT) or {}
+            research = research_future.result(timeout=RESEARCH_TIMEOUT) or {}
         except Exception:
-            pm_info = {}
+            research = {}
         finally:
-            if pm_executor is not None:
-                pm_executor.shutdown(wait=False)
-    if pm_info.get("manager_summary"):
-        lines.append("── MANAGEMENT & MANDATE ────────────────────────────────────────────────────────")
-        if pm_info.get("manager_tenure_years") is not None:
-            lines.append(f"Lead manager tenure: ~{pm_info['manager_tenure_years']:.0f} years")
-        lines.append(pm_info["manager_summary"])
-        if pm_info.get("source_urls"):
-            lines.append("Sources: " + " | ".join(pm_info["source_urls"][:3]))
-        lines.append("")
+            if research_executor is not None:
+                research_executor.shutdown(wait=False)
+
+    def _prov_line(*entries) -> Optional[str]:
+        """'(researched <date> · sources: …)' from one or more topic entries."""
+        srcs: List[str] = []
+        date = ""
+        for e in entries:
+            if not e:
+                continue
+            date = date or str(e.get("fetched_at") or "")[:10]
+            srcs.extend(e.get("sources") or [])
+        srcs = list(dict.fromkeys(s for s in srcs if s))[:3]
+        if not date and not srcs:
+            return None
+        bits = []
+        if date:
+            bits.append(f"researched {date}")
+        if srcs:
+            bits.append("sources: " + " | ".join(srcs))
+        return "(" + " · ".join(bits) + ")"
+
+    if is_fund:
+        mgr   = research.get("manager")
+        strat = research.get("strategy")
+        if (mgr and mgr.get("summary")) or (strat and strat.get("summary")):
+            lines.append("── MANAGEMENT & MANDATE ────────────────────────────────────────────────────────")
+            if mgr and mgr.get("summary"):
+                if mgr.get("tenure_years") is not None:
+                    lines.append(f"Lead manager tenure: ~{mgr['tenure_years']:.0f} years")
+                lines.append(f"Management: {mgr['summary']}")
+            if strat and strat.get("summary"):
+                lines.append(f"Strategy: {strat['summary']}")
+            prov = _prov_line(mgr, strat)
+            if prov:
+                lines.append(prov)
+            lines.append("")
+
+        dev   = research.get("developments")
+        flows = research.get("flows")
+        if (dev and dev.get("summary")) or (flows and flows.get("summary")):
+            lines.append("── FUND DEVELOPMENTS & FLOWS ───────────────────────────────────────────────────")
+            if dev and dev.get("summary"):
+                lines.append(f"Recent developments: {dev['summary']}")
+            if flows and flows.get("summary"):
+                lines.append(f"Asset flows: {flows['summary']}")
+            prov = _prov_line(dev, flows)
+            if prov:
+                lines.append(prov)
+            lines.append("")
+    else:
+        _STOCK_INTEL = [
+            ("management_changes", "Management changes"),
+            ("legal_regulatory",   "Legal / regulatory"),
+            ("analyst_actions",    "Analyst actions"),
+            ("mna",                "M&A activity"),
+        ]
+        present = [(lbl, research[k]) for k, lbl in _STOCK_INTEL
+                   if research.get(k) and research[k].get("summary")]
+        if present:
+            lines.append("── SITUATIONAL INTELLIGENCE ────────────────────────────────────────────────────")
+            for lbl, entry in present:
+                lines.append(f"{lbl}: {entry['summary']}")
+            prov = _prov_line(*[e for _, e in present])
+            if prov:
+                lines.append(prov)
+            lines.append("")
 
     # ── RECENT HEADLINES ─────────────────────────────────────────────────────
     if headlines:
@@ -1307,12 +1365,25 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> Tuple[str, Dict[str, Any]]
             "top_holdings":             fund.get("top_holdings"),
             "fund_objective":           fund.get("objective") or None,
         })
-        if pm_info.get("manager_summary"):
-            key_facts["fund_managers"] = [
-                m.get("name") for m in pm_info.get("managers", []) if m.get("name")
-            ] or None
-            key_facts["manager_summary"] = pm_info["manager_summary"]
-            key_facts["manager_tenure_years"] = pm_info.get("manager_tenure_years")
+        _mgr = research.get("manager") or {}
+        if _mgr.get("summary"):
+            key_facts["fund_managers"] = _mgr.get("managers") or None
+            key_facts["manager_summary"] = _mgr.get("summary")
+            key_facts["manager_tenure_years"] = _mgr.get("tenure_years")
+        if (research.get("strategy") or {}).get("summary"):
+            key_facts["fund_strategy"] = research["strategy"]["summary"]
+        if (research.get("developments") or {}).get("summary"):
+            key_facts["fund_developments"] = research["developments"]["summary"]
+        if (research.get("flows") or {}).get("summary"):
+            key_facts["fund_flows"] = research["flows"]["summary"]
+    elif research:
+        # Stock situational intelligence into key_facts for the bearish / supply-chain personas.
+        for _k, _kf in (("management_changes", "mgmt_change_note"),
+                        ("legal_regulatory", "legal_regulatory_note"),
+                        ("analyst_actions", "analyst_action_note"),
+                        ("mna", "mna_note")):
+            if (research.get(_k) or {}).get("summary"):
+                key_facts[_kf] = research[_k]["summary"]
 
     if rel_perf:
         key_facts["sector_etf"] = rel_perf.get("etf")

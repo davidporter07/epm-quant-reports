@@ -66,7 +66,7 @@ def run(cmd: list[str]) -> int:
 
 
 # Files that live on the server and must not be overwritten from local.
-_SERVER_MANAGED = {"jwt_secret.key", "users.db", "earnings_calendar.json"}
+_SERVER_MANAGED = {"jwt_secret.key", "users.db", "earnings_calendar.json", "research_cache.db"}
 
 # Directories that the SERVER owns and the laptop must never push up. data/jobs/
 # is the live deep-analysis queue written by the web worker; pushing stale local

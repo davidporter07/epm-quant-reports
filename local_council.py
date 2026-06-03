@@ -125,8 +125,10 @@ PERSONAS: List[Persona] = [
             "manufacturing concentration, tariff exposure, component sourcing, "
             "shipping lane disruption, and sanction risk. Your perspective is "
             "structural, not quantitative. Name specific countries, corridors, "
-            "or suppliers when relevant."
+            "or suppliers when relevant. If legal_regulatory_note or mna_note are "
+            "present in KEY_FACTS, factor those structural events into your view."
         ),
+        focus_fields=["legal_regulatory_note", "mna_note"],
     ),
     Persona(
         name="bearish_analyst",
@@ -144,6 +146,7 @@ PERSONAS: List[Persona] = [
             "epm_most_pessimistic_model", "epm_most_pessimistic_pct",
             "kronos_bearish_target", "kronos_bearish_implied_pct",
             "pct_from_52w_high",
+            "mgmt_change_note", "legal_regulatory_note", "analyst_action_note", "mna_note",
         ],
     ),
     Persona(
@@ -191,6 +194,7 @@ FUND_STRUCTURE_PERSONA = Persona(
         "is_fund", "fund_type", "fund_category", "fund_family",
         "expense_ratio_pct", "top10_concentration_pct", "top_holdings",
         "fund_objective", "fund_managers", "manager_summary", "manager_tenure_years",
+        "fund_strategy", "fund_developments", "fund_flows",
     ],
 )
 
