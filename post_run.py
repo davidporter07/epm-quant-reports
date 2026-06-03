@@ -52,6 +52,7 @@ SYNC_PY_FILES = [
     "earnings_calendar.py",
     "earnings_refresh.py",
     "local_council.py",
+    "pm_research.py",
 ]
 
 
