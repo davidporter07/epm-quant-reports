@@ -536,3 +536,56 @@ def test_sync_to_server_returns_true_on_success(monkeypatch):
     monkeypatch.setattr(post_run, "SYNC_PY_FILES", [])
     monkeypatch.setattr(post_run, "_scp_dir", lambda *a, **k: 0)
     assert post_run.sync_to_server() is True
+
+
+# --- GPU preflight: fail loudly on CPU fallback / unreachable Ollama --------
+# 2026-06-03 incident: a dead GPU driver made Ollama silently fall back to 100%
+# CPU; the narrative ground for >1h and the run looked hung. _preflight_gpu_check
+# must abort in seconds. Healthy = size_vram>0 (partial offload on the 6GB A2000
+# is NORMAL), so the bar is >0 not full residency.
+
+class _FakeResp:
+    def __init__(self, data):
+        self._d = data
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._d
+
+
+def _ps(vram, total=9_500_000_000):
+    return _FakeResp({"models": [{"name": gmc.OLLAMA_MODEL, "size": total, "size_vram": vram}]})
+
+
+def test_preflight_blocks_when_model_runs_on_cpu(monkeypatch):
+    monkeypatch.delenv("EPM_SKIP_GPU_PREFLIGHT", raising=False)
+    monkeypatch.setattr(gmc.requests, "get", lambda *a, **k: _ps(0))
+    err = gmc._preflight_gpu_check(None)
+    assert err and "100% on CPU" in err
+
+
+def test_preflight_passes_on_partial_gpu_offload(monkeypatch):
+    monkeypatch.delenv("EPM_SKIP_GPU_PREFLIGHT", raising=False)
+    monkeypatch.setattr(gmc.requests, "get", lambda *a, **k: _ps(5_200_000_000))
+    assert gmc._preflight_gpu_check(None) is None
+
+
+def test_preflight_blocks_when_ollama_unreachable(monkeypatch):
+    monkeypatch.delenv("EPM_SKIP_GPU_PREFLIGHT", raising=False)
+    def _boom(*a, **k):
+        raise gmc.requests.exceptions.ConnectionError("refused")
+    monkeypatch.setattr(gmc.requests, "get", _boom)
+    monkeypatch.setattr(gmc.requests, "post", _boom)
+    err = gmc._preflight_gpu_check(None)
+    assert err and "unreachable" in err.lower()
+
+
+def test_preflight_skip_flag_bypasses_check(monkeypatch):
+    monkeypatch.setenv("EPM_SKIP_GPU_PREFLIGHT", "1")
+    # requests.get must never be called when skipped
+    def _fail(*a, **k):
+        raise AssertionError("preflight should not probe when skip flag set")
+    monkeypatch.setattr(gmc.requests, "get", _fail)
+    assert gmc._preflight_gpu_check(None) is None

@@ -2257,6 +2257,78 @@ def _warmup_ollama_async() -> threading.Thread:
     return t
 
 
+def _preflight_gpu_check(warmup: "threading.Thread | None" = None) -> "str | None":
+    """Verify Ollama is serving the commentary model on the GPU. Returns an error
+    string if not (caller blocks the run), else None.
+
+    When the server's GPU driver is down (e.g. an unattended kernel upgrade leaves
+    nvidia.ko unloaded — the 2026-06-03 incident), Ollama silently falls back to
+    100% CPU, where qwen3.5:9b runs ~10x slower. The narrative step then grinds for
+    over an hour and the run looks hung. This probes /api/ps and fails in seconds
+    with an actionable message instead.
+
+    Healthy = size_vram > 0. ANY GPU offload counts: on the 6GB A2000 the 9.5GB
+    model is only partially resident (~5GB VRAM, rest CPU) — that is the NORMAL
+    state, so the bar is >0, not full residency. The async warmup loads the model
+    concurrently with market-data gathering; we join it first so /api/ps reflects a
+    loaded model. Set EPM_SKIP_GPU_PREFLIGHT=1 to bypass (intentional CPU-only host).
+    """
+    if os.getenv("EPM_SKIP_GPU_PREFLIGHT") == "1":
+        print("  [PREFLIGHT] GPU check skipped (EPM_SKIP_GPU_PREFLIGHT=1).")
+        return None
+
+    if warmup is not None and warmup.is_alive():
+        warmup.join(timeout=OLLAMA_TIMEOUT)
+
+    def _resident() -> "dict | None":
+        r = requests.get(f"{OLLAMA_HOST}/api/ps", timeout=30)
+        r.raise_for_status()
+        return next((m for m in r.json().get("models", []) if m.get("name") == OLLAMA_MODEL), None)
+
+    try:
+        entry = _resident()
+        if entry is None:
+            # Warmup didn't leave it resident — do one blocking minimal load, then re-check.
+            requests.post(
+                f"{OLLAMA_HOST}/api/chat",
+                json={
+                    "model": OLLAMA_MODEL,
+                    "messages": [{"role": "user", "content": "ok"}],
+                    "stream": False, "think": False, "keep_alive": "20m",
+                    "options": {"num_predict": 1, "num_ctx": 16384},
+                },
+                timeout=OLLAMA_TIMEOUT,
+            )
+            entry = _resident()
+    except Exception as exc:
+        return (
+            f"[FATAL] GPU preflight: Ollama unreachable at {OLLAMA_HOST} ({exc}). "
+            f"Cannot generate narrative — aborting before any CPU-fallback grind. "
+            f"Check the ollama service and the GPU (nvidia-smi)."
+        )
+
+    if entry is None:
+        return (
+            f"[FATAL] GPU preflight: {OLLAMA_MODEL} could not be loaded on {OLLAMA_HOST}. Aborting."
+        )
+
+    vram = entry.get("size_vram", 0) or 0
+    total = entry.get("size", 0) or 0
+    if vram <= 0:
+        return (
+            f"[FATAL] GPU preflight: {OLLAMA_MODEL} is running 100% on CPU "
+            f"(size_vram=0, size={total / 1e9:.1f}GB) on {OLLAMA_HOST}. The GPU driver is "
+            f"likely down — narrative generation would grind for ~1h on CPU, so aborting now. "
+            f"Fix on the server: `nvidia-smi` (should list the GPU); if it errors, "
+            f"`sudo modprobe nvidia` (ensure linux-modules-nvidia matches `uname -r`), then "
+            f"`sudo systemctl restart ollama`. See memory incident_gpu_driver_kernel_mismatch."
+        )
+
+    pct = (vram / total * 100) if total else 100
+    print(f"  [PREFLIGHT] GPU OK — {OLLAMA_MODEL} resident, {vram / 1e9:.1f}GB in VRAM ({pct:.0f}% offloaded).")
+    return None
+
+
 def _call_ollama_raw(system: str, user_payload: dict, num_ctx: int = 8192) -> dict:
     body = {
         "model":   OLLAMA_MODEL,
@@ -5411,7 +5483,9 @@ def main() -> int:
     # call. Without this, a cold/idle Ollama cold-loads on the narrative call
     # (num_ctx=16384); on this VRAM-tight server that load is slow enough to drop the
     # connection and force the deterministic fallback that blocks the email. Non-blocking.
-    _warmup_ollama_async()
+    # The returned thread is handed to _preflight_gpu_check below, which joins it before
+    # reading /api/ps so the GPU/CPU residency check sees a loaded model.
+    _warmup_thread = _warmup_ollama_async()
 
     # Load yesterday's stored levels so each instrument's prev_close is the value
     # we actually reported last run.  GUARD: if the existing commentary file is from
@@ -5793,6 +5867,15 @@ def main() -> int:
     _guard_snapshot_drift(snapshot, COMMENTARY_PATH)
     _atomic_write_json(COMMENTARY_PATH, existing)
     print(f"[OK] Market data saved -> {COMMENTARY_PATH}")
+
+    # Fail loudly NOW if Ollama isn't on the GPU. Without this, a dead GPU driver
+    # silently routes the narrative to CPU where it grinds for ~1h and the run looks
+    # hung (2026-06-03 incident). Returning 1 makes monitor.py skip the PDF and the
+    # send_email freshness gate block the email — the same outcome, but in seconds.
+    _gpu_err = _preflight_gpu_check(_warmup_thread)
+    if _gpu_err:
+        print(_gpu_err)
+        return 1
 
     print(f"[LLM] Requesting commentary from Ollama ({OLLAMA_HOST}, model={OLLAMA_MODEL})...")
     commentary = None
