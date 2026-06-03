@@ -30,7 +30,7 @@ DATA_DIR = Path("data")
 
 # Hard ceiling (seconds) on the background web-research enrichment per deep-analysis
 # build. Topics run concurrently inside enrich(), so this is the outer join timeout.
-RESEARCH_TIMEOUT = int(os.getenv("RESEARCH_TIMEOUT_SEC", os.getenv("PM_RESEARCH_TIMEOUT_SEC", "120")))
+RESEARCH_TIMEOUT = int(os.getenv("RESEARCH_TIMEOUT_SEC", os.getenv("PM_RESEARCH_TIMEOUT_SEC", "210")))
 
 _EPM_MODEL_FILES: Dict[str, Tuple[str, str]] = {
     "Linear Regression":  ("linear_forecasts.csv",       "Linear Model Forecast (%)"),

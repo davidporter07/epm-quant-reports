@@ -31,7 +31,14 @@ from services import research_store
 
 _OLLAMA_URL = os.getenv("LOCAL_OLLAMA_URL", "http://localhost:11434")
 _RESEARCH_MODEL = os.getenv("RESEARCH_OLLAMA_MODEL") or os.getenv("CHAT_OLLAMA_MODEL", "qwen3.5:4b")
-_MAX_WORKERS = 4
+# Concurrency is modest on purpose: the server GPU (A2000, ~5.75GB) can only
+# hold one small model at a time, so a burst of cold requests thrashes VRAM.
+_MAX_WORKERS = 2
+_OLLAMA_TIMEOUT = int(os.getenv("RESEARCH_OLLAMA_TIMEOUT_S", "90"))
+# Cold-load budget for the one-shot pre-warm (model -> VRAM under contention).
+_PREWARM_TIMEOUT = int(os.getenv("RESEARCH_OLLAMA_PREWARM_S", "180"))
+# Keep the model resident across the topic calls in one enrich().
+_KEEP_ALIVE = os.getenv("RESEARCH_OLLAMA_KEEP_ALIVE", "10m")
 
 # Sentinel an extractor returns when the snippets contained nothing usable.
 _NONE_TOKENS = {"none", "n/a", "no", "nothing", "unknown", ""}
@@ -40,20 +47,30 @@ _NONE_TOKENS = {"none", "n/a", "no", "nothing", "unknown", ""}
 # --------------------------------------------------------------------------- #
 # Ollama (fast extraction model — NOT the slow council model)
 # --------------------------------------------------------------------------- #
-def _research_ollama(prompt: str, timeout: int = 60) -> str:
+def _research_ollama(prompt: str, timeout: Optional[int] = None) -> str:
     r = requests.post(
         f"{_OLLAMA_URL}/api/generate",
         json={
             "model": _RESEARCH_MODEL,
             "prompt": prompt,
             "stream": False,
+            "keep_alive": _KEEP_ALIVE,
             "options": {"temperature": 0.1, "top_p": 0.85, "num_ctx": 8192},
         },
-        timeout=timeout,
+        timeout=timeout or _OLLAMA_TIMEOUT,
     )
     r.raise_for_status()
     txt = r.json().get("response", "").strip()
     return re.sub(r"<think>.*?</think>", "", txt, flags=re.DOTALL).strip()
+
+
+def _prewarm(ollama_call: "OllamaCall") -> None:
+    """Load the research model into VRAM before the topic burst so concurrent
+    extraction calls hit a warm model instead of all racing a cold load."""
+    try:
+        ollama_call("Reply with the single word: OK", _PREWARM_TIMEOUT)
+    except Exception:
+        pass
 
 
 OllamaCall = Callable[[str, int], str]
@@ -347,8 +364,10 @@ def enrich(
                 continue
             misses.append(topic)
 
-        # 3. run misses concurrently
+        # 3. run misses concurrently (pre-warm the model first so the burst
+        #    doesn't all race a cold VRAM load and time out)
         if misses:
+            _prewarm(ollama_call)
             with ThreadPoolExecutor(max_workers=min(_MAX_WORKERS, len(misses))) as ex:
                 futs = {ex.submit(_safe_run, t, ctx, searx, ollama_call): t for t in misses}
                 for fut in as_completed(futs):
