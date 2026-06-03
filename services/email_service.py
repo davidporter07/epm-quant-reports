@@ -39,6 +39,18 @@ _SMTP_PORT = 465
 _BASE_DIR = Path(__file__).resolve().parent.parent
 _LOGO_PATH = _BASE_DIR / "epm_logo.png"
 
+# Load .env so RESEND_API_KEY / MAIL_FROM / INTERNAL_API_KEY etc. are available on
+# the laptop, where send_email.py and run_daily.py do NOT otherwise load it (only
+# GMAIL_APP_PASSWORD happened to be a real OS env var). override=False so genuine
+# OS environment variables still win. Wrapped so a missing python-dotenv never
+# breaks the import. On the server, app.py already loads .env first; this is a
+# harmless no-op there.
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(_BASE_DIR / ".env", override=False)
+except Exception:
+    pass
+
 
 class EmailError(Exception):
     """Raised when an email cannot be sent."""

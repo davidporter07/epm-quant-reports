@@ -69,11 +69,13 @@ def _send_alert(stage: str, detail: str) -> None:
     """Email a short failure alert to ALERT_EMAIL. Never raises — alerting must
     not break the run. No-ops silently if no mail creds are configured."""
     import os
-    alert_to = os.getenv("ALERT_EMAIL", "").strip()
-    if not alert_to:
-        return
     try:
+        # Importing the mailer also loads .env, so ALERT_EMAIL/creds are populated
+        # even though run_daily itself never calls load_dotenv.
         from services import email_service
+        alert_to = os.getenv("ALERT_EMAIL", "").strip()
+        if not alert_to:
+            return
         if not email_service.mail_configured():
             print("[run_daily] (alert skipped: no mail creds configured)")
             return
