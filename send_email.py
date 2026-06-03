@@ -1073,7 +1073,13 @@ def build_email(to_addr: "str | None" = None, unsubscribe_url: "str | None" = No
     if unsubscribe_url:
         plain_text += f"Unsubscribe from the daily recap: {unsubscribe_url}\n"
 
-    msg = MIMEMultipart("related")
+    # Canonical nesting: multipart/mixed [ multipart/related [ alternative, inline-logo ], pdf ].
+    # The inline CID logo MUST sit inside the multipart/related that holds the HTML that
+    # references it; the PDF is a true attachment and belongs at the outer multipart/mixed
+    # level. Previously everything (incl. the PDF) lived in one multipart/related, and Gmail
+    # intermittently failed to resolve cid:epm_logo_png_cid when a non-related attachment was
+    # mixed into that container — which left the logo broken in the email (2026-06-03).
+    msg = MIMEMultipart("mixed")
     msg["From"] = email_service.get_mail_from() or FROM
     msg["To"] = to_addr or TO
     msg["Subject"] = SUBJECT
@@ -1082,14 +1088,17 @@ def build_email(to_addr: "str | None" = None, unsubscribe_url: "str | None" = No
         msg["List-Unsubscribe"] = f"<{unsubscribe_url}>"
         msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
 
+    related = MIMEMultipart("related")
     alt = MIMEMultipart("alternative")
     alt.attach(MIMEText(plain_text, "plain"))
     alt.attach(MIMEText(html, "html"))
-    msg.attach(alt)
+    related.attach(alt)
 
     logo_mime = attach_image(LOGO_PATH, "epm_logo_png_cid")
     if logo_mime:
-        msg.attach(logo_mime)
+        related.attach(logo_mime)
+
+    msg.attach(related)
 
     if os.path.exists(PDF_REPORT):
         with open(PDF_REPORT, "rb") as f:

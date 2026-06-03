@@ -589,3 +589,69 @@ def test_preflight_skip_flag_bypasses_check(monkeypatch):
         raise AssertionError("preflight should not probe when skip flag set")
     monkeypatch.setattr(gmc.requests, "get", _fail)
     assert gmc._preflight_gpu_check(None) is None
+
+
+# --- Tactical positioning: factor_read must not contradict the daily stance -----
+# The stance is TODAY's sector tilt; factor_read is a TRAILING-1M beta read. When they
+# diverge, factor_read must frame the divergence, not assert the opposite risk posture
+# ("risk-on positioning" under a "Risk-off, defensive bid" header read as a contradiction).
+import pandas as _pd
+
+
+def _sector(ticker, name, pct):
+    return {"ticker": ticker, "name": name, "pct_change": pct}
+
+
+_RISK_OFF_SECTORS = [
+    _sector("XLV", "Health", 1.0), _sector("XLP", "Staples", 1.0), _sector("XLU", "Util", 0.7),
+    _sector("XLI", "Indus", 0.3), _sector("XLF", "Fin", -1.0), _sector("XLY", "Disc", -1.2),
+    _sector("XLK", "Tech", -1.4),
+]
+_RISK_ON_SECTORS = [
+    _sector("XLK", "Tech", 1.6), _sector("XLY", "Disc", 1.3), _sector("XLF", "Fin", 1.0),
+    _sector("XLI", "Indus", 0.4), _sector("XLU", "Util", -0.8), _sector("XLP", "Staples", -1.0),
+    _sector("XLV", "Health", -1.2),
+]
+
+
+def _fund_df():
+    import universe_config as u
+    port = [t for t in u.get_portfolio_tickers() if t not in set(u.get_mag7())][:5]
+    # leaders high-beta, laggards low-beta
+    rows = [
+        {"Ticker": port[0], "1M Return": 19.6, "Beta (3Y)": 1.63},
+        {"Ticker": port[1], "1M Return": 7.8, "Beta (3Y)": 1.13},
+        {"Ticker": port[2], "1M Return": 4.8, "Beta (3Y)": 0.79},
+        {"Ticker": port[3], "1M Return": -1.5, "Beta (3Y)": 0.72},
+        {"Ticker": port[4], "1M Return": -2.9, "Beta (3Y)": 0.50},
+    ]
+    return _pd.DataFrame(rows)
+
+
+def test_tactical_factor_read_no_contradiction_under_risk_off():
+    out = gmc.build_tactical_positioning(_fund_df(), _RISK_OFF_SECTORS, 16.0)
+    assert out["stance"].startswith("Risk-off"), out["stance"]
+    fr = out["factor_read"]
+    assert "counter to today's defensive rotation" in fr, fr
+    assert "consistent with risk-on positioning" not in fr, fr
+
+
+def test_tactical_factor_read_concordant_when_risk_on():
+    out = gmc.build_tactical_positioning(_fund_df(), _RISK_ON_SECTORS, 16.0)
+    assert out["stance"].startswith("Risk-on"), out["stance"]
+    # high-beta leaders AGREE with a risk-on stance -> keep the plain concordant phrasing
+    assert "consistent with risk-on positioning" in out["factor_read"], out["factor_read"]
+
+
+# --- Email: inline logo must sit inside multipart/related (CID resolves in Gmail) ---
+def test_email_logo_nested_in_related_with_pdf_at_mixed_level():
+    se = pytest.importorskip("send_email")
+    msg = se.build_email(to_addr="t@x.com", unsubscribe_url="https://x/u")
+    assert msg.get_content_type() == "multipart/mixed"
+    parts = msg.get_payload()
+    related = next(p for p in parts if p.get_content_type() == "multipart/related")
+    # the inline logo lives inside the related container, next to the HTML it references
+    imgs = [p for p in related.get_payload() if p.get_content_type() == "image/png"]
+    assert imgs and imgs[0].get("Content-ID") == "<epm_logo_png_cid>"
+    # the PDF (if present) is a true attachment at the outer mixed level, NOT in related
+    assert all(p.get_content_type() != "application/pdf" for p in related.get_payload())

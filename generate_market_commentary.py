@@ -887,17 +887,34 @@ def build_tactical_positioning(
                 top_funds = [_row(r) for _, r in funds.head(3).iterrows()]
                 bot_funds = [_row(r) for _, r in funds.tail(2).iterrows()]
 
-                # Factor read — compare avg beta of leaders vs laggards.
+                # Factor read — compare avg beta of leaders vs laggards. NOTE: this is a
+                # TRAILING-1M read, whereas `stance` above is TODAY's sector tilt. The two
+                # windows can legitimately diverge, so when the beta tilt conflicts with
+                # today's stance we frame it as a trailing-leaderboard divergence rather than
+                # asserting the opposite risk posture — the bald "risk-on positioning" line
+                # under a "Risk-off, defensive bid" header read as a self-contradiction.
                 tb = [f["beta"] for f in top_funds if f.get("beta") is not None]
                 bb = [f["beta"] for f in bot_funds if f.get("beta") is not None]
                 if tb and bb:
                     at, ab = sum(tb)/len(tb), sum(bb)/len(bb)
+                    _risk_off_today = stance.startswith(("Risk-off", "Defensive"))
+                    _risk_on_today = stance.startswith(("Risk-on", "Pro-cyclical"))
                     if at - ab > 0.2:
-                        factor_read = (f"High-beta leading — leaders carry avg β {at:.2f} vs laggards {ab:.2f}; "
-                                       f"consistent with risk-on positioning.")
+                        if _risk_off_today:
+                            factor_read = (f"Trailing-1M leaders skew high-beta (avg β {at:.2f} vs laggards "
+                                           f"{ab:.2f}) — a risk-on tilt in the month's leaderboard that runs "
+                                           f"counter to today's defensive rotation.")
+                        else:
+                            factor_read = (f"High-beta leading — leaders carry avg β {at:.2f} vs laggards {ab:.2f}; "
+                                           f"consistent with risk-on positioning.")
                     elif ab - at > 0.2:
-                        factor_read = (f"Low-vol bid — laggards carry higher avg β ({ab:.2f}) than leaders "
-                                       f"({at:.2f}); defensive rotation under way.")
+                        if _risk_on_today:
+                            factor_read = (f"Trailing-1M laggards carry higher avg β ({ab:.2f}) than leaders "
+                                           f"({at:.2f}) — a defensive tilt in the month's leaderboard that runs "
+                                           f"counter to today's pro-cyclical move.")
+                        else:
+                            factor_read = (f"Low-vol bid — laggards carry higher avg β ({ab:.2f}) than leaders "
+                                           f"({at:.2f}); defensive rotation under way.")
                     else:
                         factor_read = f"No clear beta tilt — leaders β {at:.2f} vs laggards β {ab:.2f}."
             except Exception as _exc:
