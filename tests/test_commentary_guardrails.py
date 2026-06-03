@@ -234,10 +234,16 @@ def test_no_corporate_action_claim_is_clean():
 
 def test_macro_prints_units(tmp_path, monkeypatch):
     import json as _json
+    from datetime import datetime, timedelta
+    # Dates relative to today so the "recent" assertion never decays with the
+    # calendar: claims observed 2 days ago (inside the 10-day window), PCE 60
+    # days ago (outside it).
+    recent_date = (datetime.today() - timedelta(days=2)).strftime("%Y-%m-%d")
+    old_date    = (datetime.today() - timedelta(days=60)).strftime("%Y-%m-%d")
     arb = {"economics": {
-        "Initial Jobless Claims": {"value": 215000.0, "prev_value": 210000.0, "date": "2026-05-23"},
-        "Nonfarm Payrolls":       {"value": 115.0,    "prev_value": 185.0,    "date": "2026-04-01"},
-        "Core PCE (YoY)":         {"value": 3.28919,  "prev_value": 3.23629,  "date": "2026-04-01"},
+        "Initial Jobless Claims": {"value": 215000.0, "prev_value": 210000.0, "date": recent_date},
+        "Nonfarm Payrolls":       {"value": 115.0,    "prev_value": 185.0,    "date": old_date},
+        "Core PCE (YoY)":         {"value": 3.28919,  "prev_value": 3.23629,  "date": old_date},
     }}
     (tmp_path / "market_data_arbitrated.json").write_text(_json.dumps(arb), encoding="utf-8")
     monkeypatch.setattr(gmc, "DATA_DIR", tmp_path)
