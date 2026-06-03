@@ -655,3 +655,19 @@ def test_email_logo_nested_in_related_with_pdf_at_mixed_level():
     assert imgs and imgs[0].get("Content-ID") == "<epm_logo_png_cid>"
     # the PDF (if present) is a true attachment at the outer mixed level, NOT in related
     assert all(p.get_content_type() != "application/pdf" for p in related.get_payload())
+
+
+# --- JOLTS now surfaces in the recent-prints recap (was missing 2026-06-03) -------
+def test_jolts_surfaces_in_recent_macro_prints(tmp_path, monkeypatch):
+    import json as _json
+    monkeypatch.setattr(gmc, "DATA_DIR", tmp_path)
+    payload = {"economics": {
+        "JOLTS Job Openings":     {"value": 7618.0, "prev_value": 6887.0, "date": "2026-04-01"},
+        "Initial Jobless Claims": {"value": 215000.0, "prev_value": 210000.0, "date": "2026-05-23"},
+    }}
+    (tmp_path / "market_data_arbitrated.json").write_text(_json.dumps(payload), encoding="utf-8")
+    out = gmc.load_recent_macro_prints()
+    jolts = next((r for r in out if r["indicator"] == "JOLTS Job Openings"), None)
+    assert jolts is not None, "JOLTS missing from recap"
+    assert jolts["actual"] == "7.62M", jolts["actual"]   # 7618 thousands -> 7.62M
+    assert jolts["prior"] == "6.89M", jolts["prior"]

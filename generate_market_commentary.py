@@ -1519,6 +1519,39 @@ def fetch_economic_calendar() -> list[dict]:
                         break
             if _enriched_count:
                 print(f"[CAL] Finnhub enriched {_enriched_count} event(s) with consensus/previous.")
+
+            # FRED's release calendar structurally OMITS ISM (private ISM, Inc. data), so
+            # ISM Manufacturing/Services never appear above even though they are top-tier
+            # market movers — the recurring "missed ISM Services" gap. Finnhub DOES carry
+            # them, so ingest the allowlisted, US-only events here and append any not already
+            # present. Kept to a tight allowlist so Finnhub's noisy global calendar can't
+            # pollute the FRED-curated list.
+            _FINNHUB_ADD = {
+                "ism services":          ("ISM Services Index",      "high"),
+                "ism non-manufacturing": ("ISM Services Index",      "high"),
+                "ism manufacturing":     ("ISM Manufacturing Index", "high"),
+            }
+            _have = {(e["date"], e["event"]) for e in events}
+            _added = 0
+            for _fhe in _fh_ev_list:
+                if str(_fhe.get("country", "")).upper() not in ("US", "USA", "UNITED STATES"):
+                    continue
+                _nm = str(_fhe.get("event", "")).lower().strip()
+                _match = next(((cn, ci) for kw, (cn, ci) in _FINNHUB_ADD.items() if kw in _nm), None)
+                if _match is None:
+                    continue
+                _clean, _imp = _match
+                _d = str(_fhe.get("time", ""))[:10]
+                if not _d or (_d, _clean) in _have:
+                    continue
+                _have.add((_d, _clean))
+                events.append({"date": _d, "event": _clean, "country": "US",
+                               "importance": _imp, "actual": _fhe.get("actual"),
+                               "consensus": _fhe.get("estimate"), "previous": _fhe.get("prev")})
+                _added += 1
+            if _added:
+                events.sort(key=lambda x: x["date"])
+                print(f"[CAL] Added {_added} Finnhub-only event(s) FRED omits (e.g. ISM).")
         except Exception:
             pass  # enrichment is best-effort; FRED events still ship without it
     except Exception as exc:
@@ -1747,6 +1780,7 @@ _MACRO_PRINT_SPEC = [
     ("GDP Growth (QoQ)",       "GDP Growth (QoQ, ann.)",    "pct"),
     ("Initial Jobless Claims", "Initial Jobless Claims",    "k"),
     ("Nonfarm Payrolls",       "Nonfarm Payrolls",          "kth"),
+    ("JOLTS Job Openings",     "JOLTS Job Openings",        "m"),
     ("Retail Sales (MoM)",     "Retail Sales (MoM)",        "pct"),
     ("Unemployment Rate",      "Unemployment Rate",         "pct"),
     ("PPI (YoY)",              "PPI (YoY)",                 "pct"),
@@ -1782,6 +1816,8 @@ def load_recent_macro_prints(lookback_days: int = 10) -> list[dict]:
             return f"{v/1000:.0f}k"
         if kind == "kth":
             return f"{v:.0f}k"
+        if kind == "m":              # level in thousands -> millions (JOLTS: 7620 -> "7.62M")
+            return f"{v/1000:.2f}M"
         if kind == "pct":
             return f"{v:.1f}%"
         return f"{v:.1f}"
@@ -1901,7 +1937,7 @@ commodities_commentary: 5-6 sentences. WTI direction and level first, then gold.
 
 currencies_commentary: 4-5 sentences. DXY direction and level. Rate differential or trade-flow driver. EUR/USD and JPY if notable. EM implication.
 
-economics_commentary: 4-5 sentences. RECAP LATEST READINGS FIRST: recent_macro_prints is a list of {indicator, actual, prior, as_of} carrying the ACTUAL figures — open by recapping the 1-2 most important entries (prioritise Core PCE, GDP, jobless claims, CPI, payrolls), citing indicator + actual + prior and interpreting the beat/miss vs prior. PHRASING: weekly jobless claims may be called "the latest weekly jobless claims (215k vs 210k prior)"; monthly/quarterly series MUST be referred to as "the latest [indicator] reading" (e.g. "the latest Core PCE reading at 3.3% YoY vs 3.2% prior") — do NOT assert a specific release weekday for them, because the payload gives the observation period, not the publication date. NUMBER SOURCE (non-negotiable): cite macro figures ONLY from recent_macro_prints — NEVER invent or round a number outside that list (the prior report fabricated "211k in line with 211k prior"; the real value was 215k vs 210k). If recent_macro_prints is empty, cite no specific macro figure. Never frame a past reading as an upcoming release. After the recap, give macro-cycle context (soft landing, slowdown, re-acceleration) and the Fed rate-trajectory implication. Do NOT reproduce the example numbers above as literal output.
+economics_commentary: 4-5 sentences. RECAP LATEST READINGS FIRST: recent_macro_prints is a list of {indicator, actual, prior, as_of} carrying the ACTUAL figures — open by recapping the 1-2 most important entries (prioritise Core PCE, GDP, jobless claims, CPI, payrolls), citing indicator + actual + prior and interpreting the beat/miss vs prior. A fresh JOLTS Job Openings print (a labor-demand gauge) is market-relevant — feature it when present. PHRASING: weekly jobless claims may be called "the latest weekly jobless claims (215k vs 210k prior)"; monthly/quarterly series MUST be referred to as "the latest [indicator] reading" (e.g. "the latest Core PCE reading at 3.3% YoY vs 3.2% prior") — do NOT assert a specific release weekday for them, because the payload gives the observation period, not the publication date. NUMBER SOURCE (non-negotiable): cite macro figures ONLY from recent_macro_prints — NEVER invent or round a number outside that list (the prior report fabricated "211k in line with 211k prior"; the real value was 215k vs 210k). If recent_macro_prints is empty, cite no specific macro figure. Never frame a past reading as an upcoming release. After the recap, give macro-cycle context (soft landing, slowdown, re-acceleration) and the Fed rate-trajectory implication. Do NOT reproduce the example numbers above as literal output.
   DATE GUARD (critical): If todays_economic_events is EMPTY there is NO release scheduled today — do NOT write that any report is "scheduled today", "due this morning", or "at 8:30 AM ET today", and do NOT invent a release that is not in todays_economic_events or week_ahead_econ_events. Refer to any upcoming release by its WEEKDAY (e.g., "Thursday's GDP report"), and anchor the paragraph in the macro cycle rather than a fictitious same-day calendar.
   RELEVANCE GUARD (critical): The recap MUST center on the most market-relevant U.S. macro releases in recent_macro_prints. Do NOT lead with, or feature, a minor or foreign data point (e.g., a foreign government's quarterly spending, an overseas survey) — if it is not in recent_macro_prints it does not belong in the recap at all. Do NOT open economics_commentary with an event that is still UPCOMING today (e.g., a JOLTS or ADP print due later today) framed as if it already printed; upcoming releases belong in watch_today as forward catalysts, not in the recap.
 

@@ -169,6 +169,7 @@ def _arbitrate_economics(econ_live: dict) -> dict:
         "Retail_Sales_MoM":  "Retail Sales (MoM)",
         "Housing_Starts":    "Housing Starts",
         "Nonfarm_Payrolls":  "Nonfarm Payrolls",
+        "JOLTS":             "JOLTS Job Openings",
         "Fed_Funds":         "Fed Funds Rate",
     }
     for yc_key, report_label in label_map.items():
@@ -217,6 +218,7 @@ _FRED_ECON_SERIES: dict[str, tuple[str, dict]] = {
     "PPI_YoY":           ("PPIACO",           {"units": "pc1"}),
     "Retail_Sales_MoM":  ("RSXFS",            {"units": "pch"}),
     "Nonfarm_Payrolls":  ("PAYEMS",           {"units": "chg"}),
+    "JOLTS":             ("JTSJOL",           {}),   # job openings, level in thousands
     "Fed_Funds":         ("DFEDTARU",         {}),
 }
 
