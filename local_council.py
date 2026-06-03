@@ -170,6 +170,28 @@ PERSONAS: List[Persona] = [
 ]
 
 
+# Swapped in for the earnings_catalyst persona when the subject is a fund/ETF
+# (earnings have no meaning for a basket). See run_council().
+FUND_STRUCTURE_PERSONA = Persona(
+    name="fund_structure",
+    title="Fund Structure Analyst",
+    section_header="FUND COMPOSITION & MANDATE",
+    system_prompt=(
+        "You are a fund structure analyst. You reason over the fund's top-holding "
+        "concentration, sector tilt, stated mandate/objective, and expense drag — "
+        "NOT single-company earnings. Judge whether the holdings match the stated "
+        "mandate, whether concentration creates single-name risk, and whether the "
+        "expense ratio is justified versus comparable funds. Every claim must cite "
+        "a specific number from KEY_FACTS or the FUND COMPOSITION & MANDATE seed section."
+    ),
+    focus_fields=[
+        "is_fund", "fund_type", "fund_category", "fund_family",
+        "expense_ratio_pct", "top10_concentration_pct", "top_holdings",
+        "fund_objective",
+    ],
+)
+
+
 # ---------------------------------------------------------------------------
 # Exemplar constants — swap these in one place to upgrade output quality.
 # Both use a fictitious NVDA scenario so they are unambiguously not the
@@ -717,7 +739,15 @@ def run_council(
           "raw_markdown":   full R1+R2+R3 transcript, role-grouped,
         }
     """
-    n = len(PERSONAS)
+    # For funds/ETFs, swap the earnings_catalyst persona (earnings are
+    # meaningless for a basket) for the fund-structure analyst.
+    personas = list(PERSONAS)
+    if key_facts.get("is_fund"):
+        personas = [
+            FUND_STRUCTURE_PERSONA if p.name == "earnings_catalyst" else p
+            for p in personas
+        ]
+    n = len(personas)
 
     def _cb(pct: int, label: str) -> None:
         if progress_cb:
@@ -725,13 +755,13 @@ def run_council(
 
     # Round 1 — independent stances (progress 0 → 35%)
     takes_r1: List[Dict[str, str]] = []
-    for idx, persona in enumerate(PERSONAS):
+    for idx, persona in enumerate(personas):
         _cb(int(idx / n * 35), f"R1: {persona.title}")
         takes_r1.append(_run_persona(persona, ticker, key_facts, seed_text))
 
     # Round 2 — named-disagreement debate (progress 35 → 65%)
     takes_r2: List[Dict[str, str]] = []
-    for idx, persona in enumerate(PERSONAS):
+    for idx, persona in enumerate(personas):
         _cb(35 + int(idx / n * 30), f"R2: {persona.title}")
         my_r1  = next(t for t in takes_r1 if t["name"] == persona.name)
         others = [t for t in takes_r1  if t["name"] != persona.name]
@@ -739,7 +769,7 @@ def run_council(
 
     # Round 3 — brief final positions (progress 65 → 80%)
     takes_r3: List[Dict[str, str]] = []
-    for idx, persona in enumerate(PERSONAS):
+    for idx, persona in enumerate(personas):
         _cb(65 + int(idx / n * 15), f"R3: {persona.title}")
         my_r1 = next(t for t in takes_r1 if t["name"] == persona.name)
         my_r2 = next(t for t in takes_r2 if t["name"] == persona.name)
@@ -816,7 +846,7 @@ def run_council(
         f"**Round 1**\n\n{next(t for t in takes_r1 if t['name'] == p.name)['take']}\n\n"
         f"**Round 2**\n\n{next(t for t in takes_r2 if t['name'] == p.name)['take']}\n\n"
         f"**Round 3**\n\n{next(t for t in takes_r3 if t['name'] == p.name)['take']}"
-        for p in PERSONAS
+        for p in personas
     )
 
     return {

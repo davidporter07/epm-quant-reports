@@ -92,6 +92,74 @@ class OpenBBProvider:
             if isinstance(part, dict):
                 out.update(part)
         return out
+
+    @staticmethod
+    def _extract_funds_data(funds_data: Any) -> dict[str, Any]:
+        """Flatten a yfinance FundsData object into a plain JSON-friendly dict.
+
+        yfinance exposes fund_profile (dict), description (str), top_holdings
+        (DataFrame) and sector_weightings (dict) as separate attributes. The
+        previous _merge_dicts approach silently dropped the str and DataFrame
+        parts (it only keeps dict args); this preserves them so the fund's
+        mandate, holdings and sector tilt survive into the profile payload.
+        """
+        out: dict[str, Any] = {}
+        if funds_data is None:
+            return out
+        # categoryName / family / legalType. yfinance names this attribute
+        # `fund_overview` (older builds used `fund_profile`); read either.
+        for attr in ("fund_overview", "fund_profile"):
+            try:
+                profile = getattr(funds_data, attr, None)
+                if isinstance(profile, dict):
+                    out.update(profile)
+            except Exception:
+                pass
+        try:
+            overview = getattr(funds_data, "description", None)
+            if isinstance(overview, str) and overview.strip():
+                out["fundOverview"] = overview.strip()
+        except Exception:
+            pass
+        # Expense ratio lives in the fund_operations DataFrame, indexed by
+        # metric name with the fund's own column + a "Category Average" column.
+        try:
+            ops = getattr(funds_data, "fund_operations", None)
+            if ops is not None and hasattr(ops, "index"):
+                for label in ops.index:
+                    if "expense ratio" in str(label).lower():
+                        cols = [c for c in ops.columns if str(c).lower() != "category average"]
+                        col = cols[0] if cols else ops.columns[0]
+                        val = ops.loc[label, col]
+                        if val is not None and not pd.isna(val):
+                            out["annualReportExpenseRatio"] = float(val)
+                        break
+        except Exception:
+            pass
+        try:
+            holdings = getattr(funds_data, "top_holdings", None)
+            rows: list[dict[str, Any]] = []
+            if holdings is not None and hasattr(holdings, "iterrows"):
+                for idx, row in holdings.iterrows():
+                    weight = row.get("Holding Percent")
+                    rows.append({
+                        "symbol": str(idx),
+                        "name": (str(row.get("Name") or "").strip() or None),
+                        "weight": float(weight) if weight is not None else None,
+                    })
+            if rows:
+                out["topHoldings"] = rows
+        except Exception:
+            pass
+        try:
+            sectors = getattr(funds_data, "sector_weightings", None)
+            if isinstance(sectors, dict) and sectors:
+                out["sectorWeightings"] = {
+                    str(k): float(v) for k, v in sectors.items() if v is not None
+                }
+        except Exception:
+            pass
+        return out
     @staticmethod
     def _normalize_symbol(symbol: str) -> str:
         value = str(symbol or "").strip().upper()
@@ -163,6 +231,13 @@ class OpenBBProvider:
             or self._nested_pick(asset_profile, "fullTimeEmployees")
             or self._nested_pick(summary_profile, "fullTimeEmployees")
         )
+        # Fund-specific fields (None for ordinary equities). topHoldings /
+        # sectorWeightings / fundOverview are injected by _extract_funds_data.
+        fees = fund_profile.get("feesExpensesInvestment") if isinstance(fund_profile.get("feesExpensesInvestment"), dict) else {}
+        expense_ratio = (
+            self._nested_pick(fund_profile, "annualReportExpenseRatio", "netExpRatio", "expenseRatio")
+            or self._nested_pick(fees, "annualReportExpenseRatio", "netExpRatio")
+        )
         return {
             "name": pick("name", "company_name", "title", "shortName", "longName")
             or self._nested_pick(price_block, "shortName", "longName")
@@ -194,6 +269,16 @@ class OpenBBProvider:
             "issue_type": pick("issue_type", "quoteType", "typeDisp", "asset_type")
             or self._nested_pick(price_block, "quoteType")
             or self._nested_pick(default_stats, "quoteType"),
+            "category": pick("category", "categoryName")
+            or self._nested_pick(fund_profile, "categoryName", "category"),
+            "fund_family": pick("fundFamily")
+            or self._nested_pick(fund_profile, "family", "fundFamily"),
+            "legal_type": pick("legalType")
+            or self._nested_pick(fund_profile, "legalType"),
+            "expense_ratio": expense_ratio,
+            "top_holdings": fund_profile.get("topHoldings") or None,
+            "sector_weightings": fund_profile.get("sectorWeightings") or None,
+            "fund_overview": self._nested_pick(fund_profile, "fundOverview") or None,
         }
 
     def _cache_get(self, key: tuple[Any, ...]) -> Any | None:
@@ -409,16 +494,7 @@ class OpenBBProvider:
                     except Exception:
                         get_info = {}
                     funds_data = getattr(ticker, "funds_data", None)
-                    fund_profile = {}
-                    if funds_data is not None:
-                        try:
-                            fund_profile = self._merge_dicts(
-                                getattr(funds_data, "fund_profile", None),
-                                getattr(funds_data, "description", None),
-                                getattr(funds_data, "top_holdings", None),
-                            )
-                        except Exception:
-                            pass
+                    fund_profile = self._extract_funds_data(funds_data)
                     merged = self._merge_dicts(info, get_info, {"fundProfile": fund_profile})
                     profile = self._normalize_profile_payload(merged, symbol)
                     if profile and any(profile.get(key) not in (None, "", symbol) for key in ("name", "long_description", "short_description", "sector", "industry_category")):

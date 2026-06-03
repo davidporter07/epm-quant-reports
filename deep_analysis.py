@@ -268,6 +268,86 @@ def _get_fundamentals(ticker: str) -> Dict:
     return {}
 
 
+_FUND_ISSUE_TYPES = {"ETF", "MUTUALFUND", "FUND", "INDEX", "MONEYMARKET", "CLOSEDENDFUND", "CEF"}
+
+
+def _get_fund_profile(ticker: str) -> Dict:
+    """Fetch fund composition + mandate via OpenBBProvider.get_profile().
+
+    Returns {} for ordinary equities. For funds/ETFs returns an is_fund flag,
+    top holdings (name + weight), top-10 concentration, stated objective,
+    category/family, expense ratio, and sector tilt — the ground truth the
+    FUND STRUCTURE ANALYST persona reasons over.
+    """
+    try:
+        from providers.openbb_provider import OpenBBProvider
+        profile = OpenBBProvider().get_profile(ticker)
+    except Exception:
+        return {}
+    if not isinstance(profile, dict):
+        return {}
+
+    holdings = profile.get("top_holdings") or []
+    issue_type = str(profile.get("issue_type") or "").upper().replace(" ", "")
+    name = str(profile.get("name") or "").lower()
+    is_fund = (
+        issue_type in _FUND_ISSUE_TYPES
+        or bool(holdings)
+        or "etf" in name or " fund" in name or "trust" in name
+    )
+    if not is_fund:
+        return {}
+
+    clean_holdings: List[dict] = []
+    for h in holdings:
+        if not isinstance(h, dict):
+            continue
+        w = h.get("weight")
+        clean_holdings.append({
+            "symbol":     h.get("symbol"),
+            "name":       h.get("name"),
+            "weight_pct": round(float(w) * 100, 2) if w is not None else None,
+        })
+    top10 = clean_holdings[:10]
+    concentration = (
+        round(sum(h["weight_pct"] for h in top10 if h["weight_pct"] is not None), 2)
+        if top10 else None
+    )
+
+    expense = profile.get("expense_ratio")
+    expense_pct = round(float(expense) * 100, 4) if expense is not None else None
+
+    sector_w = profile.get("sector_weightings") or {}
+    sector_tilt: List[tuple] = []
+    if isinstance(sector_w, dict):
+        sector_tilt = sorted(
+            ((str(k).replace("_", " ").title(), round(float(v) * 100, 1))
+             for k, v in sector_w.items() if v is not None),
+            key=lambda kv: kv[1], reverse=True,
+        )[:5]
+
+    objective = (
+        profile.get("fund_overview")
+        or profile.get("long_description")
+        or profile.get("short_description")
+        or ""
+    )
+    objective = str(objective).strip()
+
+    return {
+        "is_fund":                 True,
+        "name":                    profile.get("name") or ticker,
+        "issue_type":              issue_type or "FUND",
+        "category":                profile.get("category"),
+        "fund_family":             profile.get("fund_family"),
+        "expense_ratio_pct":       expense_pct,
+        "top_holdings":            top10,
+        "top10_concentration_pct": concentration,
+        "sector_tilt":             sector_tilt,
+        "objective":               objective[:600],
+    }
+
+
 SECTOR_ETFS = {
     "technology": "XLK", "financials": "XLF", "healthcare": "XLV",
     "consumer discretionary": "XLY", "consumer staples": "XLP",
@@ -585,6 +665,8 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> Tuple[str, Dict[str, Any]]
     overnight    = _get_overnight_stats(ohlcv)
     eps_history  = _get_earnings_surprise_history(ticker)
     earnings_release = load_recent_earnings_release(ticker)
+    fund         = _get_fund_profile(ticker)
+    is_fund      = bool(fund)
 
     current = tech["current"]
     sector  = (co_info.get("sector") or "").lower()
@@ -599,15 +681,55 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> Tuple[str, Dict[str, Any]]
     # ── SIMULATION PARTICIPANTS ───────────────────────────────────────────────
     # Placed before content sections so council personas recognize these as the primary discussion subjects
     lines.append("── SIMULATION PARTICIPANTS ──────────────────────────────────────────────────")
-    lines.append("Seven specialist analysts provide perspectives on this stock:")
+    lines.append(f"Seven specialist analysts provide perspectives on this {'fund' if is_fund else 'stock'}:")
     lines.append(f"- TECHNICAL ANALYST: interprets price action, RSI, volatility regime, relative performance, and overnight flow data for {ticker}")
     lines.append(f"- GROWTH INVESTOR: evaluates revenue growth, earnings growth, margins, ROE, forward P/E, and PEG ratio for {ticker}")
     lines.append(f"- VALUE INVESTOR: assesses trailing P/E, EV/EBITDA, price-to-book, debt/equity, dividend yield, and market cap for {ticker}")
     lines.append(f"- MACRO STRATEGIST: frames {ticker} within the VIX regime, SPY trend, and Federal Reserve interest rate environment")
     lines.append(f"- SUPPLY CHAIN RISK ANALYST: identifies geopolitical exposure, manufacturing concentration, and tariff risk for {ticker}")
     lines.append(f"- BEARISH ANALYST: argues the downside case, challenges consensus, and identifies risks quantitative models miss for {ticker}")
-    lines.append(f"- EARNINGS CATALYST ANALYST: tracks the next earnings date, EPS surprise history, beat rate, and PEAD drift signal for {ticker}")
+    if is_fund:
+        lines.append(f"- FUND STRUCTURE ANALYST: reasons over top-holding concentration, sector tilt, stated mandate/objective, and expense drag for {ticker}")
+    else:
+        lines.append(f"- EARNINGS CATALYST ANALYST: tracks the next earnings date, EPS surprise history, beat rate, and PEAD drift signal for {ticker}")
     lines.append("")
+
+    # ── FUND COMPOSITION & MANDATE ──────────────────────────────────────────────
+    # Rendered only for funds/ETFs; this is the FUND STRUCTURE ANALYST's primary data.
+    if is_fund:
+        lines.append("── FUND COMPOSITION & MANDATE ──────────────────────────────────────────────────")
+        meta_parts = []
+        if fund.get("issue_type"):
+            meta_parts.append(f"Type: {fund['issue_type']}")
+        if fund.get("category"):
+            meta_parts.append(f"Category: {fund['category']}")
+        if fund.get("fund_family"):
+            meta_parts.append(f"Family: {fund['fund_family']}")
+        if fund.get("expense_ratio_pct") is not None:
+            meta_parts.append(f"Expense ratio: {fund['expense_ratio_pct']:.2f}%")
+        if meta_parts:
+            lines.append(" | ".join(meta_parts))
+        if fund.get("objective"):
+            lines.append(f"Stated mandate: {fund['objective']}")
+        if fund.get("top_holdings"):
+            conc = fund.get("top10_concentration_pct")
+            conc_str = f" (top-10 concentration: {conc:.1f}% of assets)" if conc is not None else ""
+            lines.append(f"Top Holdings{conc_str}:")
+            lines.append("| # | Holding | Symbol | Weight |")
+            lines.append("|---|---------|--------|--------|")
+            for i, h in enumerate(fund["top_holdings"], 1):
+                w = f"{h['weight_pct']:.2f}%" if h.get("weight_pct") is not None else "N/A"
+                lines.append(f"| {i} | {h.get('name') or 'N/A'} | {h.get('symbol') or 'N/A'} | {w} |")
+        if fund.get("sector_tilt"):
+            tilt = " | ".join(f"{nm} {pct:.1f}%" for nm, pct in fund["sector_tilt"])
+            lines.append(f"Sector Tilt (top): {tilt}")
+        conc = fund.get("top10_concentration_pct")
+        if conc is not None:
+            if conc >= 50:
+                lines.append("Note: High top-10 concentration — performance is driven by a small number of names; single-name/idiosyncratic risk is elevated relative to a broad index.")
+            elif conc <= 25:
+                lines.append("Note: Low top-10 concentration — broadly diversified; returns track the mandate/sector rather than single-name catalysts.")
+        lines.append("")
 
     # ── TECHNICAL ANALYSIS PERSPECTIVE ───────────────────────────────────────
     lines.append("── TECHNICAL ANALYSIS PERSPECTIVE ──────────────────────────────────────────")
@@ -1130,6 +1252,18 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> Tuple[str, Dict[str, Any]]
         "hv_20_annualized_pct":      vol_regime.get("hv_20"),
         "volatility_regime":         vol_regime.get("regime"),
     })
+
+    if is_fund and fund:
+        key_facts.update({
+            "is_fund":                  True,
+            "fund_type":                fund.get("issue_type"),
+            "fund_category":            fund.get("category"),
+            "fund_family":              fund.get("fund_family"),
+            "expense_ratio_pct":        fund.get("expense_ratio_pct"),
+            "top10_concentration_pct":  fund.get("top10_concentration_pct"),
+            "top_holdings":             fund.get("top_holdings"),
+            "fund_objective":           fund.get("objective") or None,
+        })
 
     if rel_perf:
         key_facts["sector_etf"] = rel_perf.get("etf")
