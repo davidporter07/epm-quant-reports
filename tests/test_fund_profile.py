@@ -144,6 +144,8 @@ def _stub_fetchers(monkeypatch, fund_payload):
     monkeypatch.setattr(da, "_get_earnings_surprise_history", lambda t: [])
     monkeypatch.setattr(da, "load_recent_earnings_release", lambda t: None)
     monkeypatch.setattr(da, "_get_fund_profile", lambda t: fund_payload)
+    # No web research by default (tests opt in by overriding enrich).
+    monkeypatch.setattr(da.research_service, "enrich", lambda ticker, **k: {})
 
 
 def test_build_seed_doc_fund_section(monkeypatch):
@@ -205,20 +207,23 @@ def test_build_seed_doc_management_section(monkeypatch):
     _stub_fetchers(monkeypatch, fund)
     monkeypatch.setattr(deep_analysis, "_get_company_info", lambda t: {
         "name": "ARK Innovation ETF", "sector": None, "industry": None, "country": "US"})
-    # active fund -> PM research runs; stub it to a deterministic result
-    monkeypatch.setattr(deep_analysis, "looks_actively_managed", lambda **k: True)
-    monkeypatch.setattr(deep_analysis, "research_fund_management", lambda ticker, name, **k: {
-        "managers": [{"name": "Cathie Wood", "summary": "Manager since 2014.", "tenure_years": 11.0}],
-        "manager_summary": "Cathie Wood: Manager since 2014, founder of ARK Invest.",
-        "manager_tenure_years": 11.0,
-        "source_urls": ["http://ark.example"],
+    # research enrichment runs; stub research_service.enrich with a deterministic result
+    monkeypatch.setattr(deep_analysis.research_service, "enrich", lambda ticker, **k: {
+        "manager": {"summary": "Cathie Wood: Manager since 2014, founder of ARK Invest.",
+                    "managers": ["Cathie Wood"], "tenure_years": 11.0,
+                    "sources": ["http://ark.example"], "fetched_at": "2026-06-03T00:00:00+00:00"},
+        "strategy": {"summary": "Seeks disruptive-innovation growth.",
+                     "sources": ["http://ark.example/strat"], "fetched_at": "2026-06-03T00:00:00+00:00"},
     })
     doc, key_facts = deep_analysis.build_seed_doc("ARKK", pred_len=5)
     assert "MANAGEMENT & MANDATE" in doc
     assert "Cathie Wood" in doc
     assert "Lead manager tenure: ~11 years" in doc
+    assert "Strategy: Seeks disruptive-innovation growth." in doc
+    assert "researched 2026-06-03" in doc
     assert key_facts["manager_tenure_years"] == 11.0
     assert key_facts["fund_managers"] == ["Cathie Wood"]
+    assert key_facts["fund_strategy"] == "Seeks disruptive-innovation growth."
 
 
 def test_build_seed_doc_passive_fund_skips_pm(monkeypatch):
@@ -230,13 +235,30 @@ def test_build_seed_doc_passive_fund_skips_pm(monkeypatch):
         "objective": "Seeks to track the S&P 500 Index.",
     }
     _stub_fetchers(monkeypatch, fund)
-
-    def _should_not_run(*a, **k):
-        raise AssertionError("PM research must not run for a passive fund")
-    monkeypatch.setattr(deep_analysis, "research_fund_management", _should_not_run)
+    # enrich returns nothing (e.g. SearxNG down / passive fund gated) -> no section
+    monkeypatch.setattr(deep_analysis.research_service, "enrich", lambda ticker, **k: {})
     doc, key_facts = deep_analysis.build_seed_doc("VOO", pred_len=5)
     assert "MANAGEMENT & MANDATE" not in doc
     assert "manager_summary" not in key_facts
+
+
+def test_build_seed_doc_stock_situational_intelligence(monkeypatch):
+    _stub_fetchers(monkeypatch, {})  # not a fund
+    monkeypatch.setattr(deep_analysis, "_get_company_info", lambda t: {
+        "name": "NVIDIA Corp", "sector": "Technology", "industry": "Semiconductors", "country": "US"})
+    monkeypatch.setattr(deep_analysis.research_service, "enrich", lambda ticker, **k: {
+        "analyst_actions": {"summary": "Morgan Stanley raised its price target to $200.",
+                            "sources": ["http://ms.example"], "fetched_at": "2026-06-03T00:00:00+00:00"},
+        "legal_regulatory": {"summary": "DOJ opened an antitrust review.",
+                             "sources": ["http://doj.example"], "fetched_at": "2026-06-03T00:00:00+00:00"},
+    })
+    doc, key_facts = deep_analysis.build_seed_doc("NVDA", pred_len=5)
+    assert "SITUATIONAL INTELLIGENCE" in doc
+    assert "Analyst actions: Morgan Stanley raised" in doc
+    assert "Legal / regulatory: DOJ opened" in doc
+    assert "MANAGEMENT & MANDATE" not in doc          # fund-only
+    assert key_facts["analyst_action_note"].startswith("Morgan Stanley")
+    assert key_facts["legal_regulatory_note"].startswith("DOJ")
 
 
 def test_build_seed_doc_stock_has_no_fund_section(monkeypatch):

@@ -769,6 +769,21 @@ body[data-theme="light"] .trend-table tr:hover td {
   color: var(--muted);
 }
 
+/* Auto-researched "About this fund/company" enrichment panel (search page) */
+.about-research { font-size: 13px; line-height: 1.55; color: var(--muted); }
+.about-research .about-item { margin-bottom: 8px; }
+.about-research .about-item:last-child { margin-bottom: 0; }
+.about-research .about-key { font-weight: 700; color: var(--text, #e8eefb); }
+.about-research .about-meta {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--muted); opacity: 0.85;
+}
+.about-research .about-prov {
+  font-size: 10.5px; color: var(--muted); opacity: 0.75; margin-top: 2px;
+}
+.about-research .about-prov a { color: inherit; text-decoration: underline; }
+.about-research .about-prov a:hover { color: var(--accent, #d4a84b); }
+
 /* ──────────────────────────────────────────────────────────
    15. SEARCH INPUT (page-level, search.html)
    ────────────────────────────────────────────────────────── */
