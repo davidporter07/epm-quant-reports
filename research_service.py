@@ -48,12 +48,16 @@ _NONE_TOKENS = {"none", "n/a", "no", "nothing", "unknown", ""}
 # Ollama (fast extraction model — NOT the slow council model)
 # --------------------------------------------------------------------------- #
 def _research_ollama(prompt: str, timeout: Optional[int] = None) -> str:
+    # qwen3.x is a reasoning model — without think:false it generates a long
+    # hidden <think> trace before answering, which is slow (esp. with partial
+    # CPU offload) and blew the timeout. Extraction needs no reasoning trace.
     r = requests.post(
         f"{_OLLAMA_URL}/api/generate",
         json={
             "model": _RESEARCH_MODEL,
             "prompt": prompt,
             "stream": False,
+            "think": False,
             "keep_alive": _KEEP_ALIVE,
             "options": {"temperature": 0.1, "top_p": 0.85, "num_ctx": 8192},
         },
