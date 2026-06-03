@@ -192,6 +192,53 @@ def test_run_council_keeps_earnings_persona_for_stock(monkeypatch):
     assert "Fund Structure Analyst" not in raw
 
 
+def test_build_seed_doc_management_section(monkeypatch):
+    fund = {
+        "is_fund": True, "name": "ARK Innovation ETF", "issue_type": "ETF",
+        "category": "Technology", "fund_family": "ARK",
+        "expense_ratio_pct": 0.75,
+        "top_holdings": [{"symbol": "TSLA", "name": "Tesla Inc", "weight_pct": 9.8}],
+        "top10_concentration_pct": 55.0,
+        "sector_tilt": [("Technology", 40.0)],
+        "objective": "Seeks long-term capital appreciation via disruptive innovation.",
+    }
+    _stub_fetchers(monkeypatch, fund)
+    monkeypatch.setattr(deep_analysis, "_get_company_info", lambda t: {
+        "name": "ARK Innovation ETF", "sector": None, "industry": None, "country": "US"})
+    # active fund -> PM research runs; stub it to a deterministic result
+    monkeypatch.setattr(deep_analysis, "looks_actively_managed", lambda **k: True)
+    monkeypatch.setattr(deep_analysis, "research_fund_management", lambda ticker, name, **k: {
+        "managers": [{"name": "Cathie Wood", "summary": "Manager since 2014.", "tenure_years": 11.0}],
+        "manager_summary": "Cathie Wood: Manager since 2014, founder of ARK Invest.",
+        "manager_tenure_years": 11.0,
+        "source_urls": ["http://ark.example"],
+    })
+    doc, key_facts = deep_analysis.build_seed_doc("ARKK", pred_len=5)
+    assert "MANAGEMENT & MANDATE" in doc
+    assert "Cathie Wood" in doc
+    assert "Lead manager tenure: ~11 years" in doc
+    assert key_facts["manager_tenure_years"] == 11.0
+    assert key_facts["fund_managers"] == ["Cathie Wood"]
+
+
+def test_build_seed_doc_passive_fund_skips_pm(monkeypatch):
+    fund = {
+        "is_fund": True, "name": "Vanguard S&P 500 ETF", "issue_type": "ETF",
+        "category": "Large Blend", "fund_family": "Vanguard", "expense_ratio_pct": 0.03,
+        "top_holdings": [{"symbol": "AAPL", "name": "Apple Inc", "weight_pct": 7.1}],
+        "top10_concentration_pct": 30.0, "sector_tilt": [("Technology", 30.0)],
+        "objective": "Seeks to track the S&P 500 Index.",
+    }
+    _stub_fetchers(monkeypatch, fund)
+
+    def _should_not_run(*a, **k):
+        raise AssertionError("PM research must not run for a passive fund")
+    monkeypatch.setattr(deep_analysis, "research_fund_management", _should_not_run)
+    doc, key_facts = deep_analysis.build_seed_doc("VOO", pred_len=5)
+    assert "MANAGEMENT & MANDATE" not in doc
+    assert "manager_summary" not in key_facts
+
+
 def test_build_seed_doc_stock_has_no_fund_section(monkeypatch):
     _stub_fetchers(monkeypatch, {})
     monkeypatch.setattr(deep_analysis, "_get_company_info", lambda t: {

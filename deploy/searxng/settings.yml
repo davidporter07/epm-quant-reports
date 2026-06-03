@@ -1,0 +1,29 @@
+# Minimal SearxNG settings for EPM internal use.
+# IMPORTANT: replace server.secret_key before first start (see README.md).
+use_default_settings: true
+
+server:
+  # Generated per-host; do NOT commit a real key. README has the one-liner.
+  secret_key: "CHANGE_ME_RUN_OPENSSL_RAND_HEX_32"
+  limiter: false           # internal localhost use; no public abuse surface
+  image_proxy: false
+
+search:
+  # JSON is required by providers/searxng_provider.py.
+  formats:
+    - html
+    - json
+  safe_search: 0
+  autocomplete: ""
+
+# Lean engine set focused on general web results for PM/fund research.
+# (Defaults are inherited; this just keeps noise/ratelimited engines off.)
+engines:
+  - name: google
+    disabled: false
+  - name: duckduckgo
+    disabled: false
+  - name: bing
+    disabled: false
+  - name: wikipedia
+    disabled: false

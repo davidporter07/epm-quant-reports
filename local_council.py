@@ -178,16 +178,19 @@ FUND_STRUCTURE_PERSONA = Persona(
     section_header="FUND COMPOSITION & MANDATE",
     system_prompt=(
         "You are a fund structure analyst. You reason over the fund's top-holding "
-        "concentration, sector tilt, stated mandate/objective, and expense drag — "
-        "NOT single-company earnings. Judge whether the holdings match the stated "
-        "mandate, whether concentration creates single-name risk, and whether the "
-        "expense ratio is justified versus comparable funds. Every claim must cite "
-        "a specific number from KEY_FACTS or the FUND COMPOSITION & MANDATE seed section."
+        "concentration, sector tilt, stated mandate/objective, expense drag, and — "
+        "for actively-managed funds — the manager's tenure and track record. NOT "
+        "single-company earnings. Judge whether the holdings match the stated "
+        "mandate, whether concentration creates single-name risk, whether the "
+        "expense ratio is justified versus comparable funds, and (if manager_summary "
+        "is present) whether management tenure/background supports confidence in the "
+        "strategy. Every claim must cite a specific number or fact from KEY_FACTS or "
+        "the FUND COMPOSITION & MANDATE seed section."
     ),
     focus_fields=[
         "is_fund", "fund_type", "fund_category", "fund_family",
         "expense_ratio_pct", "top10_concentration_pct", "top_holdings",
-        "fund_objective",
+        "fund_objective", "fund_managers", "manager_summary", "manager_tenure_years",
     ],
 )
 

@@ -1,0 +1,30 @@
+# SearxNG — internal metasearch backend for EPM analytical features
+# (PM-discovery agent in pm_research.py). Bound to localhost only; never
+# exposed to the public internet. Runs alongside Ollama/Kronos on epm-server.
+#
+# Stand up:
+#   cd deploy/searxng
+#   # one-time: generate a secret key into settings.yml (see README.md)
+#   docker compose up -d
+#   curl 'http://127.0.0.1:8080/search?q=test&format=json'   # -> JSON
+#
+# The app reads SEARXNG_URL (default http://127.0.0.1:8080). Set it in the
+# server .env only if you change host/port.
+
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: epm-searxng
+    restart: unless-stopped
+    # Bind to loopback ONLY — this is an internal backend, not a public service.
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      - SEARXNG_BASE_URL=http://127.0.0.1:8080/
+    logging:
+      driver: json-file
+      options:
+        max-size: "1m"
+        max-file: "3"

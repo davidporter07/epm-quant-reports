@@ -10,6 +10,7 @@ Each section header frames the analytical domain for the persona that reads it.
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -21,10 +22,15 @@ import yfinance as yf
 
 from earnings_refresh import load_recent_earnings_release, ticker_variants
 from news_store import load_news_store
+from pm_research import looks_actively_managed, research_fund_management
 from universe_config import get_portfolio_tickers
 
 KRONOS_URL = "http://127.0.0.1:8100"
 DATA_DIR = Path("data")
+
+# Hard ceiling (seconds) on the background PM-discovery research per deep-analysis
+# build. It runs concurrently with data collection, so this is the join timeout.
+PM_RESEARCH_TIMEOUT = int(os.getenv("PM_RESEARCH_TIMEOUT_SEC", "75"))
 
 _EPM_MODEL_FILES: Dict[str, Tuple[str, str]] = {
     "Linear Regression":  ("linear_forecasts.csv",       "Linear Model Forecast (%)"),
@@ -646,6 +652,24 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> Tuple[str, Dict[str, Any]]
     ticker = ticker.upper()
     today  = datetime.now().strftime("%Y-%m-%d")
 
+    # Fund profile first; for actively-managed funds kick off PM discovery in a
+    # background thread so the slow web+LLM research overlaps the data fetches.
+    fund         = _get_fund_profile(ticker)
+    is_fund      = bool(fund)
+    pm_future, pm_executor = None, None
+    if is_fund and looks_actively_managed(
+        name=fund.get("name", ""), category=fund.get("category", ""),
+        objective=fund.get("objective", ""), issue_type=fund.get("issue_type", ""),
+        expense_ratio_pct=fund.get("expense_ratio_pct"),
+    ):
+        try:
+            from concurrent.futures import ThreadPoolExecutor
+            pm_executor = ThreadPoolExecutor(max_workers=1)
+            pm_future = pm_executor.submit(
+                research_fund_management, ticker, fund.get("name") or ticker)
+        except Exception:
+            pm_future = None
+
     ohlcv    = _get_ohlcv(ticker, days=252)
     if not ohlcv:
         raise ValueError(f"No OHLCV data available for {ticker}")
@@ -665,8 +689,6 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> Tuple[str, Dict[str, Any]]
     overnight    = _get_overnight_stats(ohlcv)
     eps_history  = _get_earnings_surprise_history(ticker)
     earnings_release = load_recent_earnings_release(ticker)
-    fund         = _get_fund_profile(ticker)
-    is_fund      = bool(fund)
 
     current = tech["current"]
     sector  = (co_info.get("sector") or "").lower()
@@ -1147,6 +1169,27 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> Tuple[str, Dict[str, Any]]
             )
     lines.append("")
 
+    # ── MANAGEMENT & MANDATE ─────────────────────────────────────────────────
+    # Collect the concurrent PM-discovery result (time-boxed). Empty when the
+    # fund is passive, SearxNG is down, or nothing was found — then no section.
+    pm_info: Dict[str, Any] = {}
+    if pm_future is not None:
+        try:
+            pm_info = pm_future.result(timeout=PM_RESEARCH_TIMEOUT) or {}
+        except Exception:
+            pm_info = {}
+        finally:
+            if pm_executor is not None:
+                pm_executor.shutdown(wait=False)
+    if pm_info.get("manager_summary"):
+        lines.append("── MANAGEMENT & MANDATE ────────────────────────────────────────────────────────")
+        if pm_info.get("manager_tenure_years") is not None:
+            lines.append(f"Lead manager tenure: ~{pm_info['manager_tenure_years']:.0f} years")
+        lines.append(pm_info["manager_summary"])
+        if pm_info.get("source_urls"):
+            lines.append("Sources: " + " | ".join(pm_info["source_urls"][:3]))
+        lines.append("")
+
     # ── RECENT HEADLINES ─────────────────────────────────────────────────────
     if headlines:
         lines.append("── RECENT HEADLINES ─────────────────────────────────────────────────────────")
@@ -1264,6 +1307,12 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> Tuple[str, Dict[str, Any]]
             "top_holdings":             fund.get("top_holdings"),
             "fund_objective":           fund.get("objective") or None,
         })
+        if pm_info.get("manager_summary"):
+            key_facts["fund_managers"] = [
+                m.get("name") for m in pm_info.get("managers", []) if m.get("name")
+            ] or None
+            key_facts["manager_summary"] = pm_info["manager_summary"]
+            key_facts["manager_tenure_years"] = pm_info.get("manager_tenure_years")
 
     if rel_perf:
         key_facts["sector_etf"] = rel_perf.get("etf")
