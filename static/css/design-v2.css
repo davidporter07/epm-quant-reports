@@ -3149,6 +3149,54 @@ body[data-auth-state="member"] .pw-guest-prompt {
   border-color: rgba(248,113,113,0.55);
 }
 
+/* Daily-email subscribe / unsubscribe button (under Sign Out, above Theme) */
+.sp-email-btn {
+  width: 100%;
+  padding: 9px 0;
+  background: rgba(59,130,246,0.12);
+  border: 1px solid rgba(59,130,246,0.40);
+  border-radius: 10px;
+  color: #93c5fd;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  margin-top: 8px;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.sp-email-btn:hover {
+  background: rgba(59,130,246,0.20);
+  border-color: rgba(59,130,246,0.60);
+  color: #bfdbfe;
+}
+.sp-email-btn.subscribed {
+  background: transparent;
+  border-color: rgba(148,163,184,0.35);
+  color: var(--text-2, #9aa7bd);
+  font-weight: 500;
+}
+.sp-email-btn.subscribed:hover {
+  background: rgba(248,113,113,0.10);
+  border-color: rgba(248,113,113,0.50);
+  color: #fca5a5;
+}
+.sp-email-btn:disabled { opacity: 0.6; cursor: default; }
+
+[data-theme="light"] .sp-email-btn {
+  background: rgba(37,99,235,0.08);
+  border-color: rgba(37,99,235,0.30);
+  color: #1d4ed8;
+}
+[data-theme="light"] .sp-email-btn:hover {
+  background: rgba(37,99,235,0.14);
+  border-color: rgba(37,99,235,0.45);
+}
+[data-theme="light"] .sp-email-btn.subscribed {
+  background: transparent;
+  border-color: rgba(20,44,90,0.16);
+  color: #5a7090;
+}
+
 /* Light-theme adjustments */
 [data-theme="light"] .sp-username-text { color: #0d1c2e; }
 [data-theme="light"] .sp-char-btn {

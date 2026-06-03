@@ -1766,14 +1766,10 @@ function _renderSettingsProfile() {
         </div>
       </div>
 
-      <div class="sp-section-label" style="margin-top:14px;">Daily email</div>
-      <label class="sp-email-row" style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;">
-        <input type="checkbox" id="spEmailOptIn"${prefs.email_opt_in ? ' checked' : ''} />
-        <span>Email me the daily market recap</span>
-      </label>
-      <div class="sp-form-msg" id="spEmailMsg">${(prefs.email_opt_in && !prefs.email_confirmed) ? 'Check your inbox to confirm your subscription.' : ''}</div>
+      <button class="sp-signout-btn" id="spSignOutBtn" type="button">Sign Out</button>
 
-      <button class="sp-signout-btn" id="spSignOutBtn" type="button">Sign Out</button>`;
+      <button class="sp-email-btn${prefs.email_opt_in ? ' subscribed' : ''}" id="spEmailBtn" type="button">${prefs.email_opt_in ? 'Unsubscribe from daily email' : 'Subscribe to daily email'}</button>
+      <div class="sp-form-msg" id="spEmailMsg">${(prefs.email_opt_in && !prefs.email_confirmed) ? 'Check your inbox to confirm your subscription.' : ''}</div>`;
 
     _wireProfileEvents(section, color, avatar);
     _wireEmailOptIn(section);
@@ -1786,44 +1782,44 @@ function _renderSettingsProfile() {
 }
 
 function _wireEmailOptIn(section) {
-  const box = section.querySelector('#spEmailOptIn');
+  const btn = section.querySelector('#spEmailBtn');
   const msg = section.querySelector('#spEmailMsg');
-  if (!box) return;
-  box.addEventListener('change', async () => {
-    box.disabled = true;
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    const next = !btn.classList.contains('subscribed');
+    btn.disabled = true;
     try {
       const res = await fetch('/api/user/email-prefs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email_opt_in: box.checked }),
+        body: JSON.stringify({ email_opt_in: next }),
       });
       if (res.ok) {
         const data = await res.json();
-        if (!box.checked) {
-          if (msg) msg.textContent = 'Unsubscribed from the daily recap.';
-        } else if (data.confirmation_sent) {
-          if (msg) msg.textContent = 'Confirmation email sent — check your inbox to finish subscribing.';
-        } else if (data.email_confirmed) {
-          if (msg) msg.textContent = "You're subscribed to the daily recap.";
-        } else {
-          if (msg) msg.textContent = 'Check your inbox to confirm your subscription.';
+        btn.classList.toggle('subscribed', data.email_opt_in);
+        btn.textContent = data.email_opt_in ? 'Unsubscribe from daily email' : 'Subscribe to daily email';
+        if (msg) {
+          msg.className = 'sp-form-msg ok';
+          if (!data.email_opt_in) msg.textContent = 'Unsubscribed from the daily recap.';
+          else if (data.confirmation_sent) msg.textContent = 'Confirmation email sent — check your inbox to finish subscribing.';
+          else if (data.email_confirmed) msg.textContent = "You're subscribed to the daily recap.";
+          else msg.textContent = 'Check your inbox to confirm your subscription.';
         }
-        // Refresh cached prefs so the checkbox state survives drawer re-renders.
+        // Refresh cached prefs so the button state survives drawer re-renders.
         try {
           const cached = JSON.parse(localStorage.getItem('epm_user_prefs') || '{}');
           cached.email_opt_in = data.email_opt_in;
           cached.email_confirmed = data.email_confirmed;
           localStorage.setItem('epm_user_prefs', JSON.stringify(cached));
         } catch (_) {}
-      } else {
-        box.checked = !box.checked; // revert on failure
-        if (msg) msg.textContent = 'Could not update — please try again.';
+      } else if (msg) {
+        msg.className = 'sp-form-msg err';
+        msg.textContent = 'Could not update — please try again.';
       }
     } catch (_) {
-      box.checked = !box.checked;
-      if (msg) msg.textContent = 'Could not update — please try again.';
+      if (msg) { msg.className = 'sp-form-msg err'; msg.textContent = 'Could not update — please try again.'; }
     } finally {
-      box.disabled = false;
+      btn.disabled = false;
     }
   });
 }
