@@ -38,9 +38,11 @@ FROM = os.getenv("MAIL_FROM", "").strip() or "davidporter0731@gmail.com"
 # opt-in list, and is never given an unsubscribe link.
 TO = os.getenv("INTERNAL_RECIPIENT", "dporter@epmfinancial.com")
 
-# Where to fetch the confirmed-subscriber list (server, over Tailscale). The send
-# falls back to the internal recipient only if this is unreachable or the key is unset.
-EPM_SERVER_URL = os.getenv("EPM_SERVER_URL", "http://100.101.63.65:8000").rstrip("/")
+# Where to fetch the confirmed-subscriber list. The app binds to localhost behind
+# nginx (the Tailscale IP:8000 is NOT reachable), so the laptop must go through the
+# public HTTPS origin; the route is guarded by INTERNAL_API_KEY. The send falls back
+# to the internal recipient only if this is unreachable or the key is unset.
+EPM_SERVER_URL = os.getenv("EPM_SERVER_URL", "https://epm-market-intelligence.com").rstrip("/")
 INTERNAL_RECIPIENTS_URL = os.getenv(
     "INTERNAL_RECIPIENTS_URL", f"{EPM_SERVER_URL}/api/internal/daily-recipients"
 )
