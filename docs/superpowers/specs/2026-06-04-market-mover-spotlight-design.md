@@ -23,9 +23,13 @@ Pre-Market Look**, since the email was the original gap.
 
 ## Decisions (locked via discussion 2026-06-04)
 
-1. **Mover detection = news-driven + price-verify.** Reuse the news corpus the spotlight already
-   reads to surface the dominant single name; verify/quote the actual % via yfinance. No new daily
-   feed. Closest to how Sevens works (reads the wire, picks the name that's everywhere).
+1. **Mover detection = hybrid (movers feed + news/premarket supplement).** Primary candidates come
+   from the existing `OpenBBProvider.get_market_movers()` feed (real session gainers/losers with
+   verified `day_change_pct`); supplement with news-detected **premarket** movers (e.g. AVGO −13% on
+   earnings) verified via `OpenBBProvider.get_quote()`. The session feed grounds magnitude reliably;
+   the news/quote path catches pre-bell earnings reactions the session feed misses.
+   *(Updated 2026-06-04 after discovering `providers/openbb_provider.py` already exposes
+   `get_market_movers()` / `get_quote()` — a market-wide feed I'd initially assumed didn't exist.)*
 2. **Selection = unified prevalence score.** Score every candidate (news theme · single-name mover ·
    sector fallback) on one axis — share of today's headlines + a magnitude boost — and pick the
    single highest. The mover only wins when the wire is genuinely about it.
@@ -45,18 +49,19 @@ candidate wins.
 
 ### New module: `market_movers.py`
 
-Pure, network-light, unit-testable functions (LLM + yfinance injected/mocked in tests):
+Pure, network-light, unit-testable functions (movers feed + quote + LLM scan injected/mocked in tests):
 
-- `detect_market_mover(headline_corpus, enrich_co_news, payload, *, scan_fn, price_fn) -> dict | None`
-  - Rank companies by **share of today's headlines**. Tracked names already carry tickers via
-    `enrich_co_news`; the LLM topic-scan returns the dominant name **and ticker** for untracked
-    large-caps (it knows AVGO = Broadcom).
-  - **Price-verify** the move via `price_fn` (yfinance): premarket move if available
-    (`history(..., prepost=True)` / `fast_info`), else prior-session %. If neither resolves, only
-    quote a % when **≥2 headlines corroborate** the same figure; otherwise omit the number and
-    describe the move qualitatively.
-  - Returns `{ticker, company, pct, when ("premarket"|"prior session"), catalyst, headline_share,
-    tie_in_tickers, in_portfolio: bool}` or `None`.
+- `detect_market_mover(headline_corpus, enrich_co_news, payload, *, movers_fn, quote_fn, scan_fn) -> dict | None`
+  - **Session candidates** from `movers_fn()` → `OpenBBProvider.get_market_movers()` returns
+    `{gainers:[...], losers:[...]}`, each row `{ticker, name, day_change_pct (fraction), last_price,
+    volume, ...}` — magnitude already verified.
+  - **Premarket candidates** from the news path: the LLM topic-scan (`scan_fn`) returns the dominant
+    single name **and ticker** (and `enrich_co_news` carries tickers for tracked names); verify the
+    move via `quote_fn(ticker)` → `OpenBBProvider.get_quote()` (premarket/last % vs prev close). Only
+    quote a % when the quote resolves or **≥2 headlines corroborate** it; else describe qualitatively.
+  - Compute each candidate's **headline_share** against the corpus, merge, and return the strongest as
+    `{ticker, company, pct, when ("session"|"premarket"), catalyst, headline_share, tie_in_tickers,
+    in_portfolio: bool}` or `None`.
 - `_resolve_tie_in_tickers(ticker, payload) -> list[str]`: sector ETF (from the existing
   `_SECTOR_KW`/sector map) + 1–2 peers + any of our funds/holdings/watchlist that hold it.
 - `select_spotlight_candidate(candidates: list[dict]) -> dict | None`
@@ -115,9 +120,9 @@ news corpus (world_news, enrich_news, enrich_co_news), payload, sector_performan
 
 ## Testing (deterministic units; LLM scan + yfinance mocked)
 
-1. `detect_market_mover`: headline-share ranking, ticker resolution from `enrich_co_news` and from
-   the scan result, and the price-verify fallback ladder (premarket → prior session → corroboration
-   gate → no-number).
+1. `detect_market_mover`: session candidates from a mocked `movers_fn`, premarket candidate from a
+   mocked `scan_fn` + `quote_fn`, headline-share ranking, and the value-grounding ladder (feed % →
+   quote % → ≥2-headline corroboration → no-number).
 2. `select_spotlight_candidate`: given crafted candidates, asserts the expected winner — mover beats
    theme when its headline share dominates; theme beats a mid-size mover; portfolio boost breaks a
    near-tie; sub-floor top score returns `None`.
