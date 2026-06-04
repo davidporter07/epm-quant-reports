@@ -29,15 +29,13 @@ def test_portfolio_tickers_from_payload():
     assert mm._portfolio_tickers({}) == set()
 
 
-def test_resolve_tie_in_tickers_orders_sector_then_peers_then_holdings():
-    ties = mm._resolve_tie_in_tickers(
-        "AVGO", sector="Technology", peers=["NVDA", "AMD"], portfolio={"XNTK", "AVGO"}
-    )
-    assert ties[0] == "XLK"
-    assert "NVDA" in ties and "AMD" in ties
-    assert "XNTK" in ties
-    assert "AVGO" not in ties
-    assert len(ties) == len(set(ties))
+def test_resolve_tie_in_tickers_sector_etf_then_peers_no_holdings():
+    ties = mm._resolve_tie_in_tickers("AVGO", sector="Technology", peers=["NVDA", "AMD", "AVGO"])
+    assert ties[0] == "XLK"                 # sector ETF first
+    assert ties[1:] == ["NVDA", "AMD"]      # peers next; the mover itself is excluded
+    assert len(ties) == len(set(ties))      # deduped
+    # unknown sector -> peers only
+    assert mm._resolve_tie_in_tickers("ZZZZ", sector="", peers=["AAA"]) == ["AAA"]
 
 
 # --- Task 3: _session_candidates ---------------------------------------------

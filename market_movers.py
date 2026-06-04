@@ -57,10 +57,11 @@ def _portfolio_tickers(payload: dict) -> set[str]:
     return out
 
 
-def _resolve_tie_in_tickers(ticker: str, sector: str, peers: list[str],
-                            portfolio: set[str]) -> list[str]:
-    """Related vehicles for a single-name mover: sector ETF, then peers, then any holding
-    that relates. Never includes the mover itself. Deduped, order-preserving."""
+def _resolve_tie_in_tickers(ticker: str, sector: str, peers: list[str]) -> list[str]:
+    """Related vehicles for a single-name mover: the sector ETF, then named peers. Never the mover
+    itself. We deliberately do NOT list arbitrary portfolio holdings here — without fund-holdings
+    data we can't assert a fund relates to this name, and 'watch <unrelated holding>' misleads.
+    Portfolio relevance is captured by the in_portfolio score boost instead. Deduped, ordered."""
     ticker = str(ticker or "").upper().strip()
     out: list[str] = []
     etf = _SECTOR_ETF.get(str(sector or "").lower().strip())
@@ -68,8 +69,6 @@ def _resolve_tie_in_tickers(ticker: str, sector: str, peers: list[str],
         out.append(etf)
     for p in (peers or []):
         out.append(str(p).upper().strip())
-    for h in sorted(portfolio or set()):
-        out.append(str(h).upper().strip())
     seen: set[str] = set()
     deduped: list[str] = []
     for t in out:
@@ -87,7 +86,7 @@ def _mover_candidate(ticker: str, company: str, pct: float, when: str, sector: s
     needles = [ticker, company] + [w for w in re.split(r"\s+", company) if len(w) > 3]
     share = _headline_share(needles, corpus)
     portfolio = _portfolio_tickers(payload)
-    ties = _resolve_tie_in_tickers(ticker, sector, peers=[], portfolio=portfolio)
+    ties = _resolve_tie_in_tickers(ticker, sector, peers=[])
     sign = "fell" if pct < 0 else "rose"
     return {
         "kind": "mover",
