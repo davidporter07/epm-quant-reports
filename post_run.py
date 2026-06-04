@@ -40,6 +40,7 @@ SYNC_PY_FILES = [
     "fetch_enrichment.py",
     "generate_market_commentary.py",
     "generate_pdf_report.py",
+    "market_movers.py",
     "send_email.py",
     "monitor.py",
     "features.py",
