@@ -4746,6 +4746,179 @@ def _scrub_safe_haven_inversion(data: dict) -> int:
     return fixes
 
 
+# --- "Tomorrow's <event>" slip when the scenario event is actually today ------
+# The scenarios block carries the canonical event timing (scenario_event_day). When that is
+# "today" but the synthesis prose calls the same event "tomorrow's", the reader sees a
+# temporal contradiction side-by-side (2026-06-04: "Tomorrow's Initial Jobless Claims" in
+# Today's Take while the Scenarios header, econ calendar, and What-to-Watch all said today).
+# Only the unambiguous today-case is corrected; a genuinely future event is left alone, and a
+# "tomorrow" referring to a different (truly later) event is never touched (proximity gated).
+def _correct_event_day_slip(data: dict) -> int:
+    event = str(data.get("scenario_event") or "").strip()
+    day = str(data.get("scenario_event_day") or "").strip().lower()
+    if not event or day not in ("", "today"):
+        return 0
+    ev_rx = re.compile(re.escape(event), re.IGNORECASE)
+    tom_rx = re.compile(r"\btomorrow(?:'s|’s)?\b", re.IGNORECASE)
+
+    def _fix(text: str) -> str:
+        if not ev_rx.search(text) or not tom_rx.search(text):
+            return text
+        spans = [m.span() for m in ev_rx.finditer(text)]
+
+        def _near_event(pos: int) -> bool:
+            return any(s - 50 <= pos <= e + 50 for s, e in spans)
+
+        out, last = [], 0
+        for m in tom_rx.finditer(text):
+            if not _near_event(m.start()):
+                continue
+            tok = m.group(0)
+            base, suffix = tok[:8], tok[8:]          # "Tomorrow" + "" | "'s" | "’s"
+            repl = ("Today" if base[0].isupper() else "today") + suffix
+            out.append(text[last:m.start()])
+            out.append(repl)
+            last = m.end()
+        out.append(text[last:])
+        return "".join(out)
+
+    return _map_all_prose(data, _fix)
+
+
+# --- ungrounded Fed-official attribution scrub --------------------------------
+# The report has no Fed-speech transcript feed. Attributing a specific market signal to a
+# named official who never appears in the source-headline corpus is fabrication (2026-06-04:
+# "Fed President Beth Hammack signaled higher-for-longer" across fixed_income / economics /
+# outlook / Today's Take, with no Hammack mention anywhere in the headlines). Names that ARE
+# grounded — present in the headlines or on today's scheduled-speaker list — are left intact.
+# Ungrounded names are de-personalized to "Fed officials" / "the Fed" (possessive), preserving
+# the surrounding (data-consistent) hawkish/dovish framing.
+_FED_SURNAMES = (
+    "Powell", "Warsh", "Waller", "Bowman", "Barkin", "Daly", "Williams", "Goolsbee",
+    "Bostic", "Kashkari", "Logan", "Musalem", "Schmid", "Cook", "Jefferson", "Collins",
+    "Kugler", "Hammack", "Mester", "Harker", "Barr",
+)
+_FED_TITLE = (r"(?:Fed(?:eral\s+Reserve)?\s+)?"
+              r"(?:President|Chair(?:man)?|Governor|Vice\s+Chair(?:\s+for\s+Supervision)?)\s+")
+
+
+def _scrub_ungrounded_fed_attribution(data: dict, source_text: str) -> int:
+    src = (source_text or "").lower()
+    grounded = {n.lower() for n in _FED_SURNAMES if n.lower() in src}
+    for sp in (data.get("fed_speakers") or []):
+        who = str(sp.get("speaker", "")).lower() if isinstance(sp, dict) else ""
+        grounded.update(n.lower() for n in _FED_SURNAMES if n.lower() in who)
+    targets = [n for n in _FED_SURNAMES if n.lower() not in grounded]
+    if not targets:
+        return 0
+
+    def _repl(possessive: bool):
+        # "the Fed" (singular) keeps subject-verb agreement intact ("the Fed signals/signaled");
+        # capitalize only at a sentence start so a mid-sentence replacement stays lowercase.
+        def _r(m):
+            prev = m.string[:m.start()].rstrip()
+            at_start = (not prev) or prev[-1] in ".!?:"
+            return ("The Fed" if at_start else "the Fed") + ("'s" if possessive else "")
+        return _r
+
+    subs = []
+    for surname in targets:
+        subs.append((re.compile(
+            r"\b(?:" + _FED_TITLE + r")?(?:[A-Z][a-z]+\s+)?" + surname + r"(?:'s|’s)\b"),
+            _repl(True)))
+        subs.append((re.compile(
+            r"\b(?:" + _FED_TITLE + r")?(?:[A-Z][a-z]+\s+)?" + surname + r"\b"),
+            _repl(False)))
+
+    def _fix(text: str) -> str:
+        for rx, repl in subs:
+            text = rx.sub(repl, text)
+        return text
+
+    return _map_all_prose(data, _fix)
+
+
+# --- fabricated readings for not-yet-released econ events ----------------------
+# economics_commentary must recap RELEASED prints. Asserting an actual number for an event the
+# report itself flags as upcoming (the scenario event, or a calendar event dated today/later)
+# is fabrication (2026-06-04: "Initial Jobless Claims at 215k vs 210k prior" and "Nonfarm
+# Payrolls reading at 115k missed 185k" — claims was that morning's event, payrolls the next
+# day). Drop only sentences that BOTH name an upcoming indicator AND assert a value; previews
+# ("...claims print at 10:00 AM ET to gauge...") carry no value and are kept.
+_ECON_INDICATOR_RES = {
+    "jobless_claims":      re.compile(r"\b(?:initial\s+)?jobless\s+claims\b|\bweekly\s+claims\b", re.I),
+    "nonfarm_payrolls":    re.compile(r"\b(?:non[\-\s]?farm\s+payrolls?|nonfarm\s+payrolls?|jobs\s+report|payrolls?\s+report)\b|\bNFP\b", re.I),
+    "cpi":                 re.compile(r"\b(?:cpi|consumer\s+price\s+index)\b", re.I),
+    "ppi":                 re.compile(r"\b(?:ppi|producer\s+price\s+index)\b", re.I),
+    "pce":                 re.compile(r"\b(?:core\s+)?pce\b", re.I),
+    "gdp":                 re.compile(r"\bgdp\b", re.I),
+    "retail_sales":        re.compile(r"\bretail\s+sales\b", re.I),
+    "ism_services":        re.compile(r"\bism\s+services?\b|\bservices\s+pmi\b", re.I),
+    "ism_manufacturing":   re.compile(r"\bism\s+manufacturing\b|\bmanufacturing\s+pmi\b", re.I),
+    "productivity":        re.compile(r"\bproductivity\b|\bunit\s+labor\s+costs?\b", re.I),
+    "consumer_credit":     re.compile(r"\bconsumer\s+credit\b", re.I),
+    "existing_home_sales": re.compile(r"\bexisting\s+home\s+sales\b", re.I),
+    "consumer_sentiment":  re.compile(r"\bconsumer\s+sentiment\b|\bmichigan\s+sentiment\b", re.I),
+    "durable_goods":       re.compile(r"\bdurable\s+goods\b", re.I),
+    "jolts":               re.compile(r"\bjolts\b|\bjob\s+openings\b", re.I),
+    "adp":                 re.compile(r"\badp\b", re.I),
+}
+# A sentence asserts a value if it carries a magnitude-with-unit, a "vs/from N" compare, an
+# "N prior", or a beat/miss tied to a number. Clock times ("10:00 AM ET") never match.
+_ECON_VALUE_RE = re.compile(
+    r"\b\d[\d,]*\.?\d*\s*(?:k|m|bn|%|bps?|basis\s+points)\b"
+    r"|\bvs\.?\s+\$?\d"
+    r"|\bfrom\s+\$?\d[\d,]*\.?\d*\b"
+    r"|\b\d[\d,]*\.?\d*\s+prior\b"
+    r"|\b(?:missed|beat|came\s+in\s+at|printed\s+at|reading\s+(?:at|of))\b[^.]*\d",
+    re.I)
+
+
+def _upcoming_econ_keys(data: dict) -> set:
+    """Canonical indicator keys the report treats as upcoming: the scenario event (a forward
+    catalyst by construction) plus economic-calendar events dated today or later. The calendar
+    read is best-effort and silently degrades to scenario-event-only on any error."""
+    keys: set = set()
+    ev = str(data.get("scenario_event") or "")
+    if ev:
+        keys.update(k for k, rx in _ECON_INDICATOR_RES.items() if rx.search(ev))
+    today_iso = (str(data.get("report_date") or "")
+                 or datetime.now(timezone.utc).strftime("%Y-%m-%d"))[:10]
+    try:
+        cal_path = DATA_DIR / "economic_calendar.json"
+        if cal_path.exists():
+            with open(cal_path, "r", encoding="utf-8") as f:
+                cal = json.load(f)
+            for ev_obj in (cal.get("events") or []):
+                d_iso = str(ev_obj.get("date", ""))[:10]
+                if d_iso and d_iso >= today_iso:
+                    name = str(ev_obj.get("event", ""))
+                    keys.update(k for k, rx in _ECON_INDICATOR_RES.items() if rx.search(name))
+    except Exception:
+        pass
+    return keys
+
+
+def _scrub_unreleased_econ_prints(data: dict) -> int:
+    text = data.get("economics_commentary")
+    if not isinstance(text, str) or not text:
+        return 0
+    upcoming = _upcoming_econ_keys(data)
+    if not upcoming:
+        return 0
+    kept, changed = [], False
+    for sent in re.split(r"(?<=[.!?])\s+", text):
+        named = {k for k, rx in _ECON_INDICATOR_RES.items() if rx.search(sent)}
+        if (named & upcoming) and _ECON_VALUE_RE.search(sent):
+            changed = True
+            continue
+        kept.append(sent)
+    if changed:
+        data["economics_commentary"] = " ".join(kept).strip()
+        return 1
+    return 0
+
+
 def sanitize_commentary(data: dict, snapshot: dict | None = None, source_text: str = "") -> int:
     """Run the full deterministic corrector/scrubber pass over a commentary dict.
 
@@ -4767,8 +4940,11 @@ def sanitize_commentary(data: dict, snapshot: dict | None = None, source_text: s
     total += _scrub_fabricated_corporate_actions(data)
     total += _scrub_foreign_macro_lead(data)
     total += _scrub_safe_haven_inversion(data)
+    total += _correct_event_day_slip(data)
+    total += _scrub_unreleased_econ_prints(data)
     if source_text:
         total += _scrub_offnarrative_geopolitics(data, source_text)
+        total += _scrub_ungrounded_fed_attribution(data, source_text)
     return total
 
 

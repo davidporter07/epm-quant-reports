@@ -1045,7 +1045,7 @@ def build_email(to_addr: "str | None" = None, unsubscribe_url: "str | None" = No
     html = f"""
     <html>
       <body>
-        <img src=\"cid:epm_logo_png_cid\" alt=\"EPM Logo\" style=\"height:60px;\"/><br><br>
+        <img src=\"https://epm-market-intelligence.com/static/epm_logo_email.png?v=1\" alt=\"EPM Market Intelligence\" width=\"180\" style=\"height:auto;max-width:180px;border:0;outline:none;text-decoration:none;display:block;\"/><br><br>
 
         <div style="font-family:'Helvetica Neue',Arial,sans-serif;max-width:620px;">
           <h2 style="margin:0 0 4px 0;color:#1e2a44;font-size:22px;font-weight:700;">EPM Markets Recap</h2>
@@ -1073,12 +1073,13 @@ def build_email(to_addr: "str | None" = None, unsubscribe_url: "str | None" = No
     if unsubscribe_url:
         plain_text += f"Unsubscribe from the daily recap: {unsubscribe_url}\n"
 
-    # Canonical nesting: multipart/mixed [ multipart/related [ alternative, inline-logo ], pdf ].
-    # The inline CID logo MUST sit inside the multipart/related that holds the HTML that
-    # references it; the PDF is a true attachment and belongs at the outer multipart/mixed
-    # level. Previously everything (incl. the PDF) lived in one multipart/related, and Gmail
-    # intermittently failed to resolve cid:epm_logo_png_cid when a non-related attachment was
-    # mixed into that container — which left the logo broken in the email (2026-06-03).
+    # Structure: multipart/mixed [ multipart/alternative [ plain, html ], pdf ].
+    # The logo is referenced by a hosted HTTPS URL (static/epm_logo_email.png on the live
+    # origin), NOT an inline cid: attachment. Resend re-encodes the MIME tree when it relays,
+    # and strict clients (Outlook) then failed to resolve cid:epm_logo_png_cid — the logo
+    # rendered as a broken image even though Gmail resolved it (2026-06-04). A hosted <img src>
+    # renders consistently across Gmail / Outlook / Apple Mail and removes the fragile
+    # inline-image dependency entirely. The PDF stays a true attachment at the mixed level.
     msg = MIMEMultipart("mixed")
     msg["From"] = email_service.get_mail_from() or FROM
     msg["To"] = to_addr or TO
@@ -1088,17 +1089,10 @@ def build_email(to_addr: "str | None" = None, unsubscribe_url: "str | None" = No
         msg["List-Unsubscribe"] = f"<{unsubscribe_url}>"
         msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
 
-    related = MIMEMultipart("related")
     alt = MIMEMultipart("alternative")
     alt.attach(MIMEText(plain_text, "plain"))
     alt.attach(MIMEText(html, "html"))
-    related.attach(alt)
-
-    logo_mime = attach_image(LOGO_PATH, "epm_logo_png_cid")
-    if logo_mime:
-        related.attach(logo_mime)
-
-    msg.attach(related)
+    msg.attach(alt)
 
     if os.path.exists(PDF_REPORT):
         with open(PDF_REPORT, "rb") as f:

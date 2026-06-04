@@ -643,18 +643,91 @@ def test_tactical_factor_read_concordant_when_risk_on():
     assert "consistent with risk-on positioning" in out["factor_read"], out["factor_read"]
 
 
-# --- Email: inline logo must sit inside multipart/related (CID resolves in Gmail) ---
-def test_email_logo_nested_in_related_with_pdf_at_mixed_level():
+# --- Email: logo is referenced by a hosted HTTPS URL, not a fragile cid: attachment ---
+# Resend re-encodes the MIME tree on relay and Outlook then failed to resolve the inline
+# cid: logo (broken image), so the logo now loads from the live static origin (2026-06-04).
+def test_email_logo_uses_hosted_url_no_inline_cid():
     se = pytest.importorskip("send_email")
     msg = se.build_email(to_addr="t@x.com", unsubscribe_url="https://x/u")
     assert msg.get_content_type() == "multipart/mixed"
     parts = msg.get_payload()
-    related = next(p for p in parts if p.get_content_type() == "multipart/related")
-    # the inline logo lives inside the related container, next to the HTML it references
-    imgs = [p for p in related.get_payload() if p.get_content_type() == "image/png"]
-    assert imgs and imgs[0].get("Content-ID") == "<epm_logo_png_cid>"
-    # the PDF (if present) is a true attachment at the outer mixed level, NOT in related
-    assert all(p.get_content_type() != "application/pdf" for p in related.get_payload())
+    # The HTML body references the hosted logo URL and no longer uses a cid: reference.
+    alt = next(p for p in parts if p.get_content_type() == "multipart/alternative")
+    html = next(p for p in alt.get_payload() if p.get_content_type() == "text/html")
+    body = html.get_payload(decode=True).decode("utf-8", "replace")
+    assert "static/epm_logo_email.png" in body
+    assert "cid:" not in body
+    # No inline image attachment anywhere in the message (logo is hosted, PDF is the only attachment).
+    assert all(p.get_content_type() != "image/png" for p in parts)
+
+
+# --- "Tomorrow's <event>" slip corrected when the scenario event is today ---------
+def test_correct_event_day_slip_today():
+    data = {
+        "scenario_event": "Initial Jobless Claims",
+        "scenario_event_day": "today",
+        "cross_asset_synthesis": "Tomorrow's Initial Jobless Claims print at 10:00 AM ET is the key threshold.",
+        "fixed_income_commentary": "Traders await tomorrow's CPI, a separate report later in the week.",
+    }
+    n = gmc._correct_event_day_slip(data)
+    assert n >= 1
+    assert "Today's Initial Jobless Claims" in data["cross_asset_synthesis"]
+    assert "Tomorrow" not in data["cross_asset_synthesis"]
+    # a 'tomorrow' tied to a DIFFERENT event (no jobless-claims mention) is left alone
+    assert "tomorrow's CPI" in data["fixed_income_commentary"]
+
+
+def test_correct_event_day_slip_skips_genuine_future_event():
+    data = {
+        "scenario_event": "Nonfarm Payrolls",
+        "scenario_event_day": "tomorrow",
+        "cross_asset_synthesis": "Tomorrow's Nonfarm Payrolls print is the key catalyst.",
+    }
+    assert gmc._correct_event_day_slip(data) == 0
+    assert "Tomorrow's Nonfarm Payrolls" in data["cross_asset_synthesis"]
+
+
+# --- economics_commentary must not assert values for not-yet-released events -------
+def test_scrub_unreleased_econ_prints_drops_future_event_readings(tmp_path, monkeypatch):
+    monkeypatch.setattr(gmc, "DATA_DIR", tmp_path)  # no calendar -> upcoming = scenario event only
+    data = {
+        "scenario_event": "Initial Jobless Claims",
+        "scenario_event_day": "today",
+        "report_date": "2026-06-04",
+        "economics_commentary": (
+            "Initial Jobless Claims at 215k vs 210k prior suggests resilient labor demand. "
+            "The latest Core PCE reading at 3.3% YoY beat the 3.2% prior. "
+            "Traders are watching the Initial Jobless Claims print at 10:00 AM ET to gauge resilience."
+        ),
+    }
+    assert gmc._scrub_unreleased_econ_prints(data) == 1
+    ec = data["economics_commentary"]
+    assert "215k" not in ec                    # fabricated future print dropped
+    assert "Core PCE reading at 3.3%" in ec    # released, non-upcoming print kept
+    assert "10:00 AM ET" in ec                 # value-free event preview kept
+
+
+# --- ungrounded Fed-official attribution is de-personalized ------------------------
+def test_scrub_ungrounded_fed_attribution_neutralizes_unsourced_name():
+    data = {
+        "fixed_income_commentary": "The 10-year yield rose as Fed President Beth Hammack signaled higher-for-longer rates.",
+        "cross_asset_synthesis": "This confirms Fed President Hammack's hawkish pivot.",
+        "fed_speakers": [{"speaker": "Vice Chair for Supervision Michelle W. Bowman"}],
+    }
+    src = "stocks fall on chip earnings; new Fed Chair Warsh inherits inflation"  # no Hammack
+    assert gmc._scrub_ungrounded_fed_attribution(data, src) >= 1
+    assert "Hammack" not in data["fixed_income_commentary"]
+    assert "the Fed signaled higher-for-longer" in data["fixed_income_commentary"]
+    assert "the Fed's hawkish pivot" in data["cross_asset_synthesis"]
+
+
+def test_scrub_ungrounded_fed_attribution_keeps_scheduled_speaker():
+    data = {
+        "economics_commentary": "Governor Bowman said supervision reform is overdue.",
+        "fed_speakers": [{"speaker": "Vice Chair for Supervision Michelle W. Bowman"}],
+    }
+    assert gmc._scrub_ungrounded_fed_attribution(data, source_text="") == 0
+    assert "Bowman" in data["economics_commentary"]
 
 
 # --- JOLTS now surfaces in the recent-prints recap (was missing 2026-06-03) -------
