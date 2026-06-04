@@ -6184,6 +6184,19 @@ def main() -> int:
         existing["narrative_generated_at"] = datetime.now(timezone.utc).isoformat()
         existing["narrative_source_date"]  = today
         existing["narrative_source"]       = "llm"
+        # Persist the SANITIZED narrative so the website (which reads this file directly), the
+        # PDF, and the email all reflect the deterministic corrections — not just the render-time
+        # defense-in-depth pass. Without this the scrubbers (fabricated future-event prints,
+        # today/tomorrow event slip, ungrounded Fed attribution, etc.) never reached the live
+        # site, which renders latest_commentary.json verbatim (2026-06-04).
+        try:
+            _ns = sanitize_commentary(
+                existing, snapshot, source_text=str(existing.get("_source_headlines") or "")
+            )
+            if _ns:
+                print(f"[SANITIZE] Applied {_ns} deterministic correction(s) before persisting commentary.")
+        except Exception as _se:
+            print(f"[WARN] Generation-time sanitize skipped: {_se}")
         _atomic_write_json(COMMENTARY_PATH, existing)
         print(f"[OK] Commentary saved -> {COMMENTARY_PATH}")
         return 0
