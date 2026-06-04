@@ -217,6 +217,28 @@ def _fetch_quote(ticker: str, days_back: int = 7, prev_close: float | None = Non
         return None
 
 
+# Gold sourcing: report SPOT, not COMEX futures. The futures contract (GC=F) trades at a
+# ~$30-40 contango basis to spot, which made the snapshot read ~$40 high versus spot-quoting
+# desks (and the Sevens Report) in 2026-06-04 side-by-sides — e.g. EPM 4,436.70 vs Sevens
+# 4,475.40. yfinance's spot symbol (XAUUSD=X) is flakier than the continuous futures contract,
+# so we prefer spot and fall back to futures whenever the spot pull is empty/unusable.
+GOLD_SPOT_TICKER    = "XAUUSD=X"
+GOLD_FUTURES_TICKER = "GC=F"
+
+
+def _fetch_gold_quote(prev_close: float | None = None, mode: str = "eod") -> dict | None:
+    """Gold {level, change, pct_change}, preferring spot (XAUUSD=X) over futures (GC=F).
+
+    The eod path computes change off the series' own prior bar (arr[-2]), so switching the
+    source produces a self-consistent spot-over-spot move — no stale futures prev_close leaks
+    in. Falls back to the futures contract when the spot pull is missing or has no usable level.
+    """
+    spot = _fetch_quote(GOLD_SPOT_TICKER, prev_close=prev_close, mode=mode)
+    if spot and spot.get("level"):
+        return spot
+    return _fetch_quote(GOLD_FUTURES_TICKER, prev_close=prev_close, mode=mode)
+
+
 def _event_day_from_dates(event_date: str, today_date: str) -> str:
     """Human day label for an event relative to today: 'today', 'tomorrow', or weekday.
 
@@ -281,7 +303,12 @@ def _guard_snapshot_drift(new_snapshot: dict, prev_path: "Path") -> None:
 def fetch_market_snapshot(prev_data: dict | None = None) -> dict[str, dict]:
     result: dict[str, dict] = {}
     for name, ticker in MARKET_TICKERS.items():
-        q = _fetch_quote(ticker, prev_close=_prev_level(prev_data, name))
+        # Gold reports spot (XAUUSD=X) with a futures fallback so the snapshot matches the
+        # spot convention; everything else uses its mapped ticker directly.
+        if name == "Gold":
+            q = _fetch_gold_quote(prev_close=_prev_level(prev_data, name))
+        else:
+            q = _fetch_quote(ticker, prev_close=_prev_level(prev_data, name))
         if q:
             result[name] = q
     return result
@@ -307,7 +334,12 @@ def fetch_global_markets(prev_data: dict | None = None) -> dict[str, dict]:
 def fetch_commodities_table(prev_data: dict | None = None) -> dict[str, dict]:
     result: dict[str, dict] = {}
     for name, ticker in COMMODITY_TICKERS.items():
-        q = _fetch_quote(ticker, prev_close=_prev_level(prev_data, name))
+        # Keep Gold on the same spot source as the snapshot so the two tables never disagree
+        # by the futures basis (would re-open the 2026-06-01-style snapshot↔table split).
+        if name == "Gold":
+            q = _fetch_gold_quote(prev_close=_prev_level(prev_data, name))
+        else:
+            q = _fetch_quote(ticker, prev_close=_prev_level(prev_data, name))
         if q:
             result[name] = q
     return result
@@ -4810,6 +4842,59 @@ _FED_SURNAMES = (
 _FED_TITLE = (r"(?:Fed(?:eral\s+Reserve)?\s+)?"
               r"(?:President|Chair(?:man)?|Governor|Vice\s+Chair(?:\s+for\s+Supervision)?)\s+")
 
+# Tokens that confirm a surname mention is about the central bank (guards against
+# collisions like Tim Cook / Serena Williams when harvesting speakers from the wire).
+_FED_CONTEXT_TOKENS = ("fed", "federal reserve", "fomc", "central bank")
+_FED_TIME_RE = re.compile(r"(\d{1,2}:\d{2}\s*(?:[ap]\.?m\.?)?(?:\s*ET)?)", re.IGNORECASE)
+
+
+def _harvest_fed_speakers_from_news(headlines, existing_speakers=None) -> list[dict]:
+    """Supplement the Governors-only calendar feed with regional reserve-bank presidents
+    named in today's news wire.
+
+    federalreserve.gov/json/calendar.json (the primary fetch_fed_speakers source) carries
+    Board of Governors events only, so regional Fed presidents — Barkin/Richmond, Daly/SF,
+    Musalem/St. Louis, etc. — never appear there even when they speak (2026-06-04: Sevens
+    listed Barkin 8:30 + Daly 1:10; EPM had only Governor Bowman). There is no unified free
+    feed of their schedules, but they routinely surface in the wire we already crawl
+    ("Fed's Daly says...", "Richmond Fed President Barkin speaks at 8:30 a.m."). Scan for
+    known surnames that co-occur with Fed context, dedupe against speakers we already have
+    (by surname), and return supplemental rows shaped like the calendar feed.
+
+    Returns list of {"speaker": "Fed's <Surname>", "time_et": str, "venue": "", "topic": str}.
+    """
+    rows: list[dict] = []
+    if not headlines:
+        return rows
+
+    existing_surnames = set()
+    for sp in (existing_speakers or []):
+        who = str((sp.get("speaker", "") if isinstance(sp, dict) else sp) or "").lower()
+        existing_surnames.update(n.lower() for n in _FED_SURNAMES if n.lower() in who)
+
+    seen: set[str] = set()
+    for raw in headlines:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        low = text.lower()
+        if not any(tok in low for tok in _FED_CONTEXT_TOKENS):
+            continue   # no central-bank context — skip (Tim Cook, Serena Williams, ...)
+        for surname in _FED_SURNAMES:
+            sl = surname.lower()
+            if sl in existing_surnames or sl in seen:
+                continue
+            if re.search(r"\b" + re.escape(sl) + r"\b", low):
+                _m = _FED_TIME_RE.search(text)
+                rows.append({
+                    "speaker": f"Fed's {surname}",
+                    "time_et": (_m.group(1).strip() if _m else ""),
+                    "venue":   "",
+                    "topic":   text[:200],
+                })
+                seen.add(sl)
+    return rows
+
 
 def _scrub_ungrounded_fed_attribution(data: dict, source_text: str) -> int:
     src = (source_text or "").lower()
@@ -6227,6 +6312,19 @@ def main() -> int:
         existing["_source_headlines"] = " ".join(h for h in _hl if h)[:6000]
     except Exception:
         pass
+
+    # Supplement the Governors-only Fed calendar feed with regional reserve-bank presidents
+    # named in today's wire (Barkin/Richmond, Daly/SF, ...). The JSON feed structurally omits
+    # them, so harvest from the same corpus the scrubbers use. Runs before the persist-time
+    # sanitize so a harvested name correctly grounds any narrative attribution to it.
+    try:
+        _harvested_fed = _harvest_fed_speakers_from_news(_hl, existing.get("fed_speakers"))
+        if _harvested_fed:
+            existing["fed_speakers"] = (existing.get("fed_speakers") or []) + _harvested_fed
+            print(f"[FED] +{len(_harvested_fed)} regional speaker(s) harvested from news: "
+                  f"{', '.join(h['speaker'] for h in _harvested_fed)}")
+    except Exception as _fe:
+        print(f"[WARN] Fed speaker news-harvest skipped: {_fe}")
 
     if llm_ok and commentary:
         existing.update(commentary)

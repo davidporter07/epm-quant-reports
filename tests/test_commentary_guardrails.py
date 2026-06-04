@@ -754,3 +754,86 @@ def test_jolts_surfaces_in_recent_macro_prints(tmp_path, monkeypatch):
     assert jolts is not None, "JOLTS missing from recap"
     assert jolts["actual"] == "7.62M", jolts["actual"]   # 7618 thousands -> 7.62M
     assert jolts["prior"] == "6.89M", jolts["prior"]
+
+
+# --- Gold: report SPOT (XAUUSD=X), fall back to futures (GC=F) ----------------
+# 2026-06-04 eval: EPM snapshot gold read ~$40 high vs Sevens because we quoted
+# COMEX futures (contango basis); spot is the desk/Sevens convention.
+def test_fetch_gold_quote_prefers_spot(monkeypatch):
+    seen = {}
+
+    def _fake(ticker, prev_close=None, mode="eod"):
+        seen[ticker] = True
+        if ticker == "XAUUSD=X":
+            return {"level": 4475.40, "change": -44.0, "pct_change": -0.98}
+        return {"level": 4436.70, "change": -52.0, "pct_change": -1.17}  # GC=F futures
+
+    monkeypatch.setattr(gmc, "_fetch_quote", _fake)
+    q = gmc._fetch_gold_quote()
+    assert q["level"] == 4475.40, "should return the spot level"
+    assert "GC=F" not in seen, "futures must not be fetched when spot is good"
+
+
+def test_fetch_gold_quote_falls_back_to_futures_when_spot_empty(monkeypatch):
+    def _fake(ticker, prev_close=None, mode="eod"):
+        if ticker == "XAUUSD=X":
+            return None                       # spot feed flaked (yfinance XAUUSD=X is fragile)
+        return {"level": 4436.70, "change": -52.0, "pct_change": -1.17}
+
+    monkeypatch.setattr(gmc, "_fetch_quote", _fake)
+    assert gmc._fetch_gold_quote()["level"] == 4436.70
+
+
+def test_fetch_gold_quote_falls_back_when_spot_level_zero(monkeypatch):
+    def _fake(ticker, prev_close=None, mode="eod"):
+        if ticker == "XAUUSD=X":
+            return {"level": 0, "change": None, "pct_change": None}   # present but unusable
+        return {"level": 4436.70, "change": -52.0, "pct_change": -1.17}
+
+    monkeypatch.setattr(gmc, "_fetch_quote", _fake)
+    assert gmc._fetch_gold_quote()["level"] == 4436.70
+
+
+# --- Fed speakers: harvest regional presidents from the news wire -------------
+# federalreserve.gov/json/calendar.json is Board-of-Governors-only, so regional
+# reserve-bank presidents (Barkin/Richmond, Daly/SF) never appear even when they
+# speak (2026-06-04: Sevens had Barkin 8:30 + Daly 1:10; EPM had only Bowman).
+def test_harvest_fed_speakers_picks_regional_presidents_from_news():
+    headlines = [
+        "Fed's Daly says policy is in a good place as inflation cools",
+        "Richmond Fed President Barkin speaks at 8:30 a.m. ET on labor market",
+        "Apple unveils new iPhone lineup at fall event",
+    ]
+    out = gmc._harvest_fed_speakers_from_news(headlines, existing_speakers=[])
+    names = " ".join(s["speaker"] for s in out)
+    assert "Daly" in names and "Barkin" in names
+    barkin = next(s for s in out if "Barkin" in s["speaker"])
+    assert "8:30" in barkin["time_et"], barkin
+
+
+def test_harvest_fed_dedupes_against_existing_governors():
+    # Bowman already came from the JSON feed — do not double-list her.
+    existing = [{"speaker": "Vice Chair for Supervision Michelle W. Bowman"}]
+    headlines = ["Fed's Bowman testifies before Senate Banking Committee"]
+    out = gmc._harvest_fed_speakers_from_news(headlines, existing_speakers=existing)
+    assert out == [], "Bowman is already scheduled; should not be re-added"
+
+
+def test_harvest_fed_ignores_nonfed_surname_collisions():
+    # 'Cook' / 'Williams' appear but with no Fed context -> not Fed speakers.
+    headlines = [
+        "Tim Cook unveils new iPhone at Apple event",
+        "Serena Williams announces tennis comeback",
+    ]
+    assert gmc._harvest_fed_speakers_from_news(headlines, existing_speakers=[]) == []
+
+
+def test_harvest_fed_dedupes_repeated_mentions():
+    headlines = [
+        "Fed's Daly: rate cuts still on the table this year",
+        "San Francisco Fed's Daly reiterates patience on policy",
+        "Daly of the Fed speaks on financial stability",
+    ]
+    out = gmc._harvest_fed_speakers_from_news(headlines, existing_speakers=[])
+    daly = [s for s in out if "Daly" in s["speaker"]]
+    assert len(daly) == 1, f"expected one Daly entry, got {daly}"
