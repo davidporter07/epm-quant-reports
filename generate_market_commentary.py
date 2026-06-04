@@ -2115,6 +2115,15 @@ Input headlines include 6 articles about SpaceX filing an IPO prospectus.
 {"has_spotlight":true,"topic":"SpaceX IPO Filing","topic_keywords":["spacex","ipo","spcx"],"category":"ipo","why_now":"SpaceX formally filed its prospectus targeting NASDAQ at a $1.75T valuation, triggering broad financial media coverage.","candidate_funds":["ARKVX","DXYZ","XOVR","BPTRX"]}
 """
 
+SYSTEM_PROMPT_MOVER_SCAN = (
+    "You identify the single biggest SINGLE-STOCK premarket move in today's financial headlines. "
+    "Return STRICT JSON: {\"ticker\": str, \"company\": str, \"pct\": float (signed FRACTION, e.g. "
+    "-0.13 for -13%), \"catalyst\": short phrase, \"sector\": str} for the one company whose shares "
+    "are moving the most premarket on a clear catalyst (earnings, guidance, M&A, capital raise). "
+    "If no single stock clearly dominates, return {\"ticker\": \"\"}. Never invent a ticker; use the "
+    "real US-listed symbol (Broadcom -> AVGO). pct is your best estimate; it will be price-verified."
+)
+
 SYSTEM_PROMPT_TOPIC_SPOTLIGHT = """
 You are a senior markets analyst writing the FLAGSHIP deep-dive for an institutional daily report — the kind of piece that explains a theme so well a portfolio manager forwards it. The topic is today's confirmed dominant financial theme. Write with the depth and authority of a top sell-side strategist note: explain the MECHANISM, judge whether it is SUSTAINABLE, and tell the reader what to DO.
 
@@ -5556,6 +5565,49 @@ def generate_topic_spotlight(
         else:
             print(f"  [SPOTLIGHT] Fallback has only {len(matching)} matching headline(s) — proceeding anyway (data-driven theme).")
 
+    # ── Single-name mover competes for the slot via unified prevalence score ──
+    import market_movers
+    from providers.openbb_provider import OpenBBProvider
+
+    def _default_movers_fn():
+        try:
+            return OpenBBProvider().get_market_movers(limit=10)
+        except Exception as _e:
+            print(f"  [SPOTLIGHT] movers feed unavailable ({_e}).")
+            return {"gainers": [], "losers": []}
+
+    def _default_quote_fn(_t):
+        try:
+            return OpenBBProvider().get_quote(_t)
+        except Exception:
+            return {}
+
+    def _default_mover_scan():
+        try:
+            res = _call_ollama_raw(SYSTEM_PROMPT_MOVER_SCAN,
+                                   {"headlines": [h["text"][:300] for h in headline_corpus[:40]]})
+            return res if isinstance(res, dict) and res.get("ticker") else None
+        except Exception:
+            return None
+
+    _theme_cand = market_movers.theme_candidate(
+        topic, topic_keywords, why_now, category, scan_funds, matching, headline_corpus, payload)
+    _mover_cand = market_movers.detect_market_mover(
+        headline_corpus, enrich_co_news, payload,
+        movers_fn=_default_movers_fn, quote_fn=_default_quote_fn, scan_fn=_default_mover_scan)
+    _selected = market_movers.select_spotlight_candidate(
+        [c for c in (_mover_cand, _theme_cand) if c]) or _theme_cand
+
+    if _selected and _selected.get("kind") == "mover":
+        print(f"  [SPOTLIGHT] Mover wins slot: {_selected['mover_ticker']} "
+              f"{_selected['mover_pct'] * 100:+.1f}% (share {_selected['headline_share']:.2f}).")
+        topic          = _selected["topic"]
+        topic_keywords = _selected["topic_keywords"]
+        why_now        = _selected["why_now"]
+        category       = _selected["category"]
+        scan_funds     = list(_selected["candidate_funds"])
+        matching       = [h for h in headline_corpus if _topic_matches_text(topic_keywords, h["text"])]
+
     # ── Fund grounding: crawl topic articles + verify tickers ─────────────────
     candidate_tickers = list(scan_funds)
     crawl_targets = [h["url"] for h in matching if h.get("url", "").startswith("http")]
@@ -5697,6 +5749,7 @@ def generate_topic_spotlight(
             })
 
     result = {"title": title, "body": body, "funds": clean_funds, "category": category, "topic": topic}
+    result["teaser"] = market_movers.build_spotlight_teaser(_selected)
     print(f"  [SPOTLIGHT] Done: '{title}' ({len(clean_funds)} verified funds).")
     return result
 
@@ -6179,8 +6232,10 @@ def main() -> int:
         existing.update(commentary)
         if _spotlight:
             existing["topic_spotlight"] = _spotlight
+            existing["spotlight_teaser"] = _spotlight.get("teaser", "")
         else:
             existing.pop("topic_spotlight", None)
+            existing.pop("spotlight_teaser", None)
         existing["narrative_generated_at"] = datetime.now(timezone.utc).isoformat()
         existing["narrative_source_date"]  = today
         existing["narrative_source"]       = "llm"
@@ -6209,8 +6264,10 @@ def main() -> int:
             existing.update(det)
             if _spotlight:
                 existing["topic_spotlight"] = _spotlight
+                existing["spotlight_teaser"] = _spotlight.get("teaser", "")
             else:
                 existing.pop("topic_spotlight", None)
+                existing.pop("spotlight_teaser", None)
             existing["narrative_generated_at"] = datetime.now(timezone.utc).isoformat()
             existing["narrative_source_date"]  = today
             existing["narrative_source"]       = "deterministic"
