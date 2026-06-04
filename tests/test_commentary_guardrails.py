@@ -657,6 +657,20 @@ def test_email_logo_nested_in_related_with_pdf_at_mixed_level():
     assert all(p.get_content_type() != "application/pdf" for p in related.get_payload())
 
 
+# --- Email: the spotlight mover teaser renders in the Pre-Market Look block --------
+def test_email_premarket_renders_spotlight_teaser():
+    se = pytest.importorskip("send_email")
+    html, txt = se._build_premarket_block({
+        "spotlight_teaser": "Mover: AVGO -13.0% premarket on soft AI guidance - watch SMH, XLK",
+        "futures_table": {"S&P 500 Futures": {"level": 7555.0, "pct_change": 0.16}},
+    })
+    assert "AVGO -13.0%" in html and "Mover:" in html
+    assert any("AVGO -13.0%" in line for line in txt)
+    # absent teaser is a clean no-op
+    html2, _ = se._build_premarket_block({"futures_table": {}})
+    assert "Mover:" not in html2
+
+
 # --- "Tomorrow's <event>" slip corrected when the scenario event is today ---------
 def test_correct_event_day_slip_today():
     data = {

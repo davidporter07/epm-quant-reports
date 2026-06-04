@@ -411,12 +411,19 @@ def _build_premarket_block(c: dict) -> tuple[str, list]:
             _total_shown += 1
 
     # ── Bail if nothing to show ──────────────────────────────────────────────
-    has_content = fut_rows or earn_parts or fed_parts or econ_parts
+    teaser = _clean(c.get('spotlight_teaser', ''))
+    has_content = fut_rows or earn_parts or fed_parts or econ_parts or teaser
     if not has_content:
         return '', []
 
     # ── Assemble HTML ────────────────────────────────────────────────────────
     inner = ''
+    if teaser:
+        inner += (
+            '<div style="margin:0 0 10px 0;padding:6px 10px;background:#fff7ed;'
+            'border-left:3px solid #ea580c;border-radius:4px;font-size:12px;color:#7c2d12;">'
+            f'<b>{html_lib.escape(teaser)}</b></div>'
+        )
     if fut_rows:
         inner += (
             '<div style="display:inline-block;vertical-align:top;margin-right:24px;">'
@@ -467,6 +474,8 @@ def _build_premarket_block(c: dict) -> tuple[str, list]:
     )
 
     txt_lines = ['PRE-MARKET LOOK', '']
+    if teaser:
+        txt_lines += [teaser, '']
     if fut_txt:
         txt_lines += ['Futures:'] + fut_txt + ['']
     if earn_txt:
