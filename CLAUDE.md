@@ -109,6 +109,8 @@ To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.
 - Run research Python commands with
   `D:\fund_monitor\.venv\Scripts\python.exe`; the research worktree has no
   `.venv`.
+- Run GitNexus from the research worktree and explicitly target
+  `fund_monitor_research`; `fund_monitor` is the live-worktree index.
 - `data\` and `models\experiment\` in the research worktree are junctions to
   the live worktree. Do not delete or recreate them.
 - Growth24 commits may contain only `dl_growth24_*.py`, `notes/growth24_*`,

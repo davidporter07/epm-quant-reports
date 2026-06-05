@@ -12,6 +12,9 @@ cleanup step at the end.
 - Run research Python commands with
   `D:\fund_monitor\.venv\Scripts\python.exe`; the research worktree has no
   `.venv`.
+- Run GitNexus from the research worktree and target the
+  `fund_monitor_research` index. The `fund_monitor` index belongs to the live
+  worktree.
 - `data\` and `models\experiment\` in the research worktree are junctions to
   the live worktree. Do not delete or recreate them.
 - Growth24 commits may contain only `dl_growth24_*.py`, `notes/growth24_*`,
