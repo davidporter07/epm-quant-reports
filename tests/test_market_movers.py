@@ -146,3 +146,47 @@ def test_build_spotlight_teaser_theme_and_empty():
     assert mm.build_spotlight_teaser({"kind": "theme", "topic": "AI capex cycle"}).endswith("AI capex cycle")
     assert mm.build_spotlight_teaser(None) == ""
     assert mm.build_spotlight_teaser({"kind": "mover", "mover_ticker": "", "topic": ""}) == ""
+
+
+# --- #3: blockbuster override + sector empty-funds floor (regression 2026-06-05) --
+def test_blockbuster_mover_beats_dominant_theme():
+    # Theme dominates headline share (in most of the corpus); a 15% single-name move
+    # must still take the slot via the blockbuster override.
+    corpus = _corpus(*(["Israel-Lebanon ceasefire as gulf tensions ease"] * 16
+                       + ["Broadcom AVGO plunges on guidance"] * 2 + ["misc"] * 22))
+    theme = mm.theme_candidate(
+        topic="Israel-Lebanon Ceasefire", topic_keywords=["ceasefire"], why_now="w",
+        category="theme", candidate_funds=["GLD"], matching=[1] * 16, corpus=corpus, payload={},
+    )
+    mover = mm._mover_candidate("AVGO", "Broadcom", -0.15, "premarket", "Technology",
+                                "guidance", corpus, payload={})
+    assert theme["headline_share"] > mover["headline_share"]      # theme is more prevalent
+    win = mm.select_spotlight_candidate([theme, mover])
+    assert win["kind"] == "mover" and win["mover_ticker"] == "AVGO"
+
+
+def test_blockbuster_picks_largest_move():
+    corpus = _corpus("AVGO plunges", "NVDA slides", "filler")
+    avgo = mm._mover_candidate("AVGO", "Broadcom", -0.15, "premarket", "Technology", "", corpus, {})
+    nvda = mm._mover_candidate("NVDA", "NVIDIA", 0.11, "session", "Technology", "", corpus, {})
+    assert mm.select_spotlight_candidate([nvda, avgo])["mover_ticker"] == "AVGO"
+
+
+def test_sub_blockbuster_mover_does_not_override_theme():
+    # A 6% mover is below the 10% threshold → no override; a strong theme can still win.
+    corpus = _corpus(*(["AI capex supercycle"] * 20 + ["small mover"] * 1 + ["x"] * 9))
+    theme = mm.theme_candidate(
+        topic="AI capex", topic_keywords=["ai capex"], why_now="w", category="theme",
+        candidate_funds=["SMH"], matching=[1] * 20, corpus=corpus, payload={},
+    )
+    mover = mm._mover_candidate("XYZ", "Xyz", -0.06, "session", "Energy", "", corpus, {})
+    assert mm.select_spotlight_candidate([mover, theme])["kind"] == "theme"
+
+
+def test_sector_candidate_floors_empty_funds_with_sector_etf():
+    corpus = _corpus("tech sells off", "filler")
+    sec = mm.theme_candidate(
+        topic="Technology Sector Sell-Off", topic_keywords=["technology"], why_now="w",
+        category="sector_catalyst", candidate_funds=[], matching=[1], corpus=corpus, payload={},
+    )
+    assert sec["candidate_funds"] == ["XLK"]

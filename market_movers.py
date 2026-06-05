@@ -17,6 +17,11 @@ MOVER_MIN_PCT = 0.04          # 4%
 SPOTLIGHT_FLOOR = 0.15
 # Portfolio-relevance bump applied to a candidate that touches our funds/holdings.
 PORTFOLIO_BOOST = 0.10
+# A single-name move at/above this magnitude IS the day's story — it takes the spotlight
+# slot outright, regardless of how many headlines a diffuse macro theme accumulated.
+# Without this, headline_share structurally favors themes and a name like AVGO -15% on
+# earnings loses the slot (regression 2026-06-05: tech-selloff theme beat the AVGO mover).
+BLOCKBUSTER_PCT = 0.10        # 10%
 
 # Sector label (lowercased) -> representative ETF for tie-ins.
 _SECTOR_ETF = {
@@ -234,6 +239,15 @@ def theme_candidate(topic: str, topic_keywords: list[str], why_now: str, categor
         return None
     share = (len(matching) / len(corpus)) if corpus else 0.0
     funds = [str(t).upper().strip() for t in (candidate_funds or []) if t]
+    # Empty-funds floor: a sector spotlight must never ship with zero tie-ins (regression
+    # 2026-06-05: a "Technology Sector Sell-Off" spotlight rendered funds:[]). Derive the
+    # representative sector ETF from the topic/keywords when nothing else resolved.
+    if str(category or "") == "sector_catalyst" and not funds:
+        hay = " ".join([topic] + [str(k) for k in (topic_keywords or [])]).lower()
+        for _label, _etf in _SECTOR_ETF.items():
+            if re.search(r"\b" + re.escape(_label) + r"\b", hay):
+                funds = [_etf]
+                break
     portfolio = _portfolio_tickers(payload)
     return {
         "kind": "sector" if category == "sector_catalyst" else "theme",
@@ -263,11 +277,20 @@ def _prevalence_score(c: dict) -> float:
 
 
 def select_spotlight_candidate(candidates: list[dict]) -> Optional[dict]:
-    """Pick the single highest-prevalence candidate, or None if the top score is below the floor
-    (caller then keeps today's sector/evergreen fallback)."""
+    """Pick the spotlight winner, or None if nothing clears the bar.
+
+    Blockbuster override first: a single-name mover at/above BLOCKBUSTER_PCT is the day's
+    story and takes the slot outright (bypassing the prevalence floor), because
+    headline_share otherwise structurally favors diffuse macro themes over a single big
+    name. Among multiple blockbusters, the largest move wins. Absent a blockbuster, fall
+    back to the unified prevalence score with its floor."""
     cands = [c for c in (candidates or []) if c]
     if not cands:
         return None
+    blockbusters = [c for c in cands
+                    if c.get("kind") == "mover" and abs(c.get("magnitude", 0.0) or 0.0) >= BLOCKBUSTER_PCT]
+    if blockbusters:
+        return max(blockbusters, key=lambda c: abs(c.get("magnitude", 0.0) or 0.0))
     winner = max(cands, key=_prevalence_score)
     return winner if _prevalence_score(winner) >= SPOTLIGHT_FLOOR else None
 
