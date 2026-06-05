@@ -4880,6 +4880,15 @@ _FED_TITLE = (r"(?:Fed(?:eral\s+Reserve)?\s+)?"
 # collisions like Tim Cook / Serena Williams when harvesting speakers from the wire).
 _FED_CONTEXT_TOKENS = ("fed", "federal reserve", "fomc", "central bank")
 _FED_TIME_RE = re.compile(r"(\d{1,2}:\d{2}\s*(?:[ap]\.?m\.?)?(?:\s*ET)?)", re.IGNORECASE)
+# A harvested row must describe an actual SPEAKING event, not just a news story that
+# mentions an official. Regression 2026-06-05: "Fed's Warsh inherits economy increasingly
+# squeezed by inflation ..." (a profile of the incoming chair) was harvested as a scheduled
+# speaker. Require a speaking-context verb so profiles/analysis pieces are excluded.
+_FED_SPEAK_TOKENS_RE = re.compile(
+    r"\b(?:speak\w*|spoke|says?|said|remark\w*|comment(?:s|ed|ing)?|testif\w*|testimony|"
+    r"address(?:es|ed|ing)?|speech\w*|panel|interview\w*|discuss\w*|told|q&a|"
+    r"fireside|moderat\w*|deliver\w*)\b",
+    re.IGNORECASE)
 
 
 def _harvest_fed_speakers_from_news(headlines, existing_speakers=None) -> list[dict]:
@@ -4914,6 +4923,8 @@ def _harvest_fed_speakers_from_news(headlines, existing_speakers=None) -> list[d
         low = text.lower()
         if not any(tok in low for tok in _FED_CONTEXT_TOKENS):
             continue   # no central-bank context — skip (Tim Cook, Serena Williams, ...)
+        if not _FED_SPEAK_TOKENS_RE.search(text):
+            continue   # mentions an official but not a speaking event — skip profiles/analysis
         for surname in _FED_SURNAMES:
             sl = surname.lower()
             if sl in existing_surnames or sl in seen:

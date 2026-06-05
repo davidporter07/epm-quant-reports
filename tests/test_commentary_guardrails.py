@@ -991,3 +991,37 @@ def test_unanchored_scenario_strip_is_idempotent():
     once = [s["label"] for s in scenarios]
     gmc._strip_unanchored_scenario_thresholds(scenarios, None)
     assert [s["label"] for s in scenarios] == once
+
+
+# --- Fed-speaker harvest must require a SPEAKING event (#4, regression 2026-06-05) --
+# "Fed's Warsh inherits economy increasingly squeezed by inflation ..." (a profile of the
+# incoming chair) was harvested as a scheduled speaker. Require a speaking-context verb.
+
+def test_harvest_skips_news_profile_without_speaking_verb():
+    headlines = ["Fed's Warsh inherits economy increasingly squeezed by inflation. "
+                 "New Fed Chair Kevin Warsh faces a challenging economy as policymakers "
+                 "grow concerned about inflation."]
+    assert gmc._harvest_fed_speakers_from_news(headlines) == []
+
+
+def test_harvest_keeps_genuine_speaking_headlines():
+    headlines = [
+        "Fed's Daly says inflation remains too elevated for comfort",
+        "Richmond Fed President Barkin speaks at 8:30 a.m. ET on the labor market",
+    ]
+    rows = gmc._harvest_fed_speakers_from_news(headlines)
+    names = {r["speaker"] for r in rows}
+    assert names == {"Fed's Daly", "Fed's Barkin"}
+    barkin = next(r for r in rows if r["speaker"] == "Fed's Barkin")
+    assert "8:30" in barkin["time_et"]
+
+
+def test_harvest_skips_non_fed_context():
+    # Apple's Tim Cook — surname collision, no Fed context → never harvested.
+    assert gmc._harvest_fed_speakers_from_news(["Apple CEO Tim Cook says iPhone sales are strong"]) == []
+
+
+def test_harvest_dedupes_against_existing_speakers():
+    headlines = ["Fed's Daly speaks on the economic outlook this afternoon"]
+    rows = gmc._harvest_fed_speakers_from_news(headlines, existing_speakers=[{"speaker": "Mary Daly"}])
+    assert rows == []
