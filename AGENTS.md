@@ -100,12 +100,27 @@ To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.
 
 <!-- gitnexus:end -->
 
+## Worktree Contract - Required
+
+- `D:\fund_monitor` is the live scheduled-pipeline worktree. It must stay on
+  `main`. Never checkout, switch branches, or commit there.
+- Do all Growth24/DL work in `D:\fund_monitor_research` and keep that worktree
+  on `growth24/research-salvage`, periodically rebased on `origin/main`.
+- Run research Python commands with
+  `D:\fund_monitor\.venv\Scripts\python.exe`; the research worktree has no
+  `.venv`.
+- `data\` and `models\experiment\` in the research worktree are junctions to
+  the live worktree. Do not delete or recreate them.
+- Growth24 commits may contain only `dl_growth24_*.py`, `notes/growth24_*`,
+  Growth24 tests, and hygiene tooling. Never touch pipeline modules,
+  `providers/`, or `models/*.pkl` from the Growth24 branch.
+
 ## Git Hygiene - Required Workflow
 
 Before any edit, pull, checkout, rebase, merge, or new task:
 
 1. Run `git fetch origin --prune`.
-2. Run `python scripts/check_branch_hygiene.py --base origin/main`.
+2. Run `D:\fund_monitor\.venv\Scripts\python.exe scripts/check_branch_hygiene.py --base origin/main`.
 3. If it fails, stop and resolve the dirty, stale, or diverged branch first.
 
 Never switch branches with a dirty worktree. Commit coherent work or create a
@@ -116,7 +131,7 @@ Before every commit:
 
 1. Stage explicit paths, not the whole worktree by habit.
 2. Review `git diff --cached --name-status`.
-3. Run `python scripts/check_branch_hygiene.py --pre-commit --base origin/main`.
+3. Run `D:\fund_monitor\.venv\Scripts\python.exe scripts/check_branch_hygiene.py --pre-commit --base origin/main`.
 4. Run `gitnexus_detect_changes({scope: "staged"})`.
 5. Split mixed or `CRITICAL` bundles into coherent commits. Do not suppress a
    legitimate `HIGH` warning; document it and test all direct dependents.

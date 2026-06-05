@@ -12,8 +12,26 @@ from typing import Callable
 
 
 ROOT = Path(__file__).resolve().parents[1]
+LIVE_WORKTREE = Path(r"D:\fund_monitor")
+RESEARCH_WORKTREE = Path(r"D:\fund_monitor_research")
+GROWTH24_RESEARCH_BRANCH = "growth24/research-salvage"
+GROWTH24_BRANCH_PREFIX = "growth24/"
 PROTECTED_BRANCHES = {"main", "master"}
 MODEL_BRANCH_PREFIXES = ("model-refresh/", "models/refresh/", "artifact-refresh/")
+GROWTH24_SCOPED_PREFIXES = (
+    ".githooks/",
+    "notes/growth24_",
+    "tests/test_growth24_",
+)
+GROWTH24_SCOPED_NAMES = {
+    ".gitattributes",
+    ".gitignore",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "docs/branch_hygiene.md",
+    "scripts/check_branch_hygiene.py",
+    "tests/test_branch_hygiene.py",
+}
 LOCAL_ARTIFACT_PREFIXES = (
     "data/",
     "logs/",
@@ -38,6 +56,7 @@ class GitError(RuntimeError):
 
 @dataclass
 class HygieneState:
+    root: str
     branch: str | None
     base: str
     base_exists: bool
@@ -87,6 +106,12 @@ def _normalize_path(path: str) -> str:
     return path.strip().replace("\\", "/")
 
 
+def _same_worktree(root: str, expected: Path) -> bool:
+    normalized_root = _normalize_path(root).rstrip("/").casefold()
+    normalized_expected = _normalize_path(str(expected)).rstrip("/").casefold()
+    return normalized_root == normalized_expected
+
+
 def parse_status_paths(output: str) -> list[str]:
     paths: list[str] = []
     for line in output.splitlines():
@@ -113,6 +138,15 @@ def model_branch_allowed(branch: str | None) -> bool:
     return bool(branch and branch.startswith(MODEL_BRANCH_PREFIXES))
 
 
+def is_growth24_scoped_path(path: str) -> bool:
+    normalized = _normalize_path(path)
+    if normalized in GROWTH24_SCOPED_NAMES:
+        return True
+    if normalized.startswith("dl_growth24_") and normalized.endswith(".py"):
+        return True
+    return normalized.startswith(GROWTH24_SCOPED_PREFIXES)
+
+
 def _rev_counts(left: str, right: str, run_git: GitRunner) -> tuple[int | None, int | None]:
     output = run_git(["rev-list", "--left-right", "--count", f"{left}...{right}"], True)
     if not output:
@@ -123,18 +157,34 @@ def _rev_counts(left: str, right: str, run_git: GitRunner) -> tuple[int | None, 
     return int(parts[0]), int(parts[1])
 
 
-def _operation_names(run_git: GitRunner) -> list[str]:
+def _git_path_exists(name: str, run_git: GitRunner) -> bool:
+    path = run_git(["rev-parse", "--git-path", name], True)
+    if not path:
+        return False
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        candidate = ROOT / candidate
+    return candidate.exists()
+
+
+def _operation_names(
+    run_git: GitRunner,
+    path_exists: Callable[[str], bool] | None = None,
+) -> list[str]:
     refs = {
         "merge": "MERGE_HEAD",
-        "rebase": "REBASE_HEAD",
         "cherry-pick": "CHERRY_PICK_HEAD",
         "revert": "REVERT_HEAD",
     }
-    return [
+    operations = [
         name
         for name, ref in refs.items()
         if run_git(["rev-parse", "--verify", "--quiet", ref], True)
     ]
+    exists = path_exists or (lambda name: _git_path_exists(name, run_git))
+    if exists("rebase-merge") or exists("rebase-apply"):
+        operations.append("rebase")
+    return operations
 
 
 def collect_state(base: str, run_git: GitRunner = _run_git) -> HygieneState:
@@ -162,6 +212,7 @@ def collect_state(base: str, run_git: GitRunner = _run_git) -> HygieneState:
     stash_output = run_git(["stash", "list", "--format=%gd"], True)
     hooks_path = run_git(["config", "--get", "core.hooksPath"], True) or None
     return HygieneState(
+        root=str(ROOT),
         branch=branch,
         base=base,
         base_exists=base_exists,
@@ -190,9 +241,23 @@ def evaluate_state(
 ) -> HygieneResult:
     errors: list[str] = []
     warnings: list[str] = []
+    live_worktree = _same_worktree(state.root, LIVE_WORKTREE)
+    research_worktree = _same_worktree(state.root, RESEARCH_WORKTREE)
+    growth24_branch = bool(state.branch and state.branch.startswith(GROWTH24_BRANCH_PREFIX))
 
     if not state.branch:
         errors.append("HEAD is detached; create or switch to a task branch before working.")
+    if live_worktree and state.branch and state.branch != "main":
+        errors.append(
+            r"Live worktree D:\fund_monitor must stay on main; do not checkout or switch branches there."
+        )
+    if research_worktree and state.branch and state.branch != GROWTH24_RESEARCH_BRANCH:
+        errors.append(
+            "Research worktree must stay on "
+            f"{GROWTH24_RESEARCH_BRANCH!r}; use another worktree for other branches."
+        )
+    if growth24_branch and not research_worktree:
+        errors.append(r"Growth24 branches may only be worked on from D:\fund_monitor_research.")
     if state.operations:
         errors.append(f"Git operation in progress: {', '.join(state.operations)}.")
     if not state.base_exists:
@@ -217,6 +282,8 @@ def evaluate_state(
         )
 
     if pre_commit:
+        if live_worktree:
+            errors.append(r"Commits are disabled in live worktree D:\fund_monitor.")
         if state.branch in PROTECTED_BRANCHES and not allow_protected:
             errors.append(f"Direct commits to protected branch {state.branch!r} are blocked.")
         if not state.staged_paths:
@@ -231,6 +298,15 @@ def evaluate_state(
                 "models/refresh/*, or artifact-refresh/* branches: "
                 + ", ".join(model_paths)
             )
+        if growth24_branch:
+            out_of_scope_paths = [
+                path for path in state.staged_paths if not is_growth24_scoped_path(path)
+            ]
+            if out_of_scope_paths:
+                errors.append(
+                    "Growth24 commits may only contain scoped research or hygiene files: "
+                    + ", ".join(out_of_scope_paths)
+                )
         if len(state.staged_paths) > max_staged_files and not allow_large_commit:
             errors.append(
                 f"{len(state.staged_paths)} files are staged; split the commit or explicitly "
@@ -253,6 +329,7 @@ def _print_human(result: HygieneResult) -> None:
     state = result.state
     status = "PASS" if result.ok else "FAIL"
     print(f"Branch hygiene: {status}")
+    print(f"Worktree: {state.root}")
     print(f"Branch: {state.branch or 'detached'}")
     print(
         f"Base: {state.base} "
