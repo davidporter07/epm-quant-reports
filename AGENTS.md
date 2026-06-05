@@ -99,3 +99,29 @@ To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.
 | Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->
+
+## Git Hygiene - Required Workflow
+
+Before any edit, pull, checkout, rebase, merge, or new task:
+
+1. Run `git fetch origin --prune`.
+2. Run `python scripts/check_branch_hygiene.py --base origin/main`.
+3. If it fails, stop and resolve the dirty, stale, or diverged branch first.
+
+Never switch branches with a dirty worktree. Commit coherent work or create a
+named, scoped stash before switching. Start new task branches from
+`origin/main`; do not branch from an unrelated local feature branch.
+
+Before every commit:
+
+1. Stage explicit paths, not the whole worktree by habit.
+2. Review `git diff --cached --name-status`.
+3. Run `python scripts/check_branch_hygiene.py --pre-commit --base origin/main`.
+4. Run `gitnexus_detect_changes({scope: "staged"})`.
+5. Split mixed or `CRITICAL` bundles into coherent commits. Do not suppress a
+   legitimate `HIGH` warning; document it and test all direct dependents.
+
+Model artifacts under `models/` may only be committed from `model-refresh/*`,
+`models/refresh/*`, or `artifact-refresh/*` branches. Local/generated artifacts
+such as `data/`, `logs/`, PC-health notes, and recovery notes must not be
+committed.
