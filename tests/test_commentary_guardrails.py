@@ -908,3 +908,46 @@ def test_non_event_causal_clause_is_left_alone():
     before = list(data["session_recap"])
     gmc._scrub_unreleased_event_attribution(data)
     assert data["session_recap"] == before
+
+
+# --- fabricated kinetic-attack detail scrub (#1b, regression 2026-06-05) -----
+# pre_market_bullets carried "Iran fired warning missiles and drones at US warships
+# in the Gulf of Oman" — specifics absent from the corpus, contradicting the ceasefire.
+
+_GEO_CORPUS = ("israel-lebanon ceasefire; gulf hostilities flared; u.s. and iran trade "
+               "strikes; iran peace talks continue")
+
+
+def test_fabricated_kinetic_clause_is_dropped():
+    data = {"pre_market_bullets": [
+        "Markets closed higher — S&P 500 +0.41% to 7,584.31; Iran fired warning "
+        "missiles and drones at US warships in the Gulf of Oman, heightening risk premiums."
+    ]}
+    gmc._scrub_fabricated_kinetic_detail(data, _GEO_CORPUS)
+    assert data["pre_market_bullets"][0] == "Markets closed higher — S&P 500 +0.41% to 7,584.31."
+
+
+def test_grounded_kinetic_framing_is_preserved():
+    # "strikes" IS in the corpus → general framing survives (no ungrounded weapon noun).
+    data = {"session_recap": ["Oil rose as U.S. and Iran trade strikes in the region."]}
+    before = list(data["session_recap"])
+    gmc._scrub_fabricated_kinetic_detail(data, _GEO_CORPUS)
+    assert data["session_recap"] == before
+
+
+def test_grounded_weapon_noun_is_preserved():
+    # When the corpus DOES mention tankers, a tanker-strike claim is grounded → kept.
+    corpus = _GEO_CORPUS + "; oil tanker struck near hormuz"
+    data = {"pre_market_bullets": ["A tanker was struck near the Strait of Hormuz."]}
+    before = list(data["pre_market_bullets"])
+    gmc._scrub_fabricated_kinetic_detail(data, corpus)
+    assert data["pre_market_bullets"] == before
+
+
+def test_kinetic_scrub_is_idempotent():
+    data = {"pre_market_bullets": [
+        "Equities firmed to 7,584; Iran fired drones at US warships overnight."]}
+    gmc._scrub_fabricated_kinetic_detail(data, _GEO_CORPUS)
+    once = list(data["pre_market_bullets"])
+    gmc._scrub_fabricated_kinetic_detail(data, _GEO_CORPUS)
+    assert data["pre_market_bullets"] == once

@@ -5064,6 +5064,55 @@ def _scrub_unreleased_event_attribution(data: dict) -> int:
     return _map_all_prose(data, _fix)
 
 
+# --- fabricated kinetic-attack detail scrub (#1b) ----------------------------
+# Regression 2026-06-05 pre_market_bullets: "Iran fired warning missiles and drones at
+# US warships in the Gulf of Oman" — a concrete kinetic claim whose specifics (warships,
+# drones, missiles) appear NOWHERE in the source corpus, and which contradicts the
+# dominant ceasefire/de-escalation signal. The off-narrative scrub only catches conflict
+# ENTITIES absent from the corpus (Iran IS present here, so it slipped); this catches the
+# specific WEAPON/TARGET detail that is absent. Grounded framing ("Gulf hostilities
+# flared") uses corpus vocabulary and survives. Drops the offending clause/sentence.
+_KINETIC_VERB_RE = re.compile(
+    r"\b(?:fired|launch\w*|strik\w*|struck|attack\w*|bombard\w*|shell\w*|sank|"
+    r"downed|seiz\w*|torpedo\w*)\b", re.IGNORECASE)
+_KINETIC_NOUN_RES = [
+    re.compile(r"\bwarships?\b", re.I), re.compile(r"\bdrones?\b", re.I),
+    re.compile(r"\bmissiles?\b", re.I), re.compile(r"\brockets?\b", re.I),
+    re.compile(r"\b(?:naval\s+)?vessels?\b", re.I), re.compile(r"\btankers?\b", re.I),
+    re.compile(r"\b(?:aircraft\s+)?carriers?\b", re.I), re.compile(r"\bgunboats?\b", re.I),
+]
+
+
+def _scrub_fabricated_kinetic_detail(data: dict, source_text: str) -> int:
+    """Drop kinetic-attack fragments whose specific weapon/target noun is ungrounded.
+
+    A fragment is fabricated if it pairs an attack verb (fired/launched/struck/...) with a
+    concrete weapon/target noun (warships/drones/missiles/...) that appears NOWHERE in the
+    source corpus. Splits prose on sentence and ';' boundaries so a fabricated trailing
+    clause is removed without discarding the factual lead. Skipped when source_text is empty."""
+    src = (source_text or "").lower()
+    ungrounded = [rx for rx in _KINETIC_NOUN_RES if not rx.search(src)]
+    if not ungrounded:
+        return 0
+
+    def _is_fab(frag: str) -> bool:
+        return bool(_KINETIC_VERB_RE.search(frag)) and any(rx.search(frag) for rx in ungrounded)
+
+    def _clean(text: str) -> str:
+        out = []
+        for sent in re.split(r"(?<=[.!?])\s+", text):
+            kept = [p for p in re.split(r"\s*;\s*", sent) if not _is_fab(p)]
+            if not kept:
+                continue
+            frag = "; ".join(kept).rstrip(" ,;:")
+            if frag and frag[-1] not in ".!?":
+                frag += "."
+            out.append(frag)
+        return " ".join(out).strip()
+
+    return _map_all_prose(data, _clean)
+
+
 def sanitize_commentary(data: dict, snapshot: dict | None = None, source_text: str = "") -> int:
     """Run the full deterministic corrector/scrubber pass over a commentary dict.
 
@@ -5090,6 +5139,7 @@ def sanitize_commentary(data: dict, snapshot: dict | None = None, source_text: s
     total += _scrub_unreleased_event_attribution(data)
     if source_text:
         total += _scrub_offnarrative_geopolitics(data, source_text)
+        total += _scrub_fabricated_kinetic_detail(data, source_text)
         total += _scrub_ungrounded_fed_attribution(data, source_text)
     return total
 
