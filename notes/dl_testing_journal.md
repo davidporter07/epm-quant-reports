@@ -4242,3 +4242,652 @@ Important correction:
 - Therefore the `2026-06-15` maturity check will score both base and overlay
   as traded for that plan. The next true abstain-vs-base live paper comparison
   is currently the `2026-05-28` `INTC,MU` plan due `2026-06-29`.
+
+## 2026-06-03 Growth24 Post-Prediction Gate Grid
+
+Purpose:
+
+- Avoid launching another long blind training run after the foundation-sidecar
+  candidate improved hit rate but worsened mean spread and drawdown on the
+  36-cycle replay.
+- Test whether the stronger next step is a bounded post-prediction overlay on
+  saved Growth24 shadow logs.
+
+Implementation:
+
+- Added `dl_growth24_post_prediction_gate_grid.py`.
+- The script reads a saved shadow log and evaluates grid combinations of:
+  forecast-gap caps, rank-score-gap caps, universe score dispersion caps,
+  max long ticker share, cooldown cycles, and max consecutive selections.
+- It writes a JSON report, best-config ledger CSV, and markdown summary. It is
+  research-only and does not change live policy, daily email behavior, the
+  current paper plan, or the scheduled maturity task.
+
+Champion 36-cycle 8-epoch stress-W2 shadow log:
+
+```text
+Baseline:
+trade_days: 36
+coverage: 100.00%
+mean_long_short_return: 8.26%
+median_long_short_return: 5.45%
+spread_hit_rate: 75.00%
+max_drawdown: -19.86%
+
+Best post-prediction gate:
+config: forecast_gap_max=4; universe_score_std_max=0.085; max_consecutive=3
+trade_days: 19
+coverage: 52.78%
+mean_long_short_return: 14.07%
+median_long_short_return: 9.18%
+spread_hit_rate: 89.47%
+max_drawdown: -4.02%
+```
+
+Foundation-sidecar 36-cycle 3-epoch replay:
+
+```text
+Baseline:
+trade_days: 36
+coverage: 100.00%
+mean_long_short_return: 7.62%
+median_long_short_return: 3.75%
+spread_hit_rate: 77.78%
+max_drawdown: -27.58%
+
+Best post-prediction gate:
+config: forecast_gap_max=4; long_share<=0.5; cooldown=2
+trade_days: 28
+coverage: 77.78%
+mean_long_short_return: 10.62%
+median_long_short_return: 7.79%
+spread_hit_rate: 85.71%
+max_drawdown: -11.25%
+```
+
+Decision:
+
+- Do not advance the foundation-sidecar candidate to an 8-epoch or longer run
+  yet. Its gated result is better than its own baseline, but it still trails
+  the champion's gated result.
+- The best current research path is to keep the champion fixed and use the
+  post-prediction gate grid as the acceptance bar for any challenger.
+- Current paper/live rules stay unchanged. Continue scoring the existing
+  base-versus-control overlay ledger at the pending June maturity dates before
+  promoting any overlay beyond paper-control tracking.
+
+Verification:
+
+```text
+python -m py_compile .\dl_growth24_post_prediction_gate_grid.py
+python -m pytest .\tests\test_growth24_post_prediction_gate_grid.py .\tests\test_growth24_current_control_gate.py .\tests\test_growth24_overlay_outcomes.py
+4 passed
+GitNexus detect_changes: low risk, no affected indexed execution flows
+```
+
+## 2026-06-03 Growth24 Post-Prediction Walk-Forward Validation
+
+Purpose:
+
+- Check whether the post-prediction gate grid survives temporal holdout testing
+  instead of only winning on the same 36 cycles used for selection.
+- Tighten the acceptance rule so a selected gate must pass absolute thresholds
+  and beat the raw baseline on the holdout slice.
+
+Implementation:
+
+- Added `dl_growth24_post_prediction_gate_walk_forward.py`.
+- The script evaluates the same post-prediction gate grid, selects the best
+  gate on an earlier prefix, and applies only that selected gate to later
+  cycles.
+- Added a ranking tie-break fix in `dl_growth24_post_prediction_gate_grid.py`
+  so tied mean/hit configs prefer less negative max drawdown.
+
+Champion 36-cycle 8-epoch stress-W2 walk-forward:
+
+```text
+Status: pass
+Splits: 2 / 2 pass
+
+Split 18 selected:
+forecast_gap_max=4; universe_score_std_max=0.09; max_consecutive=3
+holdout mean long-short: 15.08%
+holdout baseline mean long-short: 10.68%
+holdout uplift: 4.40%
+holdout hit: 81.82%
+holdout max drawdown: -3.83%
+
+Split 24 selected:
+forecast_gap_max=4; universe_score_std_max=0.085; max_consecutive=3
+holdout mean long-short: 14.52%
+holdout baseline mean long-short: 9.94%
+holdout uplift: 4.59%
+holdout hit: 100.00%
+holdout max drawdown: 0.00%
+```
+
+Foundation-sidecar 36-cycle 3-epoch walk-forward:
+
+```text
+Status: fail
+Splits: 0 / 2 pass
+
+Split 18 selected:
+forecast_gap_max=4; universe_score_std_max=0.085; long_share<=0.5
+holdout mean long-short: 5.72%
+holdout baseline mean long-short: 8.42%
+holdout uplift: -2.69%
+
+Split 24 selected:
+forecast_gap_max=4; universe_score_std_max=0.085; long_share<=0.5
+holdout mean long-short: 6.84%
+holdout baseline mean long-short: 11.82%
+holdout uplift: -4.98%
+```
+
+Decision:
+
+- Champion plus post-prediction overlay is the current best Growth24 testing
+  path. It passes temporal holdout validation and improves over the raw
+  holdout baseline in both prefix splits.
+- The foundation-sidecar path should stay parked. It can pass absolute gate
+  thresholds, but it fails the holdout-uplift rule and should not get more
+  training budget yet.
+- Keep live policy and current paper plan unchanged. The practical next
+  research gate is more paper-control evidence from the pending June
+  maturities, plus any future challenger having to beat this walk-forward bar.
+
+Verification:
+
+```text
+python -m py_compile .\dl_growth24_post_prediction_gate_grid.py .\dl_growth24_post_prediction_gate_walk_forward.py
+python -m pytest .\tests\test_growth24_post_prediction_gate_grid.py .\tests\test_growth24_current_control_gate.py .\tests\test_growth24_overlay_outcomes.py
+6 passed
+```
+
+## 2026-06-03 Growth24 Forecast-Gap Paper-Control Threading
+
+Purpose:
+
+- Move the walk-forward validated post-prediction overlay one step closer to
+  repeatable paper-control testing without changing live policy or the base
+  paper plan.
+- Thread the validated `max_forecast_gap=4.0` cap through the current
+  Growth24 control gate and the scheduled maturity-check overlay ledger.
+
+Implementation:
+
+- Updated `dl_growth24_current_control_gate.py`:
+  - Added default `max_forecast_gap=4.0`.
+  - Current gate now records `LongShortForecastGapPct` and
+    `MaxForecastGapPct` in the paper overlay CSV.
+  - Markdown report now shows the forecast-gap threshold.
+- Updated `dl_growth24_paper_maturity_check.py`:
+  - Historical overlay decisions now compute long-short forecast gap from
+    `RawForecastPct`.
+  - Overlay ledger now includes `LongShortForecastGapPct` and
+    `MaxForecastGapPct`.
+  - Alert/status plumbing carries the same threshold as the current gate.
+- Added focused tests for current-gate and maturity-ledger forecast-gap
+  abstention.
+
+Local run on 2026-06-03:
+
+```text
+Command: python .\dl_growth24_current_control_gate.py
+Status: paper_control_abstain
+Overlay: paper_overlay_abstain
+AsOfDate: 2026-05-28
+Longs: INTC, MU
+Universe score std: 0.087727
+Long-short forecast gap: -1.974865
+Gate failure: universe score std 0.087727 > 0.085000
+```
+
+```text
+Command: python .\dl_growth24_paper_maturity_check.py --today 2026-06-03
+Selected plans: 6
+Next due date: 2026-06-11
+Overlay ledger rows: 6
+Overlay allowed plans: 1
+Overlay abstained plans: 5
+Overlay matured plans: 0
+Abstained matured plans: 1
+```
+
+Ledger interpretation:
+
+- The `2025-12-30` matured skipped-gain plan now fails both dispersion and
+  forecast-gap controls (`LongShortForecastGapPct = 6.8069 > 4.0`), but it was
+  already abstained under the dispersion-only overlay.
+- The pending `2026-05-14` StressW2 plan remains overlay-allowed:
+  `UniverseScoreStd = 0.077648`, `LongShortForecastGapPct = 2.1471`.
+- The pending `2026-05-28` StressW2 plan remains overlay-abstained because
+  `UniverseScoreStd = 0.087727 > 0.085`; its forecast gap is not a failure.
+
+Decision:
+
+- Use the current paper-control overlay as:
+  `universe_count == 24`, `universe_score_std <= 0.085`, and
+  `long_short_forecast_gap_pct <= 4.0`.
+- Keep `max_consecutive=3` as a research selection-simulator rule for now; do
+  not add it to the current plan overlay until a simulator can show how it
+  would choose replacement longs rather than merely rejecting the base plan.
+- Live policy, base paper plan, scheduled task cadence, and daily email remain
+  unchanged.
+
+Verification:
+
+```text
+python -m py_compile .\dl_growth24_current_control_gate.py .\dl_growth24_paper_maturity_check.py .\dl_growth24_post_prediction_gate_grid.py .\dl_growth24_post_prediction_gate_walk_forward.py
+python -m pytest .\tests\test_growth24_current_control_gate.py .\tests\test_growth24_overlay_outcomes.py .\tests\test_growth24_post_prediction_gate_grid.py
+8 passed
+```
+
+## 2026-06-03 Growth24 Replacement-Candidate Simulator
+
+Purpose:
+
+- Continue the paper-control development path without changing scheduled
+  policy.
+- Test whether the remaining walk-forward rule, `max_consecutive=3`, can be
+  translated into replacement long candidates when a repeatedly selected
+  ticker would otherwise be blocked.
+
+Implementation:
+
+- Added `dl_growth24_overlay_candidate_sim.py`.
+- The simulator reads the Growth24 paper plan log, forecast log, and research
+  panel.
+- It applies the current paper-control thresholds:
+  `universe_count >= 24`, `universe_score_std <= 0.085`,
+  `long_short_forecast_gap_pct <= 4.0`, and `max_consecutive=3`.
+- When a plan passes the gate, it simulates replacement long selection from the
+  ranked forecast list. It writes a ledger, summary JSON, and markdown report.
+- This is research-only and does not mutate the base paper plan, current
+  overlay, scheduled task, live policy, or email behavior.
+
+Local run:
+
+```text
+Command: python .\dl_growth24_overlay_candidate_sim.py
+Status: scored
+Plans: 6
+Overlay allowed plans: 1
+Overlay abstained plans: 5
+Replacement plans: 0
+Overlay matured plans: 0
+```
+
+Interpretation:
+
+- The current saved paper history is still too sparse under the stricter
+  overlay for `max_consecutive=3` to bind.
+- Only the `2026-05-14` StressW2 plan survives the current
+  universe/dispersion/forecast-gap gates, and it remains pending.
+- Therefore there is no evidence yet to promote replacement selection into the
+  scheduled paper overlay. Keep replacement selection as research-only until
+  additional accepted plans mature or a broader historical forecast replay is
+  generated.
+
+Verification:
+
+```text
+python -m py_compile .\dl_growth24_overlay_candidate_sim.py
+python -m pytest .\tests\test_growth24_overlay_candidate_sim.py .\tests\test_growth24_current_control_gate.py .\tests\test_growth24_overlay_outcomes.py .\tests\test_growth24_post_prediction_gate_grid.py
+10 passed
+```
+
+## 2026-06-03 Growth24 Fixed-Policy Historical Replay
+
+Purpose:
+
+- Validate the exact current research policy, not a searched grid:
+  `forecast_gap_max=4`, `universe_score_std_max=0.085`, and
+  `max_consecutive=3`.
+- Compare it against the same filters without the max-consecutive replacement
+  rule.
+
+Fixed-policy all-sample result:
+
+```text
+Baseline raw top2/bottom2:
+trade_days: 36
+coverage: 100.00%
+mean long-short: 8.26%
+hit: 75.00%
+max drawdown: -19.86%
+
+Fixed policy with max_consecutive=3:
+trade_days: 19
+coverage: 52.78%
+mean long-short: 14.07%
+hit: 89.47%
+max drawdown: -4.02%
+max long ticker slot share: 39.47%
+
+Same filters without max_consecutive:
+trade_days: 19
+coverage: 52.78%
+mean long-short: 12.66%
+hit: 89.47%
+max drawdown: -4.02%
+max long ticker slot share: 44.74%
+```
+
+Replacement rows from `max_consecutive=3`:
+
+```text
+2024-02-12:
+baseline longs: PLTR,NFLX
+policy longs: NFLX,NVDA
+baseline long-short: 5.13%
+policy long-short: 18.13%
+
+2025-10-15:
+baseline longs: AMD,PLTR
+policy longs: AMD,MU
+baseline long-short: 6.93%
+policy long-short: 20.74%
+```
+
+Fixed-policy walk-forward:
+
+```text
+With max_consecutive=3:
+split 18 holdout mean long-short: 19.18%
+split 18 holdout baseline mean long-short: 10.68%
+split 18 uplift: 8.50%
+split 24 holdout mean long-short: 14.52%
+split 24 holdout baseline mean long-short: 9.94%
+split 24 uplift: 4.59%
+
+Without max_consecutive:
+split 18 uplift: 6.97%
+split 24 uplift: 2.28%
+```
+
+Decision:
+
+- The exact fixed policy passes temporal holdout testing and improves over both
+  the raw holdout baseline and the same filters without replacement.
+- `max_consecutive=3` remains validated as a research policy component, but it
+  should not be wired into scheduled paper overlay yet because the real saved
+  paper ledger still has only one accepted pending plan under the stricter
+  filters.
+- Next useful research step is a broader historical paper-style replay from
+  the champion shadow log that produces plan-level replacement candidates and
+  outcome attribution, then compare that to the existing shadow-log
+  long/short replay.
+
+Verification artifacts:
+
+```text
+notes/growth24_36c_8e_post_prediction_fixed_policy.md
+notes/growth24_36c_8e_post_prediction_fixed_policy_no_consecutive.md
+notes/growth24_36c_8e_post_prediction_fixed_policy_walk_forward.md
+notes/growth24_36c_8e_post_prediction_fixed_policy_no_consecutive_walk_forward.md
+```
+
+## 2026-06-03 Growth24 Historical Paper-Policy Replay
+
+Purpose:
+
+- Convert the fixed shadow-log policy into a paper-style replay that includes
+  every historical cycle, abstention reasons, replacement candidates, and
+  outcome attribution.
+- Enforce the full paper-control rule, including the real paper constraint
+  `expected_universe_count >= 24`, which the earlier post-prediction grid did
+  not include.
+
+Implementation:
+
+- Added `dl_growth24_shadow_policy_replay.py`.
+- The replay reads the champion 36-cycle shadow log and applies:
+  `universe_count >= 24`, `universe_score_std <= 0.085`,
+  `long_short_forecast_gap_pct <= 4.0`, and `max_consecutive=3`.
+- It writes a full cycle ledger, summary JSON, and markdown report.
+- Research-only: no live policy, base paper plan, scheduled task, or email
+  behavior changes.
+
+Champion historical paper-policy replay:
+
+```text
+Cycles: 36
+Overlay allowed cycles: 17
+Overlay abstained cycles: 19
+Replacement cycles: 1
+Baseline all-cycle mean long-short: 8.26%
+Baseline on allowed cycles mean long-short: 13.56%
+Overlay allowed mean long-short: 14.32%
+Overlay allowed hit rate: 88.24%
+Overlay allowed max drawdown: -4.02%
+Abstained baseline mean long-short: 3.52%
+```
+
+Replacement attribution:
+
+```text
+2024-02-12:
+baseline longs: PLTR,NFLX
+overlay longs: NFLX,NVDA
+replacement: NVDA
+baseline long-short: 5.13%
+overlay long-short: 18.13%
+delta: +13.00%
+```
+
+Comparison without `max_consecutive` under the same full paper policy:
+
+```text
+Overlay allowed cycles: 17
+Replacement cycles: 0
+Overlay allowed mean long-short: 13.56%
+```
+
+Decision:
+
+- The full paper-style replay still supports the policy overlay after adding
+  the real universe-count constraint.
+- The stricter full paper replay reduces accepted cycles from 19 to 17 versus
+  the earlier grid-only replay, but keeps strong mean spread and drawdown.
+- `max_consecutive=3` adds a modest but positive historical paper-style uplift
+  through one replacement cycle. Keep it research-only until there are more
+  accepted paper plans or a broader generated forecast history.
+
+Verification:
+
+```text
+python -m py_compile .\dl_growth24_shadow_policy_replay.py .\dl_growth24_overlay_candidate_sim.py .\dl_growth24_post_prediction_gate_grid.py .\dl_growth24_post_prediction_gate_walk_forward.py
+python -m pytest .\tests\test_growth24_shadow_policy_replay.py .\tests\test_growth24_overlay_candidate_sim.py .\tests\test_growth24_current_control_gate.py .\tests\test_growth24_overlay_outcomes.py .\tests\test_growth24_post_prediction_gate_grid.py
+12 passed
+```
+
+## 2026-06-04 Growth24 Stateful Holdout Paper-Policy Replay
+
+Purpose:
+
+- Verify the full paper-policy replay by temporal holdout while carrying
+  `max_consecutive=3` streak state from earlier warmup cycles into the scored
+  holdout window.
+- Correct the replacement attribution so warmup-only replacements do not count
+  as scored holdout replacements.
+
+Implementation:
+
+- Extended `dl_growth24_shadow_policy_replay.py` with:
+  - `--start-date` / `--end-date` for hard filtering.
+  - `--score-start-date` / `--score-end-date` for scoring a holdout window
+    after warming up state on earlier cycles.
+- Added tests for date-window filtering, warmup streak carry-forward, and
+  excluding warmup-only replacements from scored replacement counts.
+
+Stateful holdout results:
+
+```text
+Split 18 holdout, score_start_date=2024-10-11:
+cycles: 18
+overlay allowed cycles: 7
+overlay abstained cycles: 11
+replacement cycles: 0
+baseline all-cycle mean long-short: 10.68%
+overlay allowed mean long-short: 21.24%
+overlay allowed hit rate: 100.00%
+overlay allowed max drawdown: 0.00%
+abstained baseline mean long-short: 3.95%
+
+Split 24 holdout, score_start_date=2025-04-15:
+cycles: 12
+overlay allowed cycles: 5
+overlay abstained cycles: 7
+replacement cycles: 0
+baseline all-cycle mean long-short: 9.94%
+overlay allowed mean long-short: 13.28%
+overlay allowed hit rate: 100.00%
+overlay allowed max drawdown: 0.00%
+abstained baseline mean long-short: 7.55%
+```
+
+Decision:
+
+- The full paper-style filter passes the warmup-aware temporal holdout check.
+- The out-of-sample benefit in these windows comes from abstention/filtering,
+  not replacement selection; `max_consecutive=3` still has only one scored
+  historical replacement in the all-sample replay.
+- Keep `max_consecutive=3` research-only. The practical paper-control overlay
+  remains the stricter filter: full universe, dispersion cap, and forecast-gap
+  cap.
+
+Verification:
+
+```text
+python -m py_compile .\dl_growth24_shadow_policy_replay.py
+python -m pytest .\tests\test_growth24_shadow_policy_replay.py .\tests\test_growth24_overlay_candidate_sim.py .\tests\test_growth24_current_control_gate.py .\tests\test_growth24_overlay_outcomes.py .\tests\test_growth24_post_prediction_gate_grid.py
+15 passed
+```
+
+## 2026-06-04 Growth24 Policy Threshold Sensitivity
+
+Purpose:
+
+- Test whether the Growth24 paper-control overlay survives nearby threshold
+  choices rather than depending on one exact fitted cut.
+- Reuse the warmup-aware paper-policy replay on the 2024-10-11 and 2025-04-15
+  holdout starts.
+- Keep this research-only: no live policy, paper plan, scheduled task, or email
+  behavior changes.
+
+Implementation:
+
+- Added `dl_growth24_policy_threshold_sensitivity.py`.
+- The runner evaluates dispersion caps `0.08,0.085,0.09`, forecast-gap caps
+  `3.0,4.0,5.0`, and `max_consecutive` settings `0,3`.
+- It caches the saved shadow log in memory, writes JSON/CSV/markdown reports,
+  and ranks configs by holdout robustness before full-sample return.
+
+Results:
+
+```text
+configs tested: 18
+passing configs: 17
+best robust config: universe_score_std_max=0.08; forecast_gap_max=3; max_consecutive=0
+best full-sample allowed cycles: 13 / 36
+best full-sample overlay mean long-short: 14.73%
+best minimum holdout allowed cycles: 5
+best minimum holdout filter uplift: 3.34%
+best minimum holdout overlay mean long-short: 13.28%
+best worst holdout max drawdown: 0.00%
+```
+
+Current practical policy comparison:
+
+```text
+universe_score_std_max=0.085; forecast_gap_max=4; max_consecutive=0
+holdout passes: 2 / 2
+minimum holdout allowed cycles: 5
+minimum holdout filter uplift: 3.34%
+minimum holdout overlay mean long-short: 13.28%
+full-sample allowed cycles: 17 / 36
+full-sample overlay mean long-short: 13.56%
+full-sample max drawdown: -4.02%
+```
+
+Decision:
+
+- The threshold family is robust across the tested temporal holdouts; the result
+  is not dependent on a single precise dispersion or forecast-gap value.
+- The stricter `0.08` dispersion / `3.0` forecast-gap setting has the highest
+  full-sample mean among the robust no-replacement configs, but cuts accepted
+  cycles to 13 / 36.
+- Keep the practical paper-control overlay at `0.085` dispersion and `4.0`
+  forecast gap for now because it preserves more coverage while still passing
+  both holdout starts.
+- Keep `max_consecutive=3` research-only. It improves some full-sample rows via
+  replacement cycles, but the holdout support still comes from filtering rather
+  than replacement selection.
+
+Verification:
+
+```text
+python -m py_compile .\dl_growth24_policy_threshold_sensitivity.py
+python -m pytest .\tests\test_growth24_policy_threshold_sensitivity.py
+2 passed
+python .\dl_growth24_policy_threshold_sensitivity.py
+Status: pass
+Configs tested: 18
+Passing configs: 17
+```
+
+## 2026-06-05 Growth24 Candidate Contract Evaluation
+
+Purpose:
+
+- Apply one fixed research contract to saved Growth24 shadow-log candidates.
+- Require a full gate-grid, walk-forward, threshold-sensitivity, and practical
+  paper-policy replay pass before calling a candidate a full `pass`.
+- Prevent short-history candidates from appearing promotion-ready when
+  walk-forward or threshold-sensitivity checks cannot run.
+
+Implementation:
+
+- Added `dl_growth24_candidate_contract_eval.py`.
+- The evaluator runs the gate grid, walk-forward selection, practical
+  paper-policy replay, fixed holdouts, and threshold-sensitivity checks against
+  one saved shadow log.
+- Hardened status semantics:
+  - `pass`: all required checks completed and passed.
+  - `provisional`: available checks passed, but required checks were skipped.
+  - `fail`: one or more completed checks failed.
+- Score-start dates outside a candidate's actual cycle window are now reported
+  as skipped rather than scored as full-sample pseudo-holdouts.
+- Added focused tests for full pass, provisional status, invalid holdout dates,
+  and fail-overrides-provisional behavior.
+
+Candidate results:
+
+| Candidate | Status | Practical Allowed | Practical Mean LS | Hit | Walk Forward | Sensitivity |
+|---|---|---:|---:|---:|---|---|
+| 36c / 8e StressW2 seed-robust champion | pass | 17 / 36 | 13.56% | 88.24% | pass | pass |
+| 36c / 3e foundation sidecar | fail | 11 / 36 | 9.01% | 90.91% | fail | fail |
+| 12c / 3e StressW3 | provisional | 7 / 12 | 12.72% | 71.43% | skipped | skipped |
+| 12c / 3e foundation sidecar | provisional | 4 / 12 | 11.14% | 100.00% | skipped | skipped |
+
+Decision:
+
+- Keep the 36-cycle / 8-epoch StressW2 seed-robust model as the only candidate
+  that satisfies the complete Growth24 research contract.
+- Reject the 36-cycle foundation-sidecar challenger; its all-sample gates do
+  not survive walk-forward or nearby-threshold testing.
+- Keep both 12-cycle candidates as provisional research observations only.
+  They are not promotion-eligible until enough cycles exist for the skipped
+  walk-forward and threshold-sensitivity checks.
+- Keep all candidate evaluation paper/research-only. No live policy, scheduled
+  paper plan, or email behavior changed.
+
+Verification:
+
+```text
+python -m py_compile .\dl_growth24_candidate_contract_eval.py .\tests\test_growth24_candidate_contract_eval.py
+python -m pytest .\tests\test_growth24_current_control_gate.py .\tests\test_growth24_overlay_outcomes.py .\tests\test_growth24_post_prediction_gate_grid.py .\tests\test_growth24_overlay_candidate_sim.py .\tests\test_growth24_shadow_policy_replay.py .\tests\test_growth24_policy_threshold_sensitivity.py .\tests\test_growth24_candidate_contract_eval.py
+20 passed
+```
