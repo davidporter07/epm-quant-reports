@@ -774,20 +774,24 @@ def test_fetch_gold_quote_prefers_spot(monkeypatch):
     assert "GC=F" not in seen, "futures must not be fetched when spot is good"
 
 
-def test_fetch_gold_quote_falls_back_to_futures_when_spot_empty(monkeypatch):
+def test_fetch_gold_quote_falls_back_to_futures_when_spot_and_gld_empty(monkeypatch):
+    # Futures is now the LAST resort — reached only when both spot and the GLD proxy fail.
     def _fake(ticker, prev_close=None, mode="eod"):
-        if ticker == "XAUUSD=X":
-            return None                       # spot feed flaked (yfinance XAUUSD=X is fragile)
-        return {"level": 4436.70, "change": -52.0, "pct_change": -1.17}
+        if ticker in ("XAUUSD=X", "GLD"):
+            return None                       # spot feed flaked AND GLD proxy unavailable
+        return {"level": 4436.70, "change": -52.0, "pct_change": -1.17}  # GC=F futures
 
     monkeypatch.setattr(gmc, "_fetch_quote", _fake)
     assert gmc._fetch_gold_quote()["level"] == 4436.70
 
 
 def test_fetch_gold_quote_falls_back_when_spot_level_zero(monkeypatch):
+    # A present-but-zero spot level is unusable → falls through (GLD also down here → futures).
     def _fake(ticker, prev_close=None, mode="eod"):
         if ticker == "XAUUSD=X":
             return {"level": 0, "change": None, "pct_change": None}   # present but unusable
+        if ticker == "GLD":
+            return None
         return {"level": 4436.70, "change": -52.0, "pct_change": -1.17}
 
     monkeypatch.setattr(gmc, "_fetch_quote", _fake)
@@ -1027,26 +1031,64 @@ def test_harvest_dedupes_against_existing_speakers():
     assert rows == []
 
 
-# --- gold spot fallback observability (#5, regression 2026-06-05) ------------
-# XAUUSD=X 404s intermittently; the futures fallback must be tagged + logged so the
-# spot-vs-desk divergence on those days is known, not a silent mystery.
+# --- gold spot: 3-tier fallback XAUUSD=X -> GLD*ratio -> futures (#5, 2026-06-05) --
+# XAUUSD=X 404s intermittently. We then report a GLD-derived SPOT level (GLD is
+# physically-backed spot gold), scaled by a ratio that self-calibrates off live spot;
+# futures are only the last resort. Each test redirects the ratio cache to a tmp file.
 
-def test_gold_uses_spot_when_available(monkeypatch):
-    def fake_fetch(ticker, prev_close=None, mode="eod"):
+def _gold_quotes(spot=None, gld=None, fut=None):
+    def fake(ticker, prev_close=None, mode="eod"):
         if ticker == gmc.GOLD_SPOT_TICKER:
-            return {"level": 4475.8, "change": 39.1, "pct_change": 0.88}
-        return {"level": 4505.8, "change": 38.9, "pct_change": 0.87}
-    monkeypatch.setattr(gmc, "_fetch_quote", fake_fetch)
-    q = gmc._fetch_gold_quote()
-    assert q["level"] == 4475.8 and q["_source"] == gmc.GOLD_SPOT_TICKER
+            return spot
+        if ticker == gmc.GOLD_GLD_PROXY_TICKER:
+            return gld
+        if ticker == gmc.GOLD_FUTURES_TICKER:
+            return fut
+        return None
+    return fake
 
 
-def test_gold_falls_back_to_futures_when_spot_empty(monkeypatch, capsys):
-    def fake_fetch(ticker, prev_close=None, mode="eod"):
-        if ticker == gmc.GOLD_SPOT_TICKER:
-            return None  # spot feed 404'd
-        return {"level": 4505.8, "change": 38.9, "pct_change": 0.87}
-    monkeypatch.setattr(gmc, "_fetch_quote", fake_fetch)
+def test_gold_uses_true_spot_and_recalibrates_ratio(monkeypatch, tmp_path):
+    monkeypatch.setattr(gmc, "GOLD_GLD_RATIO_PATH", tmp_path / "ratio.json")
+    monkeypatch.setattr(gmc, "_fetch_quote", _gold_quotes(
+        spot={"level": 4340.0, "change": 38.0, "pct_change": 0.88},
+        gld={"level": 396.24, "change": 3.5, "pct_change": 0.89}))
     q = gmc._fetch_gold_quote()
-    assert q["level"] == 4505.8 and q["_source"] == gmc.GOLD_FUTURES_TICKER
-    assert "spot feed" in capsys.readouterr().out.lower()  # warned loudly
+    assert q["level"] == 4340.0 and q["_source"] == gmc.GOLD_SPOT_TICKER
+    # ratio cached for future outages: 4340/396.24 ~= 10.953
+    assert abs(gmc._load_gld_spot_ratio() - (4340.0 / 396.24)) < 1e-3
+
+
+def test_gold_uses_gld_derived_spot_when_spot_down(monkeypatch, tmp_path, capsys):
+    # Seed a calibrated ratio, then drop the spot feed.
+    rp = tmp_path / "ratio.json"
+    rp.write_text('{"ratio": 10.95}', encoding="utf-8")
+    monkeypatch.setattr(gmc, "GOLD_GLD_RATIO_PATH", rp)
+    monkeypatch.setattr(gmc, "_fetch_quote", _gold_quotes(
+        spot=None, gld={"level": 396.24, "change": 3.5, "pct_change": 0.89},
+        fut={"level": 4353.9, "change": 38.0, "pct_change": 0.88}))
+    q = gmc._fetch_gold_quote()
+    assert q["level"] == round(10.95 * 396.24, 2)        # GLD-derived spot, not futures
+    assert q["pct_change"] == 0.89                        # daily % preserved from GLD
+    assert q["_source"].startswith("GLD*")
+    assert "gld-derived" in capsys.readouterr().out.lower()
+
+
+def test_gold_falls_back_to_futures_only_when_gld_also_down(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(gmc, "GOLD_GLD_RATIO_PATH", tmp_path / "ratio.json")
+    monkeypatch.setattr(gmc, "_fetch_quote", _gold_quotes(
+        spot=None, gld=None, fut={"level": 4353.9, "change": 38.0, "pct_change": 0.88}))
+    q = gmc._fetch_gold_quote()
+    assert q["level"] == 4353.9 and q["_source"] == gmc.GOLD_FUTURES_TICKER
+    assert "futures" in capsys.readouterr().out.lower()
+
+
+def test_gld_ratio_cache_rejects_implausible_values(monkeypatch, tmp_path):
+    rp = tmp_path / "ratio.json"
+    monkeypatch.setattr(gmc, "GOLD_GLD_RATIO_PATH", rp)
+    gmc._save_gld_spot_ratio(4340.0, 396.24)             # ~10.95 → saved
+    assert abs(gmc._load_gld_spot_ratio() - 10.953) < 0.01
+    gmc._save_gld_spot_ratio(4340.0, 4505.8)             # ~0.96 → out of band, rejected
+    assert abs(gmc._load_gld_spot_ratio() - 10.953) < 0.01  # unchanged
+    rp.write_text("{not json", encoding="utf-8")          # corrupt → seed
+    assert gmc._load_gld_spot_ratio() == gmc.GOLD_GLD_RATIO_SEED

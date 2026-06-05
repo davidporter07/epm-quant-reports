@@ -217,35 +217,92 @@ def _fetch_quote(ticker: str, days_back: int = 7, prev_close: float | None = Non
         return None
 
 
-# Gold sourcing: report SPOT, not COMEX futures. The futures contract (GC=F) trades at a
-# ~$30-40 contango basis to spot, which made the snapshot read ~$40 high versus spot-quoting
-# desks (and the Sevens Report) in 2026-06-04 side-by-sides — e.g. EPM 4,436.70 vs Sevens
-# 4,475.40. yfinance's spot symbol (XAUUSD=X) is flakier than the continuous futures contract,
-# so we prefer spot and fall back to futures whenever the spot pull is empty/unusable.
-GOLD_SPOT_TICKER    = "XAUUSD=X"
-GOLD_FUTURES_TICKER = "GC=F"
+# Gold sourcing: report SPOT, not COMEX futures. GC=F trades at a contango basis to spot,
+# which made the snapshot read off spot-quoting desks (and the Sevens Report) in 2026-06-04/05
+# side-by-sides. yfinance's only direct spot symbol (XAUUSD=X) 404s intermittently, so gold
+# uses a three-tier fallback (see _fetch_gold_quote):
+#   1. XAUUSD=X                — true spot (preferred)
+#   2. GLD * calibrated ratio  — physically-backed spot-gold ETF, never 404s; scaled to a spot
+#                                level by a ratio that SELF-CALIBRATES off XAUUSD=X whenever
+#                                spot is live, so the slowly-drifting oz/share never rots
+#   3. GC=F                     — COMEX futures, last resort (contango basis; logged loudly)
+GOLD_SPOT_TICKER      = "XAUUSD=X"
+GOLD_FUTURES_TICKER   = "GC=F"
+GOLD_GLD_PROXY_TICKER = "GLD"
+# ~1/0.0913 oz of gold per GLD share today; SEED only — overwritten live from XAUUSD=X/GLD.
+GOLD_GLD_RATIO_SEED   = 10.95
+GOLD_GLD_RATIO_PATH   = DATA_DIR / "gold_gld_ratio.json"
+
+
+def _load_gld_spot_ratio() -> float:
+    """The cached spot/GLD ratio (refreshed whenever XAUUSD=X is live), else the seed.
+    Sanity-banded so a corrupt/implausible cache can never poison the gold level."""
+    try:
+        d = json.loads(GOLD_GLD_RATIO_PATH.read_text(encoding="utf-8"))
+        r = float(d.get("ratio"))
+        if 8.0 < r < 14.0:
+            return r
+    except Exception:
+        pass
+    return GOLD_GLD_RATIO_SEED
+
+
+def _save_gld_spot_ratio(spot_level: float, gld_level: float) -> None:
+    """Persist spot/GLD so a future spot-feed outage can scale GLD back to a spot level.
+    Only writes a plausible ratio (8-14); never raises."""
+    try:
+        if spot_level and gld_level and gld_level > 0:
+            ratio = float(spot_level) / float(gld_level)
+            if 8.0 < ratio < 14.0:
+                GOLD_GLD_RATIO_PATH.write_text(json.dumps({
+                    "ratio": round(ratio, 4),
+                    "spot_level": round(float(spot_level), 2),
+                    "gld_level": round(float(gld_level), 2),
+                    "date": datetime.today().strftime("%Y-%m-%d"),
+                }, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _fetch_gold_quote(prev_close: float | None = None, mode: str = "eod") -> dict | None:
-    """Gold {level, change, pct_change}, preferring spot (XAUUSD=X) over futures (GC=F).
+    """Gold {level, change, pct_change, _source}, reporting SPOT via a three-tier fallback.
 
-    The eod path computes change off the series' own prior bar (arr[-2]), so switching the
-    source produces a self-consistent spot-over-spot move — no stale futures prev_close leaks
-    in. Falls back to the futures contract when the spot pull is missing or has no usable level.
-    """
+    1. XAUUSD=X true spot (preferred). On success we ALSO recalibrate the GLD ratio so the
+       proxy below stays accurate.
+    2. GLD * calibrated ratio — GLD is physically-backed spot gold and never 404s; scaling by
+       the self-calibrating spot/GLD ratio yields a spot-level price that tracks spot within
+       fees. Scaling preserves the daily %; level and $ change scale by the ratio.
+    3. GC=F COMEX futures, last resort (contango basis; logged loudly).
+    The eod path computes change off each series' own prior bar (arr[-2]), so every source
+    yields a self-consistent same-source move — no cross-source prev_close leak."""
+    # 1. True spot — and recalibrate the GLD ratio while we have a live spot print.
     spot = _fetch_quote(GOLD_SPOT_TICKER, prev_close=prev_close, mode=mode)
     if spot and spot.get("level"):
         spot["_source"] = GOLD_SPOT_TICKER
+        gld_now = _fetch_quote(GOLD_GLD_PROXY_TICKER, mode=mode)
+        if gld_now and gld_now.get("level"):
+            _save_gld_spot_ratio(spot["level"], gld_now["level"])
         return spot
-    # Spot pull failed (XAUUSD=X 404s intermittently). Fall back to COMEX futures, but say so
-    # loudly: futures carry a ~$30-40 contango basis, so on these days the gold print reads off
-    # spot-quoting desks (Sevens et al.) and that divergence is expected, not a bug.
+    # 2. GLD-derived spot proxy — closest spot-level number when the direct feed is down.
+    gld = _fetch_quote(GOLD_GLD_PROXY_TICKER, mode=mode)
+    if gld and gld.get("level"):
+        ratio = _load_gld_spot_ratio()
+        proxy = {
+            "level":      round(ratio * float(gld["level"]), 2),
+            "change":     round(ratio * float(gld.get("change") or 0.0), 2),
+            "pct_change": gld.get("pct_change"),
+            "_source":    f"GLD*{ratio:.3f}",
+        }
+        print(f"  [INFO] Gold spot feed ({GOLD_SPOT_TICKER}) unavailable — using calibrated "
+              f"GLD-derived spot {proxy['level']} (ratio {ratio:.3f}); tracks spot within fees.")
+        return proxy
+    # 3. Futures last resort — loud, because it reads off spot-quoting desks.
     fut = _fetch_quote(GOLD_FUTURES_TICKER, prev_close=prev_close, mode=mode)
     if fut and fut.get("level"):
         fut["_source"] = GOLD_FUTURES_TICKER
-        print(f"  [WARN] Gold spot feed ({GOLD_SPOT_TICKER}) unavailable — using COMEX futures "
-              f"({GOLD_FUTURES_TICKER}) at {fut.get('level')}. Futures trade at a contango basis "
-              f"to spot, so today's gold level may read ~$30-40 off spot-quoting desks.")
+        print(f"  [WARN] Gold spot AND GLD proxy unavailable — using COMEX futures "
+              f"({GOLD_FUTURES_TICKER}) at {fut.get('level')}. Futures carry a contango basis, "
+              f"so today's gold level may read ~$30-40 off spot-quoting desks.")
     return fut
 
 
