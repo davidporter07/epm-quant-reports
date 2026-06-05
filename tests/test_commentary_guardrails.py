@@ -1025,3 +1025,28 @@ def test_harvest_dedupes_against_existing_speakers():
     headlines = ["Fed's Daly speaks on the economic outlook this afternoon"]
     rows = gmc._harvest_fed_speakers_from_news(headlines, existing_speakers=[{"speaker": "Mary Daly"}])
     assert rows == []
+
+
+# --- gold spot fallback observability (#5, regression 2026-06-05) ------------
+# XAUUSD=X 404s intermittently; the futures fallback must be tagged + logged so the
+# spot-vs-desk divergence on those days is known, not a silent mystery.
+
+def test_gold_uses_spot_when_available(monkeypatch):
+    def fake_fetch(ticker, prev_close=None, mode="eod"):
+        if ticker == gmc.GOLD_SPOT_TICKER:
+            return {"level": 4475.8, "change": 39.1, "pct_change": 0.88}
+        return {"level": 4505.8, "change": 38.9, "pct_change": 0.87}
+    monkeypatch.setattr(gmc, "_fetch_quote", fake_fetch)
+    q = gmc._fetch_gold_quote()
+    assert q["level"] == 4475.8 and q["_source"] == gmc.GOLD_SPOT_TICKER
+
+
+def test_gold_falls_back_to_futures_when_spot_empty(monkeypatch, capsys):
+    def fake_fetch(ticker, prev_close=None, mode="eod"):
+        if ticker == gmc.GOLD_SPOT_TICKER:
+            return None  # spot feed 404'd
+        return {"level": 4505.8, "change": 38.9, "pct_change": 0.87}
+    monkeypatch.setattr(gmc, "_fetch_quote", fake_fetch)
+    q = gmc._fetch_gold_quote()
+    assert q["level"] == 4505.8 and q["_source"] == gmc.GOLD_FUTURES_TICKER
+    assert "spot feed" in capsys.readouterr().out.lower()  # warned loudly

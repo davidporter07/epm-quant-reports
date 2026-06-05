@@ -235,8 +235,18 @@ def _fetch_gold_quote(prev_close: float | None = None, mode: str = "eod") -> dic
     """
     spot = _fetch_quote(GOLD_SPOT_TICKER, prev_close=prev_close, mode=mode)
     if spot and spot.get("level"):
+        spot["_source"] = GOLD_SPOT_TICKER
         return spot
-    return _fetch_quote(GOLD_FUTURES_TICKER, prev_close=prev_close, mode=mode)
+    # Spot pull failed (XAUUSD=X 404s intermittently). Fall back to COMEX futures, but say so
+    # loudly: futures carry a ~$30-40 contango basis, so on these days the gold print reads off
+    # spot-quoting desks (Sevens et al.) and that divergence is expected, not a bug.
+    fut = _fetch_quote(GOLD_FUTURES_TICKER, prev_close=prev_close, mode=mode)
+    if fut and fut.get("level"):
+        fut["_source"] = GOLD_FUTURES_TICKER
+        print(f"  [WARN] Gold spot feed ({GOLD_SPOT_TICKER}) unavailable — using COMEX futures "
+              f"({GOLD_FUTURES_TICKER}) at {fut.get('level')}. Futures trade at a contango basis "
+              f"to spot, so today's gold level may read ~$30-40 off spot-quoting desks.")
+    return fut
 
 
 def _event_day_from_dates(event_date: str, today_date: str) -> str:
