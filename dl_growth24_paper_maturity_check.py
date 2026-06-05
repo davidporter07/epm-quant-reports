@@ -41,6 +41,7 @@ from dl_growth24_current_control_gate import (
     DEFAULT_PANEL_DIAGNOSTICS as DEFAULT_CONTROL_GATE_PANEL_DIAGNOSTICS,
     DEFAULT_PLAN_OVERLAY_OUTPUT as DEFAULT_CONTROL_GATE_PLAN_OVERLAY_OUTPUT,
     DEFAULT_SUMMARY as DEFAULT_CONTROL_GATE_SUMMARY,
+    DEFAULT_FORECAST_GAP_MAX,
     DEFAULT_UNIVERSE_SCORE_STD_MAX,
     _json_safe as _control_gate_json_safe,
     _markdown as _control_gate_markdown,
@@ -135,7 +136,7 @@ def _normalize_forecast_log(forecasts: pd.DataFrame) -> pd.DataFrame:
     if forecasts.empty:
         return forecasts.copy()
     rows = forecasts.copy()
-    for column in ["RunDate", "Model", "SourceResults", "Rank", "ShadowRankScore", "Ticker"]:
+    for column in ["RunDate", "Model", "SourceResults", "Rank", "ShadowRankScore", "RawForecastPct", "Ticker"]:
         if column not in rows.columns:
             rows[column] = ""
     rows["AsOfDate"] = pd.to_datetime(rows["AsOfDate"], errors="coerce").dt.date.astype(str)
@@ -144,6 +145,7 @@ def _normalize_forecast_log(forecasts: pd.DataFrame) -> pd.DataFrame:
     rows["SourceResults"] = rows["SourceResults"].astype(str)
     rows["Rank"] = pd.to_numeric(rows["Rank"], errors="coerce")
     rows["ShadowRankScore"] = pd.to_numeric(rows["ShadowRankScore"], errors="coerce")
+    rows["RawForecastPct"] = pd.to_numeric(rows["RawForecastPct"], errors="coerce")
     rows["Ticker"] = rows["Ticker"].astype(str).str.upper().str.strip()
     return rows
 
@@ -202,6 +204,7 @@ def _control_overlay_decision(
     forecasts: pd.DataFrame,
     max_universe_score_std: float,
     expected_universe_count: int,
+    max_forecast_gap: float | None = None,
 ) -> dict[str, Any]:
     plan_longs = _split_tickers(plan.get("LongTickers"))
     top_n = int(_numeric(plan.get("PaperTopN")) or len(plan_longs) or 2)
@@ -211,6 +214,7 @@ def _control_overlay_decision(
             "overlay_status": "paper_overlay_unavailable",
             "universe_count": 0,
             "universe_score_std": None,
+            "long_short_forecast_gap_pct": None,
             "gate_long_tickers": [],
             "gate_failures": ["forecast rows unavailable"],
         }
@@ -219,6 +223,14 @@ def _control_overlay_decision(
     universe_score_std = float(scores.std(ddof=0)) if not scores.empty else None
     ordered = forecasts.sort_values(["Rank", "ShadowRankScore"], ascending=[True, False])
     gate_longs = [str(t).upper().strip() for t in ordered.head(top_n)["Ticker"].tolist()]
+    shorts = ordered.tail(top_n)
+    forecast_values = pd.to_numeric(ordered.get("RawForecastPct"), errors="coerce")
+    long_short_forecast_gap_pct = None
+    if not forecast_values.dropna().empty:
+        long_forecasts = pd.to_numeric(ordered.head(top_n)["RawForecastPct"], errors="coerce")
+        short_forecasts = pd.to_numeric(shorts["RawForecastPct"], errors="coerce")
+        if long_forecasts.notna().any() and short_forecasts.notna().any():
+            long_short_forecast_gap_pct = float(long_forecasts.mean() - short_forecasts.mean())
     failures: list[str] = []
     if len(forecasts) < int(expected_universe_count):
         failures.append(f"universe count {len(forecasts)} < {int(expected_universe_count)}")
@@ -226,6 +238,13 @@ def _control_overlay_decision(
         failures.append("universe score std missing")
     elif universe_score_std > float(max_universe_score_std):
         failures.append(f"universe score std {universe_score_std:.6f} > {float(max_universe_score_std):.6f}")
+    if max_forecast_gap is not None:
+        if long_short_forecast_gap_pct is None:
+            failures.append("long-short forecast gap missing")
+        elif long_short_forecast_gap_pct > float(max_forecast_gap):
+            failures.append(
+                f"long-short forecast gap {long_short_forecast_gap_pct:.6f} > {float(max_forecast_gap):.6f}"
+            )
 
     gate_status = "paper_control_abstain" if failures else "paper_control_allowed"
     overlay_status = "paper_overlay_abstain" if failures else "paper_overlay_allowed"
@@ -234,6 +253,7 @@ def _control_overlay_decision(
         "overlay_status": overlay_status,
         "universe_count": int(len(forecasts)),
         "universe_score_std": universe_score_std,
+        "long_short_forecast_gap_pct": long_short_forecast_gap_pct,
         "gate_long_tickers": gate_longs,
         "gate_failures": failures,
     }
@@ -285,6 +305,7 @@ def _build_control_overlay_outcomes(
     trades: pd.DataFrame,
     max_universe_score_std: float,
     expected_universe_count: int,
+    max_forecast_gap: float | None = DEFAULT_FORECAST_GAP_MAX,
 ) -> pd.DataFrame:
     selected = _selected_plan_rows(plan_log)
     forecast_rows = _normalize_forecast_log(forecasts)
@@ -297,6 +318,7 @@ def _build_control_overlay_outcomes(
             _plan_forecast_rows(forecast_rows, plan),
             max_universe_score_std,
             expected_universe_count,
+            max_forecast_gap,
         )
         base = _base_plan_outcome(_plan_trade_rows(trades, plan))
         overlay_trade_status = _overlay_outcome_status(decision["overlay_status"], base["base_outcome_status"])
@@ -324,6 +346,8 @@ def _build_control_overlay_outcomes(
                 "ExpectedUniverseCount": int(expected_universe_count),
                 "UniverseScoreStd": decision["universe_score_std"],
                 "MaxUniverseScoreStd": float(max_universe_score_std),
+                "LongShortForecastGapPct": decision["long_short_forecast_gap_pct"],
+                "MaxForecastGapPct": float(max_forecast_gap) if max_forecast_gap is not None else None,
                 "GateLongTickers": ",".join(decision["gate_long_tickers"]),
                 "GateFailures": "; ".join(decision["gate_failures"]),
                 "AbstentionClassification": _abstention_classification(
@@ -548,6 +572,7 @@ def _control_gate_status(args: argparse.Namespace) -> dict[str, Any]:
         expected_universe_count=int(args.control_gate_expected_universe_count),
         max_universe_score_std=float(args.control_gate_max_universe_score_std),
         max_score_gap=args.control_gate_max_score_gap,
+        max_forecast_gap=getattr(args, "control_gate_max_forecast_gap", DEFAULT_FORECAST_GAP_MAX),
     )
     try:
         report = build_control_gate(gate_args)
@@ -574,6 +599,7 @@ def _control_gate_status(args: argparse.Namespace) -> dict[str, Any]:
                 "short_n": int(args.control_gate_short_n),
                 "max_universe_score_std": float(args.control_gate_max_universe_score_std),
                 "max_score_gap": args.control_gate_max_score_gap,
+                "max_forecast_gap": getattr(args, "control_gate_max_forecast_gap", DEFAULT_FORECAST_GAP_MAX),
             },
         }
 
@@ -610,6 +636,7 @@ def _write_alert(
                 f"Control gate AsOfDate: {gate_metrics.get('asof_date', '')}",
                 f"Control gate selected longs: {','.join(gate_metrics.get('long_tickers', []))}",
                 f"Control gate universe score std: {gate_metrics.get('universe_score_std', '')}",
+                f"Control gate long-short forecast gap: {gate_metrics.get('long_short_forecast_gap_pct', '')}",
                 f"Control gate failures: {'; '.join(gate_failures) if gate_failures else control_gate.get('error', 'none')}",
                 f"Paper overlay status: {overlay.get('status', '')}",
                 f"Paper overlay action: {overlay.get('action', '')}",

@@ -5,11 +5,12 @@ import pandas as pd
 from dl_growth24_current_control_gate import build_gate, write_plan_overlay
 
 
-def _inputs(tmp_path, max_universe_score_std=0.10):
+def _inputs(tmp_path, max_universe_score_std=0.10, raw_forecasts=None):
     forecast = tmp_path / "forecast.csv"
     summary = tmp_path / "summary.json"
     panel_diagnostics = tmp_path / "panel_diagnostics.json"
     paper_plan = tmp_path / "paper_plan.csv"
+    raw_forecasts = raw_forecasts or [1.0, 0.5, -0.5, -1.0]
 
     pd.DataFrame(
         [
@@ -19,7 +20,7 @@ def _inputs(tmp_path, max_universe_score_std=0.10):
                 "Model": "Growth24RankHeadShadowTop2StressW2",
                 "Rank": 1,
                 "ShadowRankScore": 0.20,
-                "RawForecastPct": 1.0,
+                "RawForecastPct": raw_forecasts[0],
                 "MemberCount": 2,
                 "SourceResults": "results.json",
             },
@@ -29,7 +30,7 @@ def _inputs(tmp_path, max_universe_score_std=0.10):
                 "Model": "Growth24RankHeadShadowTop2StressW2",
                 "Rank": 2,
                 "ShadowRankScore": 0.10,
-                "RawForecastPct": 0.5,
+                "RawForecastPct": raw_forecasts[1],
                 "MemberCount": 2,
                 "SourceResults": "results.json",
             },
@@ -39,7 +40,7 @@ def _inputs(tmp_path, max_universe_score_std=0.10):
                 "Model": "Growth24RankHeadShadowTop2StressW2",
                 "Rank": 3,
                 "ShadowRankScore": -0.10,
-                "RawForecastPct": -0.5,
+                "RawForecastPct": raw_forecasts[2],
                 "MemberCount": 2,
                 "SourceResults": "results.json",
             },
@@ -49,7 +50,7 @@ def _inputs(tmp_path, max_universe_score_std=0.10):
                 "Model": "Growth24RankHeadShadowTop2StressW2",
                 "Rank": 4,
                 "ShadowRankScore": -0.20,
-                "RawForecastPct": -1.0,
+                "RawForecastPct": raw_forecasts[3],
                 "MemberCount": 2,
                 "SourceResults": "results.json",
             },
@@ -81,6 +82,7 @@ def _inputs(tmp_path, max_universe_score_std=0.10):
         expected_universe_count=4,
         max_universe_score_std=max_universe_score_std,
         max_score_gap=None,
+        max_forecast_gap=4.0,
     )
 
 
@@ -113,3 +115,14 @@ def test_allowed_overlay_marks_plan_allowed(tmp_path):
     assert report["status"] == "paper_control_allowed"
     assert report["paper_plan_overlay"]["status"] == "paper_overlay_allowed"
     assert report["paper_plan_overlay"]["plan_long_tickers"] == ["AAA", "BBB"]
+
+
+def test_forecast_gap_abstains_even_when_dispersion_passes(tmp_path):
+    args = _inputs(tmp_path, max_universe_score_std=0.20, raw_forecasts=[5.0, 4.0, -1.0, -2.0])
+
+    report = build_gate(args)
+
+    assert report["status"] == "paper_control_abstain"
+    assert report["paper_plan_overlay"]["status"] == "paper_overlay_abstain"
+    assert report["forecast_metrics"]["long_short_forecast_gap_pct"] == 6.0
+    assert "long-short forecast gap 6.000000 > 4.000000" in report["gate_failures"]

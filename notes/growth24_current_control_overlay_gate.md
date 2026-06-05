@@ -27,7 +27,7 @@
 | Universe count | 24 | 24 |
 | Universe score std | 0.087727 | 0.085000 max |
 | Long-short score gap | 0.314454 | n/a |
-| Long-short forecast gap | -1.974865 | n/a |
+| Long-short forecast gap | -1.974865 | 4.000000 max |
 
 ## Failures
 

@@ -25,6 +25,7 @@ DEFAULT_OUTPUT = DEFAULT_OUT_DIR / "growth24_current_control_overlay_gate.json"
 DEFAULT_PLAN_OVERLAY_OUTPUT = DEFAULT_OUT_DIR / "growth24_current_paper_plan_control_overlay.csv"
 DEFAULT_MARKDOWN_OUTPUT = Path("notes/growth24_current_control_overlay_gate.md")
 DEFAULT_UNIVERSE_SCORE_STD_MAX = 0.085
+DEFAULT_FORECAST_GAP_MAX = 4.0
 
 
 def _load_json(path: Path | None) -> dict[str, Any]:
@@ -173,13 +174,23 @@ def _gate_failures(
             else "universe score std missing"
         )
 
-    if args.max_score_gap is not None:
+    max_score_gap = getattr(args, "max_score_gap", None)
+    if max_score_gap is not None:
         score_gap = _finite_float(metrics.get("long_short_score_gap"))
-        if score_gap is None or score_gap > float(args.max_score_gap):
+        if score_gap is None or score_gap > float(max_score_gap):
             failures.append(
-                f"long-short score gap {score_gap:.6f} > {float(args.max_score_gap):.6f}"
+                f"long-short score gap {score_gap:.6f} > {float(max_score_gap):.6f}"
                 if score_gap is not None
                 else "long-short score gap missing"
+            )
+    max_forecast_gap = getattr(args, "max_forecast_gap", DEFAULT_FORECAST_GAP_MAX)
+    if max_forecast_gap is not None:
+        forecast_gap = _finite_float(metrics.get("long_short_forecast_gap_pct"))
+        if forecast_gap is None or forecast_gap > float(max_forecast_gap):
+            failures.append(
+                f"long-short forecast gap {forecast_gap:.6f} > {float(max_forecast_gap):.6f}"
+                if forecast_gap is not None
+                else "long-short forecast gap missing"
             )
     return failures
 
@@ -253,8 +264,13 @@ def build_gate(args: argparse.Namespace) -> dict[str, Any]:
             "long_n": int(args.long_n),
             "short_n": int(args.short_n),
             "max_universe_score_std": float(args.max_universe_score_std),
-            "max_score_gap": _finite_float(args.max_score_gap) if args.max_score_gap is not None else None,
-            "research_source": "Growth24 36-cycle 8-epoch single-member control overlay robust grid",
+            "max_score_gap": _finite_float(getattr(args, "max_score_gap", None))
+            if getattr(args, "max_score_gap", None) is not None
+            else None,
+            "max_forecast_gap": _finite_float(getattr(args, "max_forecast_gap", DEFAULT_FORECAST_GAP_MAX))
+            if getattr(args, "max_forecast_gap", DEFAULT_FORECAST_GAP_MAX) is not None
+            else None,
+            "research_source": "Growth24 36-cycle 8-epoch post-prediction walk-forward overlay",
         },
         "gate_failures": failures,
         "recommendation": (
@@ -285,6 +301,8 @@ def _overlay_row(report: dict[str, Any]) -> dict[str, Any]:
         "PaperPlanChanged": bool(overlay.get("paper_plan_changed", False)),
         "UniverseScoreStd": metrics.get("universe_score_std"),
         "MaxUniverseScoreStd": report.get("thresholds", {}).get("max_universe_score_std"),
+        "LongShortForecastGapPct": metrics.get("long_short_forecast_gap_pct"),
+        "MaxForecastGapPct": report.get("thresholds", {}).get("max_forecast_gap"),
         "GateLongTickers": ",".join(overlay.get("gate_long_tickers", [])),
         "GateFailures": "; ".join(overlay.get("gate_failures", [])),
         "Warnings": "; ".join(overlay.get("warnings", [])),
@@ -340,7 +358,10 @@ def _markdown(report: dict[str, Any]) -> str:
             f"{_fmt_num(report['thresholds']['max_universe_score_std'])} max |"
         ),
         f"| Long-short score gap | {_fmt_num(metrics['long_short_score_gap'])} | n/a |",
-        f"| Long-short forecast gap | {_fmt_num(metrics['long_short_forecast_gap_pct'])} | n/a |",
+        (
+            f"| Long-short forecast gap | {_fmt_num(metrics['long_short_forecast_gap_pct'])} | "
+            f"{_fmt_num(report['thresholds']['max_forecast_gap'])} max |"
+        ),
         "",
         "## Failures",
         "",
