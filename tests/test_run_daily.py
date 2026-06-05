@@ -44,6 +44,42 @@ def test_stale_site_after_sync_returns_nonzero():
     assert rc == 2
 
 
+# --- branch guard -----------------------------------------------------------
+
+def test_research_branch_is_refused_before_any_work():
+    runner = _recording_runner([0, 0])
+    rc = run_daily.main(
+        [], runner=runner, fresh_checker=lambda: (True, "fresh"),
+        branch_checker=lambda: "growth24/research-salvage")
+    assert rc == 3
+    assert runner.calls == [], "must not generate/email/deploy from a research branch"
+
+
+def test_main_branch_proceeds_normally():
+    runner = _recording_runner([0, 0])
+    rc = run_daily.main(
+        [], runner=runner, fresh_checker=lambda: (True, "fresh"),
+        branch_checker=lambda: "main")
+    assert rc == 0
+    assert any("send_email.py" in " ".join(c) for c in runner.calls)
+
+
+def test_allow_branch_flag_bypasses_guard():
+    runner = _recording_runner([0, 0])
+    rc = run_daily.main(
+        ["--allow-branch"], runner=runner, fresh_checker=lambda: (True, "fresh"),
+        branch_checker=lambda: "some-feature-branch")
+    assert rc == 0
+
+
+def test_undeterminable_branch_does_not_block():
+    runner = _recording_runner([0, 0])
+    rc = run_daily.main(
+        [], runner=runner, fresh_checker=lambda: (True, "fresh"),
+        branch_checker=lambda: "")
+    assert rc == 0
+
+
 # --- check_site_freshness logic --------------------------------------------
 
 def test_market_closed_is_always_fresh():

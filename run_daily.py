@@ -26,11 +26,13 @@ Exit codes:
   0  email sent (or already sent) AND site verified fresh
   1  report generation/email step failed — nothing deployed
   2  site is stale/unreachable after sync — investigate
+  3  wrong branch — refused to run (working tree not on the pipeline branch)
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -42,6 +44,26 @@ PY = sys.executable
 LOGS_DIR = ROOT / "logs"
 STATUS_FILE = LOGS_DIR / "run_daily_status.json"
 MARKER_LOG = LOGS_DIR / "run_daily.log"
+
+# The scheduler ("Send Quant Report" task) runs this from D:\fund_monitor with
+# whatever branch happens to be checked out. Research branches (e.g. growth24/*)
+# carry stale pipeline code, so running from one silently ships a regressed report
+# — this bit us on 2026-06-05 (the market-mover spotlight + gold/Fed fix were on
+# main but the tree was left on growth24/research-salvage, 45 commits behind). The
+# guard below turns that silent regression into a loud, logged refusal.
+PIPELINE_BRANCH = "main"
+
+
+def _current_branch() -> str:
+    """Branch the working tree is on, or '' if it can't be determined (never raises)."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(ROOT), capture_output=True, text=True, timeout=10,
+        )
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:  # pragma: no cover - defensive
+        return ""
 
 
 def _record_status(stage: str, ok: bool, detail: str, *, status_file: Path = STATUS_FILE) -> None:
@@ -108,13 +130,39 @@ def main(
     *,
     runner: Optional[Callable[[list[str]], int]] = None,
     fresh_checker: Optional[Callable[[], Tuple[bool, str]]] = None,
+    branch_checker: Optional[Callable[[], str]] = None,
 ) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--skip-freshness", action="store_true",
                     help="Skip the post-deploy live-site freshness check.")
+    ap.add_argument("--allow-branch", action="store_true",
+                    help=f"Bypass the {PIPELINE_BRANCH!r}-branch guard (intentional "
+                         f"manual run from a feature/research branch).")
     args = ap.parse_args(argv)
 
     runner = runner or _default_runner
+
+    # 0. Branch guard — refuse to ship from a non-pipeline branch (see PIPELINE_BRANCH
+    #    note above). Inert under pytest unless a branch_checker is injected, so the
+    #    existing suite is unaffected while the behaviour stays unit-testable.
+    if not args.allow_branch:
+        checker = branch_checker or (
+            None if "PYTEST_CURRENT_TEST" in os.environ else _current_branch
+        )
+        if checker is not None:
+            branch = checker()
+            if branch and branch != PIPELINE_BRANCH:
+                msg = (f"REFUSING TO RUN: working tree is on branch '{branch}', not "
+                       f"'{PIPELINE_BRANCH}'. The daily pipeline must run from "
+                       f"'{PIPELINE_BRANCH}' so it ships current code, not stale code "
+                       f"from a research branch. Switch back (git checkout "
+                       f"{PIPELINE_BRANCH}) or run research in a separate git worktree. "
+                       f"Nothing was generated or deployed. "
+                       f"(Override: run_daily.py --allow-branch.)")
+                print(f"[run_daily] {msg}")
+                _record_status("branch_guard", False, msg)
+                _send_alert("branch_guard", msg)
+                return 3
 
     # 1. Generate + email. send_email.py owns the freshness GATE that blocks stale
     #    or non-LLM reports, so a non-zero exit here means we must NOT deploy.
