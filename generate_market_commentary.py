@@ -5013,6 +5013,57 @@ def _scrub_unreleased_econ_prints(data: dict) -> int:
     return 0
 
 
+# --- past-session attribution to an UNRELEASED econ print --------------------
+# _scrub_unreleased_econ_prints only drops VALUE claims in economics_commentary. A
+# value-LESS causal attribution slips it, and session_recap/pre_market_bullets are
+# never scanned at all. Regression 2026-06-05 session_recap: "S&P 500 closed higher
+# ... driven by robust May nonfarm payrolls data" and "10-year yield fell 2 bp ... as
+# the strong jobs report lifted yields" — but NFP was THAT day's unreleased scenario
+# event. Pinning a PAST move on a not-yet-released print is always false. Strip the
+# trailing causal clause that carries the upcoming-event reference, keep the factual
+# lead. Sweeps every prose field + recap/bullet list (mirrors the geopolitics scrub).
+_EVENT_ATTR_CONNECTOR_RE = re.compile(
+    r"\s+(?:driven|fueled|fuelled|powered|propelled|buoyed|boosted|lifted|spurred|"
+    r"dragged|pressured|weighed|helped|hurt)\s+(?:higher\s+|lower\s+)?by\b"
+    r"|\s+(?:as|after|on|amid|following|reflecting|thanks\s+to|in\s+response\s+to|"
+    r"in\s+the\s+wake\s+of|on\s+the\s+back\s+of)\b",
+    re.IGNORECASE)
+
+
+def _scrub_unreleased_event_attribution(data: dict) -> int:
+    """Strip clauses that attribute a PAST move to an upcoming/unreleased econ release.
+
+    Keyed on the same upcoming-indicator set as _scrub_unreleased_econ_prints (the
+    scenario event + calendar events dated today-or-later). For each sentence that
+    names an upcoming indicator in a trailing causal clause whose head does NOT, cut at
+    the causal connector. Previews ("await the jobs report", "...at 8:30 AM ET") carry
+    no causal connector and are left intact. Idempotent."""
+    upcoming = _upcoming_econ_keys(data)
+    if not upcoming:
+        return 0
+    up_res = [rx for k, rx in _ECON_INDICATOR_RES.items() if k in upcoming]
+
+    def _names(s: str) -> bool:
+        return any(rx.search(s) for rx in up_res)
+
+    def _clean_sentence(sent: str) -> str:
+        if not _names(sent):
+            return sent
+        for m in _EVENT_ATTR_CONNECTOR_RE.finditer(sent):
+            head, tail = sent[:m.start()], sent[m.start():]
+            if _names(tail) and not _names(head) and len(head.strip()) > 15:
+                h = head.rstrip(" ,;:")
+                if h and h[-1] not in ".!?":
+                    h += "."
+                return h
+        return sent
+
+    def _fix(text: str) -> str:
+        return " ".join(_clean_sentence(s) for s in re.split(r"(?<=[.!?])\s+", text))
+
+    return _map_all_prose(data, _fix)
+
+
 def sanitize_commentary(data: dict, snapshot: dict | None = None, source_text: str = "") -> int:
     """Run the full deterministic corrector/scrubber pass over a commentary dict.
 
@@ -5036,6 +5087,7 @@ def sanitize_commentary(data: dict, snapshot: dict | None = None, source_text: s
     total += _scrub_safe_haven_inversion(data)
     total += _correct_event_day_slip(data)
     total += _scrub_unreleased_econ_prints(data)
+    total += _scrub_unreleased_event_attribution(data)
     if source_text:
         total += _scrub_offnarrative_geopolitics(data, source_text)
         total += _scrub_ungrounded_fed_attribution(data, source_text)

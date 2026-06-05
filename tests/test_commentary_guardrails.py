@@ -837,3 +837,74 @@ def test_harvest_fed_dedupes_repeated_mentions():
     out = gmc._harvest_fed_speakers_from_news(headlines, existing_speakers=[])
     daly = [s for s in out if "Daly" in s["speaker"]]
     assert len(daly) == 1, f"expected one Daly entry, got {daly}"
+
+
+# --- unreleased-event attribution scrub (#1a, regression 2026-06-05) ---------
+# session_recap/pre_market_bullets pinned a PAST move on NFP, which was that day's
+# unreleased scenario event. Value-less causal attribution slipped the value-only
+# econ-print scrub and these list fields were never scanned.
+
+def test_unreleased_nfp_attribution_stripped_from_session_recap():
+    data = {
+        "scenario_event": "Non-Farm Payrolls / Jobs Report",
+        "scenario_event_day": "today",
+        "session_recap": [
+            "S&P 500 closed higher at 7584.31, 0.41% driven by robust May nonfarm payrolls data that reinforced rate expectations.",
+            "10-year yield fell 2 bp to 4.47% as the strong jobs report initially lifted yields before cooling.",
+        ],
+    }
+    gmc._scrub_unreleased_event_attribution(data)
+    assert data["session_recap"][0] == "S&P 500 closed higher at 7584.31, 0.41%."
+    assert data["session_recap"][1] == "10-year yield fell 2 bp to 4.47%."
+
+
+def test_unreleased_attribution_stripped_from_pre_market_bullets():
+    data = {
+        "scenario_event": "Non-Farm Payrolls / Jobs Report",
+        "pre_market_bullets": [
+            "S&P 500 futures firmed on the back of upcoming jobs report optimism.",
+        ],
+    }
+    gmc._scrub_unreleased_event_attribution(data)
+    assert data["pre_market_bullets"][0] == "S&P 500 futures firmed."
+
+
+def test_legitimate_event_preview_is_preserved():
+    # A forward-looking preview names the event but makes no past-causal claim.
+    data = {
+        "scenario_event": "Non-Farm Payrolls / Jobs Report",
+        "pre_market_bullets": [
+            "Key data today: Non-Farm Payrolls at 8:30 AM ET; consensus 85K vs prior 172K.",
+        ],
+        "watch_today": ["Traders await the jobs report at 8:30 AM ET."],
+    }
+    before = (list(data["pre_market_bullets"]), list(data["watch_today"]))
+    gmc._scrub_unreleased_event_attribution(data)
+    assert (data["pre_market_bullets"], data["watch_today"]) == (before[0], before[1])
+
+
+def test_unreleased_attribution_is_idempotent():
+    data = {
+        "scenario_event": "Non-Farm Payrolls / Jobs Report",
+        "session_recap": ["S&P 500 closed higher at 7584.31, 0.41% driven by robust May nonfarm payrolls data."],
+    }
+    gmc._scrub_unreleased_event_attribution(data)
+    once = list(data["session_recap"])
+    gmc._scrub_unreleased_event_attribution(data)
+    assert data["session_recap"] == once
+
+
+def test_no_scenario_event_is_noop():
+    data = {"session_recap": ["S&P 500 rose as the jobs report fueled buying."]}
+    assert gmc._scrub_unreleased_event_attribution(data) == 0
+
+
+def test_non_event_causal_clause_is_left_alone():
+    # "as tech rallied" is not an econ-event attribution — must not be touched.
+    data = {
+        "scenario_event": "Non-Farm Payrolls / Jobs Report",
+        "session_recap": ["The S&P 500 rose 0.4% as technology shares rallied broadly."],
+    }
+    before = list(data["session_recap"])
+    gmc._scrub_unreleased_event_attribution(data)
+    assert data["session_recap"] == before
