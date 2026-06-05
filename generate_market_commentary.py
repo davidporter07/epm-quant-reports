@@ -5053,7 +5053,7 @@ def _scrub_ungrounded_fed_attribution(data: dict, source_text: str) -> int:
 # ("...claims print at 10:00 AM ET to gauge...") carry no value and are kept.
 _ECON_INDICATOR_RES = {
     "jobless_claims":      re.compile(r"\b(?:initial\s+)?jobless\s+claims\b|\bweekly\s+claims\b", re.I),
-    "nonfarm_payrolls":    re.compile(r"\b(?:non[\-\s]?farm\s+payrolls?|nonfarm\s+payrolls?|jobs\s+report|payrolls?\s+report)\b|\bNFP\b", re.I),
+    "nonfarm_payrolls":    re.compile(r"\b(?:non[\-\s]?farm\s+payrolls?|nonfarm\s+payrolls?|jobs\s+report|jobs\s+data|payrolls?\s+report|employment\s+(?:situation|report|data))\b|\bNFP\b", re.I),
     "cpi":                 re.compile(r"\b(?:cpi|consumer\s+price\s+index)\b", re.I),
     "ppi":                 re.compile(r"\b(?:ppi|producer\s+price\s+index)\b", re.I),
     "pce":                 re.compile(r"\b(?:core\s+)?pce\b", re.I),
@@ -5195,34 +5195,98 @@ _KINETIC_NOUN_RES = [
 ]
 
 
-def _scrub_fabricated_kinetic_detail(data: dict, source_text: str) -> int:
-    """Drop kinetic-attack fragments whose specific weapon/target noun is ungrounded.
+# Clause boundaries to cut a fabricated kinetic clause at, preserving the grounded lead.
+_KINETIC_CLAUSE_BOUNDARY_RE = re.compile(
+    r";|,?\s+and\s+|\s+as\s+|\s+while\s+|\s+after\s+|\s+amid\s+|\s+following\s+|\s+with\s+",
+    re.IGNORECASE)
 
-    A fragment is fabricated if it pairs an attack verb (fired/launched/struck/...) with a
-    concrete weapon/target noun (warships/drones/missiles/...) that appears NOWHERE in the
-    source corpus. Splits prose on sentence and ';' boundaries so a fabricated trailing
-    clause is removed without discarding the factual lead. Skipped when source_text is empty."""
+
+def _scrub_fabricated_kinetic_detail(data: dict, source_text: str) -> int:
+    """Drop kinetic-attack claims whose specific weapon/target noun is ungrounded.
+
+    A claim is fabricated when an attack verb (fired/launched/struck/attacked/...) sits within
+    ~60 chars before a concrete weapon/target noun (warships/drones/missiles/...) that appears
+    NOWHERE in the source corpus. We find the ungrounded noun, confirm a nearby preceding verb,
+    then cut at the clause boundary just before that verb — keeping the grounded lead
+    ("WTI fell as Gulf hostilities flared") and dropping the hallucinated clause ("and Iranian
+    attacks on U.S. warships..."). Operating on the raw string (not pre-split sentences) makes
+    it robust to abbreviation periods like "U.S." that fool a naive sentence splitter
+    (regression 2026-06-05: the warships clause survived because "U.S." split the sentence).
+    Skipped when source_text is empty. Returns the number of fields/items changed."""
     src = (source_text or "").lower()
     ungrounded = [rx for rx in _KINETIC_NOUN_RES if not rx.search(src)]
     if not ungrounded:
         return 0
 
-    def _is_fab(frag: str) -> bool:
-        return bool(_KINETIC_VERB_RE.search(frag)) and any(rx.search(frag) for rx in ungrounded)
+    def _clean_once(text: str) -> str:
+        noun_pos = None
+        for rx in ungrounded:
+            m = rx.search(text)
+            if m:
+                noun_pos = m.start() if noun_pos is None else min(noun_pos, m.start())
+        if noun_pos is None:
+            return text
+        # require a kinetic verb in the ~60 chars before the noun (same clause)
+        verbs = list(_KINETIC_VERB_RE.finditer(text, max(0, noun_pos - 60), noun_pos))
+        if not verbs:
+            return text
+        verb_pos = verbs[-1].start()
+        # cut at the last clause boundary at/before the verb; keep the grounded head
+        cut = None
+        for b in _KINETIC_CLAUSE_BOUNDARY_RE.finditer(text):
+            if b.start() <= verb_pos:
+                cut = b.start()
+            else:
+                break
+        if cut is not None and len(text[:cut].strip()) > 15:
+            head = text[:cut].rstrip(" ,;:")
+            if head and head[-1] not in ".!?":
+                head += "."
+            return head
+        return ""  # no usable grounded lead → drop the whole item
 
     def _clean(text: str) -> str:
-        out = []
-        for sent in re.split(r"(?<=[.!?])\s+", text):
-            kept = [p for p in re.split(r"\s*;\s*", sent) if not _is_fab(p)]
-            if not kept:
-                continue
-            frag = "; ".join(kept).rstrip(" ,;:")
-            if frag and frag[-1] not in ".!?":
-                frag += "."
-            out.append(frag)
-        return " ".join(out).strip()
+        for _ in range(4):                       # handle multiple fabricated clauses, bounded
+            nxt = _clean_once(text)
+            if nxt == text or not nxt:
+                text = nxt
+                break
+            text = nxt
+        return text.strip()
 
-    return _map_all_prose(data, _clean)
+    fixes = 0
+    for field in _ALL_PROSE_FIELDS:
+        v = data.get(field)
+        if isinstance(v, str) and v:
+            nv = _clean(v)
+            if nv != v:
+                data[field] = nv
+                fixes += 1
+    for field in _ALL_PROSE_LISTS:
+        lst = data.get(field)
+        if isinstance(lst, list):
+            new, changed = [], False
+            for it in lst:
+                if isinstance(it, str):
+                    ni = _clean(it)
+                    if ni != it:
+                        changed = True
+                    if ni:                       # drop fully-fabricated items
+                        new.append(ni)
+                else:
+                    new.append(it)
+            if changed:
+                data[field] = new
+                fixes += 1
+    aco = data.get("asset_class_outlooks")
+    if isinstance(aco, dict):
+        for av in aco.values():
+            if isinstance(av, dict) and isinstance(av.get("rationale"), str) and av["rationale"]:
+                nv = _clean(av["rationale"])
+                if nv != av["rationale"]:
+                    av["rationale"] = nv
+                    fixes += 1
+    return fixes
 
 
 def sanitize_commentary(data: dict, snapshot: dict | None = None, source_text: str = "") -> int:

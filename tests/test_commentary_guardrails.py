@@ -1092,3 +1092,27 @@ def test_gld_ratio_cache_rejects_implausible_values(monkeypatch, tmp_path):
     assert abs(gmc._load_gld_spot_ratio() - 10.953) < 0.01  # unchanged
     rp.write_text("{not json", encoding="utf-8")          # corrupt → seed
     assert gmc._load_gld_spot_ratio() == gmc.GOLD_GLD_RATIO_SEED
+
+
+def test_kinetic_scrub_robust_to_us_abbreviation():
+    # Regression 2026-06-05: "U.S. warships" split the sentence at "S." in the naive
+    # splitter, separating verb from noun so the clause survived. Must be stripped now,
+    # keeping the grounded lead ("Gulf hostilities flared" — corpus vocabulary).
+    data = {"session_recap": [
+        "WTI Crude fell 3.1% to $93.04 as Gulf hostilities flared and Iranian attacks on "
+        "U.S. warships in the Gulf of Oman boosted safe-haven demand for oil."
+    ]}
+    gmc._scrub_fabricated_kinetic_detail(data, _GEO_CORPUS)
+    out = data["session_recap"][0]
+    assert "warship" not in out.lower()
+    assert out.startswith("WTI Crude fell 3.1% to $93.04 as Gulf hostilities flared")
+
+
+def test_unreleased_attribution_catches_employment_data_phrasing():
+    # "the strong employment data" is the same unreleased-NFP attribution, phrased loosely.
+    data = {
+        "scenario_event": "Non-Farm Payrolls / Jobs Report",
+        "session_recap": ["10-year yield fell 2 bp to 4.47% as the strong employment data lifted yields."],
+    }
+    gmc._scrub_unreleased_event_attribution(data)
+    assert data["session_recap"][0] == "10-year yield fell 2 bp to 4.47%."
