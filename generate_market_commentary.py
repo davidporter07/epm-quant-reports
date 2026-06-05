@@ -2538,6 +2538,37 @@ def _repair_scenario_labels(scenarios: list) -> int:
     return stripped
 
 
+def _strip_unanchored_scenario_thresholds(scenarios: list, consensus) -> int:
+    """Strip numeric outcome ranges from scenario labels when there is no numeric
+    consensus to anchor them.
+
+    Regression 2026-06-05: NFP consensus was 85K but the calendar feed carried no
+    consensus value, so scenario_consensus was null and the LLM invented buckets
+    "Hot (<220K) / In Line (220K-240K) / Cold (>240K)" — bands that bear no relation
+    to the actual 85K print. A threshold we cannot anchor is a fabricated number; drop
+    the parenthetical so the labels read "Hot / In Line / Cold" (the thesis text already
+    carries the directional meaning) rather than asserting a false range. When a numeric
+    consensus IS present the LLM payload + _repair_scenario_labels anchor it, so this is
+    a no-op. Returns the number of labels stripped."""
+    if consensus is not None and re.search(r"\d", str(consensus)):
+        return 0  # have a numeric consensus → labels are anchored, leave them
+    if not scenarios:
+        return 0
+    stripped = 0
+    for sc in scenarios[:3]:
+        if not isinstance(sc, dict):
+            continue
+        lbl = str(sc.get("label", ""))
+        # Only strip a parenthetical that actually carries a number (a bare
+        # qualitative aside like "(dovish)" is fine to keep).
+        if re.search(r"\([^)]*\d[^)]*\)\s*$", lbl):
+            new = re.sub(r"\s*\([^)]*\)\s*$", "", lbl).strip()
+            if new != lbl:
+                sc["label"] = new
+                stripped += 1
+    return stripped
+
+
 # Key-asset terms whose hard numbers (levels/percents) the LLM tends to hallucinate
 # in pre_market_bullets. Any LLM bullet (beyond the deterministic opener) that names
 # one of these AND cites a digit is dropped and replaced with a snapshot-derived line.
@@ -3124,6 +3155,9 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
                 _stripped = _repair_scenario_labels(_scens)
                 if _stripped:
                     print(f"  [VALIDATE] Inverted scenario thresholds — stripped numeric range from {_stripped} label(s).")
+                _unanchored = _strip_unanchored_scenario_thresholds(_scens, _ev_cons)
+                if _unanchored:
+                    print(f"  [VALIDATE] No numeric consensus — stripped ungrounded threshold from {_unanchored} scenario label(s).")
                 # Accept if we have at least 3 scenarios; levels_to_watch is optional
                 if len(_scens) >= 3:
                     part5["scenarios"]       = _scens[:3]
@@ -5137,6 +5171,7 @@ def sanitize_commentary(data: dict, snapshot: dict | None = None, source_text: s
     total += _correct_event_day_slip(data)
     total += _scrub_unreleased_econ_prints(data)
     total += _scrub_unreleased_event_attribution(data)
+    total += _strip_unanchored_scenario_thresholds(data.get("scenarios"), data.get("scenario_consensus"))
     if source_text:
         total += _scrub_offnarrative_geopolitics(data, source_text)
         total += _scrub_fabricated_kinetic_detail(data, source_text)

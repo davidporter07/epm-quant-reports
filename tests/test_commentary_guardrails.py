@@ -951,3 +951,43 @@ def test_kinetic_scrub_is_idempotent():
     once = list(data["pre_market_bullets"])
     gmc._scrub_fabricated_kinetic_detail(data, _GEO_CORPUS)
     assert data["pre_market_bullets"] == once
+
+
+# --- scenario buckets must be anchored to consensus (#2, regression 2026-06-05) --
+# NFP consensus was 85K but the calendar feed had no consensus, so scenario_consensus
+# was null and the LLM invented "Hot (<220K) / In Line (220K-240K) / Cold (>240K)".
+
+def test_unanchored_scenario_thresholds_are_stripped():
+    scenarios = [
+        {"label": "Hot (<220K)", "thesis": "weak print fuels dovish bets"},
+        {"label": "In Line (220K-240K)", "thesis": "matches consensus"},
+        {"label": "Cold (>240K)", "thesis": "hot print revives rate fears"},
+    ]
+    n = gmc._strip_unanchored_scenario_thresholds(scenarios, None)
+    assert n == 3
+    assert [s["label"] for s in scenarios] == ["Hot", "In Line", "Cold"]
+
+
+def test_anchored_scenario_thresholds_are_kept():
+    scenarios = [
+        {"label": "Hot (<70K)"}, {"label": "In Line (70K-100K)"}, {"label": "Cold (>100K)"},
+    ]
+    before = [s["label"] for s in scenarios]
+    n = gmc._strip_unanchored_scenario_thresholds(scenarios, "85K")
+    assert n == 0
+    assert [s["label"] for s in scenarios] == before
+
+
+def test_qualitative_parenthetical_without_number_is_kept():
+    scenarios = [{"label": "Hot (dovish)"}, {"label": "In Line"}, {"label": "Cold (hawkish)"}]
+    before = [s["label"] for s in scenarios]
+    assert gmc._strip_unanchored_scenario_thresholds(scenarios, None) == 0
+    assert [s["label"] for s in scenarios] == before
+
+
+def test_unanchored_scenario_strip_is_idempotent():
+    scenarios = [{"label": "Hot (<220K)"}, {"label": "In Line (220K-240K)"}, {"label": "Cold (>240K)"}]
+    gmc._strip_unanchored_scenario_thresholds(scenarios, None)
+    once = [s["label"] for s in scenarios]
+    gmc._strip_unanchored_scenario_thresholds(scenarios, None)
+    assert [s["label"] for s in scenarios] == once
