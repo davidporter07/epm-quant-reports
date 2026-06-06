@@ -646,11 +646,22 @@ def _distill_prompt(
     )
 
 
+_REC_BY_STANCE = {"bearish": "UNDERWEIGHT", "base": "NEUTRAL", "bullish": "OVERWEIGHT"}
+
+
 def _chief_analyst_prompt(
     ticker: str,
     key_facts: Dict[str, Any],
     distilled: Dict[str, Any],
 ) -> str:
+    # The Round-3 vote (Python-computed in run_council) fixes the headline call so
+    # the memo can never recommend a direction the council did not reach.
+    _cs = str((distilled or {}).get("consensus_stance") or "").strip().lower()
+    _vd = (distilled or {}).get("vote_distribution") or {}
+    _n_bear = int(_vd.get("bearish", 0) or 0)
+    _n_base = int(_vd.get("base", 0) or 0)
+    _n_bull = int(_vd.get("bullish", 0) or 0)
+    required_rec = _REC_BY_STANCE.get(_cs, "NEUTRAL")
     return (
         "IMPORTANT: Your entire response must be written in English only.\n\n"
         f"You are a senior research analyst at a top-tier institutional equity research firm. "
@@ -674,12 +685,16 @@ def _chief_analyst_prompt(
         "Write exactly these seven sections in order. Start immediately with ## Investment Thesis. "
         "No preamble. No sign-off.\n\n"
         "## Investment Thesis\n"
-        f"One paragraph (4-6 sentences). State your directional view on {ticker} — OVERWEIGHT, "
-        "UNDERWEIGHT, or NEUTRAL — with conviction level (high / moderate / cautious) and time horizon "
-        "(3–6 months / 6–12 months / 12+ months). Name the single most important reason. "
-        "If the council's consensus_stance and your own view align, say so directly. "
-        "If you diverge from a strong consensus (5+ votes), name the specific insight the majority "
-        "missed that justifies the contrarian call — or align with the consensus.\n\n"
+        f"The council's Round-3 vote was {_n_bear} bearish / {_n_base} base / {_n_bull} bullish "
+        f"(computed consensus: {_cs or 'mixed'}). Your headline call is FIXED by this vote — "
+        "bearish→UNDERWEIGHT, base→NEUTRAL, bullish→OVERWEIGHT — so for this council the required "
+        f"call is {required_rec}. "
+        f"Write one paragraph (4-6 sentences) stating {ticker} as {required_rec} with a conviction "
+        "level (high / moderate / cautious) and a time horizon (3–6 months / 6–12 months / 12+ months), "
+        "and name the single most important reason. "
+        "You MUST NOT recommend a direction that contradicts the vote above, and you must NEVER claim "
+        "your view 'aligns with the consensus' unless your recommendation actually matches it. The Bull "
+        "and Bear sections may explore both sides, but the headline call stays fixed by the vote.\n\n"
         "## Where This Stands Today\n"
         f"One to two paragraphs. Set the scene: where {ticker} is trading now, what the valuation "
         "picture looks like relative to its own history and peers, and what has happened recently "
@@ -720,6 +735,22 @@ def _chief_analyst_prompt(
         "specifics not present in KEY_FACTS or RESEARCH TEAM FINDINGS. "
         "Start with ## Investment Thesis.\n"
     )
+
+
+# Grounding citations like "(current_price)" are required during generation (so the
+# model only states numbers it can source) but read as debug noise in the delivered
+# memo. Strip the snake_case field tokens for display, and decode any leaked unicode
+# escapes (e.g. a literal "—" instead of an em dash).
+_FIELD_TOKEN_RE = re.compile(r"\s*\(([a-z0-9]+(?:_[a-z0-9]+)+)\)")
+_UNICODE_ESCAPE_RE = re.compile(r"\\u([0-9a-fA-F]{4})")
+
+
+def _clean_memo(text: str) -> str:
+    if not text:
+        return text
+    text = _UNICODE_ESCAPE_RE.sub(lambda m: chr(int(m.group(1), 16)), text)
+    text = _FIELD_TOKEN_RE.sub("", text)
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -845,6 +876,8 @@ def run_council(
             f"## {t['title']}\n\n{t['take']}" for t in takes_r3
         )
         logger.warning("Chief analyst pass empty for %s; falling back to R3 takes", ticker)
+
+    enhanced = _clean_memo(enhanced)
 
     _cb(100, "complete")
 
