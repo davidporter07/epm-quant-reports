@@ -33,12 +33,12 @@
   <script>try{if(!sessionStorage.getItem("epm_splash_shown")&&location.pathname.indexOf("login")<0&&location.pathname.indexOf("reset")<0){var _sh=document.createElement("div");_sh.id="fvsShield";_sh.style.cssText="position:fixed;inset:0;z-index:9998;background:#040d1a";document.documentElement.appendChild(_sh);}}catch(e){}</script>
   <title>Fund Search | EPM Market Intelligence</title>
   <link rel="stylesheet" href="/static/css/styles.css?v=20260429c" />
-  <link rel="stylesheet" href="/static/css/design-v2.css?v=20260603b" />
+  <link rel="stylesheet" href="/static/css/design-v2.css?v=20260605a" />
   <link rel="stylesheet" href="/static/css/design-system.css?v=20260429b" />
   <script src="/static/js/plotly-2.35.2.min.js"></script>
   <script src="/static/js/chrome.js?v=20260423a"></script>
   <script defer src="/static/js/site.js?v=20260603a"></script>
-  <script defer src="/static/js/search.js?v=20260603a"></script>
+  <script defer src="/static/js/search.js?v=20260605a"></script>
   <script defer src="/static/js/deep_analysis.js?v=20260429a"></script>
   <link rel="icon" type="image/png" href="/static/epm_logo_sq.png">
   <link rel="apple-touch-icon" href="/static/epm_logo_sq.png">
@@ -372,10 +372,6 @@
             <div class="info-label">Description</div>
             <div id="infoDescription" class="info-paragraph">Loading description...</div>
           </div>
-          <div id="aboutResearchSection" class="info-block" style="display:none;">
-            <div class="info-label" id="aboutResearchLabel">About</div>
-            <div id="aboutResearchBody" class="about-research"></div>
-          </div>
           <div id="topNewsSection" class="info-block">
             <div class="info-label">Most Relevant News</div>
             <div id="topNewsCard" class="top-news-stack"></div>
@@ -562,7 +558,12 @@
         <div class="compact-modal-kicker">Company Overview</div>
         <h3 id="descriptionModalTitle" class="compact-modal-title">Full Description</h3>
       </div>
-      <div id="descriptionModalCopy" class="description-modal-copy"></div>
+      <div class="desc-modal-tabs" role="tablist">
+        <button type="button" class="desc-modal-tab is-active" data-desc-tab="description" role="tab" aria-selected="true">Description</button>
+        <button type="button" id="descModalMoreTab" class="desc-modal-tab" data-desc-tab="research" role="tab" aria-selected="false" hidden>More info</button>
+      </div>
+      <div id="descriptionModalCopy" class="description-modal-copy desc-modal-pane is-active" data-desc-pane="description"></div>
+      <div id="descriptionModalResearch" class="about-research desc-modal-pane" data-desc-pane="research" hidden></div>
     </div>
   </div>
 
