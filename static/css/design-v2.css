@@ -784,6 +784,37 @@ body[data-theme="light"] .trend-table tr:hover td {
 .about-research .about-prov a { color: inherit; text-decoration: underline; }
 .about-research .about-prov a:hover { color: var(--accent, #d4a84b); }
 
+/* Description modal tabs (Description / More info) */
+.desc-modal-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin: 6px 0 14px;
+}
+.desc-modal-tab {
+  appearance: none;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  padding: 8px 12px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.desc-modal-tab:hover { color: var(--text, #e8eefb); }
+.desc-modal-tab.is-active {
+  color: var(--text, #e8eefb);
+  border-bottom-color: var(--accent, #d4a84b);
+}
+.desc-modal-tab[hidden] { display: none; }
+.desc-modal-pane[hidden] { display: none; }
+.desc-modal-pane.about-research { max-height: 60vh; overflow-y: auto; }
+
 /* ──────────────────────────────────────────────────────────
    15. SEARCH INPUT (page-level, search.html)
    ────────────────────────────────────────────────────────── */

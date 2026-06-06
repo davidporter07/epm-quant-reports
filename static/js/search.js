@@ -29,6 +29,7 @@ const descriptionModal = document.getElementById("descriptionModal");
 const closeDescriptionModalBtn = document.getElementById("closeDescriptionModalBtn");
 const descriptionModalCopy = document.getElementById("descriptionModalCopy");
 const descriptionModalTitle = document.getElementById("descriptionModalTitle");
+const descriptionModalResearch = document.getElementById("descriptionModalResearch");
 
 const requiredSearchEls = [
   statusEl,
@@ -1264,13 +1265,21 @@ function _researchRow(label, text, entry) {
 
 // Display-only enrichment panel. Reads the research cache populated by deep
 // analysis; renders nothing (and stays hidden) when there's nothing to show.
+// Holds the rendered "More info" research HTML for the active ticker. The
+// content lives inside the description modal as a second tab; an empty string
+// means there is no research to show and the "More info" tab stays hidden.
+let currentResearchHtml = "";
+
+function syncDescModalMoreTab() {
+  const moreTab = document.getElementById("descModalMoreTab");
+  if (moreTab) moreTab.hidden = !currentResearchHtml;
+}
+
 async function renderAboutResearch(ticker) {
-  const section = document.getElementById("aboutResearchSection");
-  const body = document.getElementById("aboutResearchBody");
-  const label = document.getElementById("aboutResearchLabel");
-  if (!section || !body) return;
-  section.style.display = "none";
-  body.innerHTML = "";
+  currentResearchHtml = "";
+  if (descriptionModalResearch) descriptionModalResearch.innerHTML = "";
+  syncDescModalMoreTab();
+
   let data;
   try {
     data = await fetchJson(`/api/research/${encodeURIComponent(ticker)}`);
@@ -1284,7 +1293,6 @@ async function renderAboutResearch(ticker) {
   let html = "";
 
   if (isFund) {
-    label.textContent = "About this fund";
     const meta = [];
     if (p.category) meta.push(_escHtml(p.category));
     if (p.expense_ratio_pct != null) meta.push(`${Number(p.expense_ratio_pct).toFixed(2)}% expense`);
@@ -1305,16 +1313,16 @@ async function renderAboutResearch(ticker) {
       html += `<div class="about-item"><span class="about-key">Top holdings:</span> ${top}${conc}</div>`;
     }
   } else {
-    label.textContent = "About this company";
     html += _researchRow("Management changes", r.management_changes && r.management_changes.summary, r.management_changes);
     html += _researchRow("Legal / regulatory", r.legal_regulatory && r.legal_regulatory.summary, r.legal_regulatory);
     html += _researchRow("Analyst actions", r.analyst_actions && r.analyst_actions.summary, r.analyst_actions);
     html += _researchRow("M&A activity", r.mna && r.mna.summary, r.mna);
   }
 
-  if (!html.trim()) return;   // nothing relevant -> stay hidden
-  body.innerHTML = html;
-  section.style.display = "";
+  if (!html.trim()) return;   // nothing relevant -> no "More info" tab
+  currentResearchHtml = html;
+  if (descriptionModalResearch) descriptionModalResearch.innerHTML = html;
+  syncDescModalMoreTab();
 }
 
 function syncStickyHeaderOffset() {
@@ -1354,9 +1362,26 @@ function watchTopbarForStickyOffset() {
   topbarResizeObserver.observe(topbar);
 }
 
+function setDescModalTab(which) {
+  if (!descriptionModal) return;
+  descriptionModal.querySelectorAll(".desc-modal-tab").forEach((tab) => {
+    const on = tab.dataset.descTab === which;
+    tab.classList.toggle("is-active", on);
+    tab.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  descriptionModal.querySelectorAll(".desc-modal-pane").forEach((pane) => {
+    pane.hidden = pane.dataset.descPane !== which;
+  });
+}
+
 function openDescriptionModal() {
-  if (!descriptionModal || !descriptionModalCopy || !currentFullDescription) return;
-  descriptionModalCopy.innerHTML = `<p>${escapeHtml(currentFullDescription)}</p>`;
+  if (!descriptionModal || !descriptionModalCopy) return;
+  descriptionModalCopy.innerHTML = currentFullDescription
+    ? `<p>${escapeHtml(currentFullDescription)}</p>`
+    : `<p>No description available yet.</p>`;
+  if (descriptionModalResearch) descriptionModalResearch.innerHTML = currentResearchHtml || "";
+  syncDescModalMoreTab();
+  setDescModalTab("description");   // always open on the Description tab
   descriptionModal.classList.add("active");
 }
 
@@ -1541,6 +1566,10 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   closeDescriptionModalBtn?.addEventListener("click", closeDescriptionModal);
+
+  descriptionModal?.querySelectorAll(".desc-modal-tab").forEach((tab) => {
+    tab.addEventListener("click", () => setDescModalTab(tab.dataset.descTab));
+  });
 
   descriptionModal?.addEventListener("click", (e) => {
     if (e.target === descriptionModal) closeDescriptionModal();
