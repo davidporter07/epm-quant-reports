@@ -1771,6 +1771,36 @@ def get_ticker_tape(offset: int = Query(0, ge=0, le=500), limit: int = Query(100
     }
 
 
+_PROVIDER_DESC_CACHE: dict[str, str] = {}
+
+
+def _provider_description(symbol: str) -> str:
+    """Real company/fund description from the data provider (long business summary).
+
+    The snapshot builder doesn't always include it for every ticker, so this fetches
+    it directly from provider.get_profile — the same source the deep-analysis council
+    uses — so a description is available on search without running a full analysis.
+    Successful results are cached for the process; misses are not cached so they retry.
+    """
+    sym = str(symbol or "").upper().strip()
+    if not sym:
+        return ""
+    if sym in _PROVIDER_DESC_CACHE:
+        return _PROVIDER_DESC_CACHE[sym]
+    provider = getattr(engine, "provider", None)
+    if provider is None or not hasattr(provider, "get_profile"):
+        return ""
+    try:
+        prof = provider.get_profile(sym) or {}
+    except Exception:
+        return ""
+    desc = str(prof.get("long_description") or prof.get("description") or prof.get("short_description") or "").strip()
+    if not desc or desc.lower() in {"n/a", "none", "null"}:
+        return ""
+    _PROVIDER_DESC_CACHE[sym] = desc
+    return desc
+
+
 def _fallback_snapshot_description(snapshot: dict, ticker: str, name: str) -> str:
     asset_type = str(snapshot.get("asset_type") or "").strip().lower()
     fundamentals = snapshot.get("fundamentals") or {}
@@ -1825,7 +1855,8 @@ def _postprocess_snapshot_metadata(snapshot: dict, ticker: str) -> dict:
 
     desc = str(snap.get('description') or snap.get('short_description') or snap.get('long_description') or '').strip()
     if not desc or desc.lower() in {'n/a', 'none', 'null', 'no description available yet.'}:
-        desc = _fallback_snapshot_description(snap, symbol, name or symbol)
+        # Try the provider's real long business summary before the generic placeholder.
+        desc = _provider_description(symbol) or _fallback_snapshot_description(snap, symbol, name or symbol)
         snap['description'] = desc
         snap.setdefault('short_description', desc)
     return snap
