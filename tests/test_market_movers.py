@@ -190,3 +190,33 @@ def test_sector_candidate_floors_empty_funds_with_sector_etf():
         category="sector_catalyst", candidate_funds=[], matching=[1], corpus=corpus, payload={},
     )
     assert sec["candidate_funds"] == ["XLK"]
+
+
+# --- #3 refinement: news gate on blockbuster movers (regression 2026-06-05 dry run) --
+def test_newsless_blockbuster_mover_defers_to_theme():
+    # PL -26% with ZERO corpus mentions must NOT take the slot (ungroundable deep-dive);
+    # the news theme wins instead.
+    corpus = _corpus(*(["Technology sector sell-off deepens"] * 12 + ["misc"] * 18))
+    theme = mm.theme_candidate(
+        topic="Technology Sector Sell-Off", topic_keywords=["technology"], why_now="w",
+        category="sector_catalyst", candidate_funds=["XLK"], matching=[1] * 12,
+        corpus=corpus, payload={},
+    )
+    pl = mm._mover_candidate("PL", "Planet Labs", -0.26, "session", "Industrials", "", corpus, {})
+    assert pl["headline_share"] == 0.0                       # no corroboration
+    win = mm.select_spotlight_candidate([theme, pl])
+    assert win["kind"] != "mover"                            # theme/sector took the slot
+
+
+def test_newsworthy_blockbuster_still_wins():
+    # Same magnitude, but now the name IS in the wire → override still fires.
+    corpus = _corpus(*(["Planet Labs PL craters on guidance"] * 2
+                       + ["Technology sector sell-off"] * 12 + ["misc"] * 16))
+    theme = mm.theme_candidate(
+        topic="Technology Sector Sell-Off", topic_keywords=["technology"], why_now="w",
+        category="sector_catalyst", candidate_funds=["XLK"], matching=[1] * 12,
+        corpus=corpus, payload={},
+    )
+    pl = mm._mover_candidate("PL", "Planet Labs", -0.26, "session", "Industrials", "", corpus, {})
+    assert pl["headline_share"] > 0.0
+    assert mm.select_spotlight_candidate([theme, pl])["mover_ticker"] == "PL"

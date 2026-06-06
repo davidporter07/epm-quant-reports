@@ -285,6 +285,15 @@ def select_spotlight_candidate(candidates: list[dict]) -> Optional[dict]:
     name. Among multiple blockbusters, the largest move wins. Absent a blockbuster, fall
     back to the unified prevalence score with its floor."""
     cands = [c for c in (candidates or []) if c]
+    # News gate: a single-name MOVER must appear in >=1 source headline to take the slot.
+    # A big move with zero corroboration (e.g. PL -26% / share 0.00, 2026-06-05 dry run)
+    # gives the deep-dive nothing to ground on — it drifts to a generic theme + off-target
+    # funds. Drop such movers from eligibility so the news theme/sector takes the slot
+    # instead. Themes/sectors are inherently news/data-derived and are never gated. This
+    # applies to BOTH the blockbuster override and the prevalence path (a newsless mover's
+    # raw magnitude would otherwise clear the floor on its own).
+    cands = [c for c in cands
+             if c.get("kind") != "mover" or (c.get("headline_share", 0.0) or 0.0) > 0.0]
     if not cands:
         return None
     blockbusters = [c for c in cands
