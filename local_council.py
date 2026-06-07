@@ -44,6 +44,9 @@ class Persona:
     section_header: str
     system_prompt: str
     focus_fields: List[str] = field(default_factory=list)
+    # "neutral" forms its own view from evidence; "bull"/"bear" open by arguing
+    # their side but vote honestly and may concede in later rounds.
+    kind: str = "neutral"
 
 
 PERSONAS: List[Persona] = [
@@ -68,16 +71,18 @@ PERSONAS: List[Persona] = [
         ],
     ),
     Persona(
-        name="growth_investor",
-        title="Growth Investor",
+        name="growth_analyst",
+        title="Growth Analyst",
         section_header="GROWTH INVESTOR PERSPECTIVE",
         system_prompt=(
-            "You are a growth investor. You weigh revenue growth, earnings "
-            "growth, forward P/E, PEG, margins, ROE, and whether compounding "
-            "justifies the multiple. You value durable growth over cheapness. "
-            "If a recent earnings release is present (eps_release_surprise_pct), "
-            "weight it heavily — it supersedes historical averages. "
-            "Every claim must cite a specific number from KEY_FACTS or the seed."
+            "You are a growth analyst. You weigh revenue growth, earnings growth, "
+            "forward P/E, PEG, margins, and ROE to judge whether the growth rate "
+            "justifies the valuation. Reach your own conclusion objectively — say so "
+            "if the growth supports the multiple AND if it does not; you have no "
+            "predisposition toward optimism or skepticism. If a recent earnings release "
+            "is present (eps_release_surprise_pct), weight it heavily — it supersedes "
+            "historical averages. Every claim must cite a specific number from KEY_FACTS "
+            "or the seed."
         ),
         focus_fields=[
             "revenue_growth_pct", "earnings_growth_pct", "forward_pe",
@@ -88,14 +93,17 @@ PERSONAS: List[Persona] = [
         ],
     ),
     Persona(
-        name="value_investor",
-        title="Value Investor",
+        name="valuation_analyst",
+        title="Valuation Analyst",
         section_header="VALUE INVESTOR PERSPECTIVE",
         system_prompt=(
-            "You are a value investor. You care about trailing P/E, EV/EBITDA, "
-            "price-to-book, debt-to-equity, dividend yield, and margin of "
-            "safety. You are skeptical of story stocks and elevated multiples. "
-            "Every claim must cite a specific number from KEY_FACTS or the seed."
+            "You are a valuation analyst. You weigh trailing P/E, EV/EBITDA, "
+            "price-to-book, debt-to-equity, dividend yield, and margin of safety to "
+            "judge whether the current price is justified by the underlying business. "
+            "Assess this objectively in BOTH directions — flag overvaluation and "
+            "undervaluation alike, and do not assume an elevated multiple is unwarranted "
+            "if the fundamentals support it. Every claim must cite a specific number "
+            "from KEY_FACTS or the seed."
         ),
         focus_fields=[
             "trailing_pe", "forward_pe", "peg_ratio", "ev_to_ebitda",
@@ -117,29 +125,54 @@ PERSONAS: List[Persona] = [
         focus_fields=["vix", "vix_regime", "spy_5d_pct", "spy_20d_pct"],
     ),
     Persona(
-        name="supply_chain_risk",
-        title="Supply Chain Risk Analyst",
+        name="operations_analyst",
+        title="Operations & Supply Chain Analyst",
         section_header="SUPPLY CHAIN",
         system_prompt=(
-            "You are a supply chain and geopolitical risk analyst. You track "
-            "manufacturing concentration, tariff exposure, component sourcing, "
-            "shipping lane disruption, and sanction risk. Your perspective is "
-            "structural, not quantitative. Name specific countries, corridors, "
-            "or suppliers when relevant. If legal_regulatory_note or mna_note are "
-            "present in KEY_FACTS, factor those structural events into your view."
+            "You are an operations and supply chain analyst. You assess the company's "
+            "manufacturing footprint, component sourcing, logistics, and geopolitical "
+            "exposure — weighing BOTH operational resilience and competitive advantages "
+            "AND risks or vulnerabilities, not only the downside. Your perspective is "
+            "structural, not quantitative. Name specific countries, corridors, or "
+            "suppliers when relevant. If legal_regulatory_note or mna_note are present "
+            "in KEY_FACTS, factor those structural events into your view in whichever "
+            "direction the evidence points."
         ),
         focus_fields=["legal_regulatory_note", "mna_note"],
     ),
     Persona(
-        name="bearish_analyst",
-        title="Bearish Analyst",
-        section_header="BEARISH ANALYST PERSPECTIVE",
+        name="bull_analyst",
+        title="Bull Analyst",
+        section_header="BULLISH ANALYST PERSPECTIVE",
+        kind="bull",
         system_prompt=(
-            "You are the bearish analyst. Argue the downside case forcefully "
-            "— reasons the stock FALLS, not rises. Challenge consensus. Cite "
-            "the most pessimistic EPM model and the Kronos bearish target if "
-            "available. Name specific price levels where support fails. Do NOT "
-            "hedge."
+            "You are the bull analyst. In Round 1, build the strongest evidence-based "
+            "case for why the stock RISES — cite the most optimistic EPM model, the "
+            "Kronos bullish target, upside catalysts, and the price levels where it "
+            "breaks out. Make the upside impossible to ignore. You are an honest analyst, "
+            "not a permabull: if later rounds show the downside decisively outweighs the "
+            "upside, you may concede. Cite specific numbers from KEY_FACTS; never invent."
+        ),
+        focus_fields=[
+            "epm_most_optimistic_model", "epm_most_optimistic_pct",
+            "kronos_bullish_target", "kronos_bullish_implied_pct",
+            "analyst_target_upside_pct", "eps_release_surprise_pct",
+            "revenue_growth_pct", "earnings_growth_pct", "pct_from_52w_low",
+            "mgmt_change_note", "analyst_action_note", "mna_note",
+        ],
+    ),
+    Persona(
+        name="bear_analyst",
+        title="Bear Analyst",
+        section_header="BEARISH ANALYST PERSPECTIVE",
+        kind="bear",
+        system_prompt=(
+            "You are the bear analyst. In Round 1, build the strongest evidence-based "
+            "case for why the stock FALLS — cite the most pessimistic EPM model, the "
+            "Kronos bearish target, downside catalysts, and the price levels where support "
+            "fails. Make the downside impossible to ignore. You are an honest analyst, not "
+            "a permabear: if later rounds show the upside decisively outweighs the downside, "
+            "you may concede. Cite specific numbers from KEY_FACTS; never invent."
         ),
         focus_fields=[
             "atr_percentile", "volatility_regime", "rsi_14",
@@ -291,7 +324,7 @@ STANCE: neutral (updated from bullish in Round 1)
 CLAIM: The correct debate is not hardware versus Services. It is whether hardware can keep feeding Services at the pace bulls assume.
 EVIDENCE: Services monetisation depends on installed base engagement. Hardware demand determines how many users enter and refresh the ecosystem. Valuation determines how much growth is already priced in.
 MECHANISM: If hardware stagnates, Services can delay the earnings problem but not eliminate it. A declining active device count eventually caps Services attach rates regardless of per-user monetisation gains.
-DISAGREEMENT: I disagree with the Growth Investor's argument that Services growth makes valuation risk secondary. Services are not independent from hardware. A simple "Services are big, buy the dip" argument ignores that Services revenue per user must rise fast enough to fully offset slower device volume — and the data does not yet confirm that rate.
+DISAGREEMENT: I disagree with the Growth Analyst's argument that Services growth makes valuation risk secondary. Services are not independent from hardware. A simple "Services are big, buy the dip" argument ignores that Services revenue per user must rise fast enough to fully offset slower device volume — and the data does not yet confirm that rate.
 WHAT WOULD CHANGE MY MIND: Evidence that Services revenue per user is rising fast enough to offset a slower device cycle, or proof that active device count is still expanding despite weaker gross shipments.
 ── END EXEMPLAR ──\
 """
@@ -437,7 +470,15 @@ def _debate_prompt(
 
     # Domain constraint — prevents non-TA agents from echo-chambering RSI/ATR
     is_ta = persona.name == "technical_analyst"
-    if is_ta:
+    if persona.kind in ("bull", "bear"):
+        side = "bullish" if persona.kind == "bull" else "bearish"
+        domain_constraint = (
+            f"DOMAIN CONSTRAINT: As the {persona.title}, marshal the strongest {side} "
+            f"evidence from anywhere in KEY_FACTS — you are not confined to one domain. "
+            f"You may acknowledge where the opposing case has genuine merit; honest "
+            f"assessment strengthens your credibility, it does not weaken it."
+        )
+    elif is_ta:
         domain_constraint = (
             f"DOMAIN CONSTRAINT: As {persona.title}, your EVIDENCE must cite price-action, "
             f"momentum, or volatility data. Do not stray into fundamental valuation territory."
@@ -529,7 +570,20 @@ def _final_position_prompt(
     # A persona must hold its domain-grounded view unless a counter-argument cited
     # new evidence from *its own* focus fields. Majority consensus is not a valid shift trigger.
     is_ta = persona.name == "technical_analyst"
-    if is_ta:
+    if persona.kind in ("bull", "bear"):
+        side = "bull" if persona.kind == "bull" else "bear"
+        domain_anchor = (
+            f"FINAL-STANCE RULE: As the {persona.title}, you opened by arguing the {side} "
+            f"case so it was fully heard. Now vote honestly — state the stance the TOTAL "
+            f"weight of evidence supports after three rounds. You MAY concede to the other "
+            f"side if its case proved decisively stronger; conceding when the evidence demands "
+            f"it is rigor, not weakness. Do not cling to your opening advocacy against the "
+            f"evidence.\n"
+            f"SHIFTING RULE: Write 'POSITION SHIFTED: yes' if you moved from your Round 1-2 "
+            f"stance, and in your WHY name the specific evidence that moved you. Majority "
+            f"head-count alone is NOT a reason to shift — only evidence is."
+        )
+    elif is_ta:
         domain_anchor = (
             f"DOMAIN ANCHOR: As {persona.title}, your final stance must rest on price action, "
             f"momentum, and volatility signals. Do not be swayed by fundamental or macro "
@@ -620,6 +674,7 @@ def _distill_prompt(
     r1 = _fmt(takes_by_round.get(1, []))
     r2 = _fmt(takes_by_round.get(2, []))
     r3 = _fmt(takes_by_round.get(3, []))
+    n_analysts = len(takes_by_round.get(3) or takes_by_round.get(1) or [])
 
     return (
         "IMPORTANT: Respond ONLY with valid JSON. No preamble, no markdown fences, no commentary.\n\n"
@@ -631,10 +686,10 @@ def _distill_prompt(
         '{\n'
         '  "consensus_stance": "bearish" | "base" | "bullish",\n'
         '  "vote_distribution": {"bearish": N, "base": N, "bullish": N},\n'
-        '  "_vote_instructions": "Count one vote per analyst from their FINAL STANCE in Round 3 only. bear=bearish, bull=bullish, base=base. Sum must equal the number of analysts (7). Do not use Round 1 or Round 2 stances.",\n'
+        f'  "_vote_instructions": "Count one vote per analyst from their FINAL STANCE in Round 3 only. bear=bearish, bull=bullish, base=base. Sum must equal the number of analysts ({n_analysts}). Do not use Round 1 or Round 2 stances.",\n'
         '  "crux_disagreement": "one sentence — the specific claim the council never resolved",\n'
-        '  "strongest_bull": {"analyst": "EXACT role title from the deliberation (e.g. \'Earnings Catalyst Analyst\', \'Growth Investor\')", "claim": "exact claim", "evidence": "cited data fields and values"},\n'
-        '  "strongest_bear": {"analyst": "EXACT role title from the deliberation (e.g. \'Technical Analyst\', \'Value Investor\')", "claim": "exact claim", "evidence": "cited data fields and values"},\n'
+        '  "strongest_bull": {"analyst": "EXACT role title from the deliberation (e.g. \'Bull Analyst\', \'Growth Analyst\')", "claim": "exact claim", "evidence": "cited data fields and values"},\n'
+        '  "strongest_bear": {"analyst": "EXACT role title from the deliberation (e.g. \'Bear Analyst\', \'Valuation Analyst\')", "claim": "exact claim", "evidence": "cited data fields and values"},\n'
         '  "position_shifts": [{"analyst": "EXACT role title", "from_stance": "...", "to_stance": "...", "reason": "..."}],\n'
         '  "open_question": "one sentence — the specific data that would break the consensus",\n'
         '  "key_risks": ["risk 1", "risk 2", "risk 3"]\n'
@@ -742,10 +797,13 @@ def _chief_analyst_prompt(
 # two styles: pure "(current_price)" and labelled "(debt_to_equity: 79.55)". Strip the
 # field labels for display (keeping any value), and decode leaked unicode escapes.
 _UNICODE_ESCAPE_RE = re.compile(r"\\u([0-9a-fA-F]{4})")
+# Generic source tag the model sometimes appends: "(KEY_FACTS)" -> remove.
+_CITE_KEYFACTS_RE = re.compile(r"\s*\(KEY_FACTS\)")
 # Pure grounding token: "(current_price)" / "(vix)" -> remove (with leading space).
 _CITE_FIELD_RE = re.compile(r"\s*\((?:[a-z0-9]+(?:_[a-z0-9]+)+|vix)\)")
-# Labelled citation: "(debt_to_equity: 79.55)" -> keep the value -> "(79.55)".
-_CITE_KV_RE = re.compile(r"\(([a-z][a-z0-9_]*):\s*([^()]*?)\)")
+# Labelled citation, key may be snake_case OR human words:
+# "(debt_to_equity: 79.55)" / "(volatility regime: ELEVATED…)" -> keep the value.
+_CITE_KV_RE = re.compile(r"\(([a-z][a-z0-9_]*(?: [a-z0-9_]+)*):\s*([^()]*?)\)")
 # Month-name date used for the earnings catalyst, e.g. "May 30, 2026".
 _PROSE_DATE = r"[A-Z][a-z]+ \d{1,2},? \d{4}"
 
@@ -754,6 +812,7 @@ def _clean_memo(text: str) -> str:
     if not text:
         return text
     text = _UNICODE_ESCAPE_RE.sub(lambda m: chr(int(m.group(1), 16)), text)
+    text = _CITE_KEYFACTS_RE.sub("", text)
     text = _CITE_FIELD_RE.sub("", text)                          # pure tokens (incl. inner of nested)
     text = _CITE_KV_RE.sub(lambda m: f"({m.group(2).strip()})" if m.group(2).strip() else "", text)
     text = _CITE_FIELD_RE.sub("", text)                          # any leftover pure tokens

@@ -999,6 +999,18 @@ def build_seed_doc(ticker: str, pred_len: int = 5) -> Tuple[str, Dict[str, Any]]
     )
     lines.append("")
 
+    # ── BULLISH ANALYST PERSPECTIVE ───────────────────────────────────────────
+    lines.append("── BULLISH ANALYST PERSPECTIVE ─────────────────────────────────────────────────")
+    lines.append(
+        f"The bull case for {ticker}: What strengths or catalysts is the market systematically "
+        f"underpricing? Where is bearish consensus most likely wrong? If the most optimistic "
+        f"quantitative model proves correct, identify the specific catalyst that triggers it and the "
+        f"transmission mechanism to price. What asymmetric upside scenario are the models failing to "
+        f"price in, and what would a high-conviction long-focused analyst recommend given current "
+        f"technicals and fundamentals?"
+    )
+    lines.append("")
+
     # ── BEARISH ANALYST PERSPECTIVE ───────────────────────────────────────────
     lines.append("── BEARISH ANALYST PERSPECTIVE ─────────────────────────────────────────────────")
     lines.append(
