@@ -737,19 +737,51 @@ def _chief_analyst_prompt(
     )
 
 
-# Grounding citations like "(current_price)" are required during generation (so the
-# model only states numbers it can source) but read as debug noise in the delivered
-# memo. Strip the snake_case field tokens for display, and decode any leaked unicode
-# escapes (e.g. a literal "—" instead of an em dash).
-_FIELD_TOKEN_RE = re.compile(r"\s*\(([a-z0-9]+(?:_[a-z0-9]+)+)\)")
+# Grounding citations are required during generation (so the model only states numbers
+# it can source) but read as debug noise in the delivered memo. The model emits them in
+# two styles: pure "(current_price)" and labelled "(debt_to_equity: 79.55)". Strip the
+# field labels for display (keeping any value), and decode leaked unicode escapes.
 _UNICODE_ESCAPE_RE = re.compile(r"\\u([0-9a-fA-F]{4})")
+# Pure grounding token: "(current_price)" / "(vix)" -> remove (with leading space).
+_CITE_FIELD_RE = re.compile(r"\s*\((?:[a-z0-9]+(?:_[a-z0-9]+)+|vix)\)")
+# Labelled citation: "(debt_to_equity: 79.55)" -> keep the value -> "(79.55)".
+_CITE_KV_RE = re.compile(r"\(([a-z][a-z0-9_]*):\s*([^()]*?)\)")
+# Month-name date used for the earnings catalyst, e.g. "May 30, 2026".
+_PROSE_DATE = r"[A-Z][a-z]+ \d{1,2},? \d{4}"
 
 
 def _clean_memo(text: str) -> str:
     if not text:
         return text
     text = _UNICODE_ESCAPE_RE.sub(lambda m: chr(int(m.group(1), 16)), text)
-    text = _FIELD_TOKEN_RE.sub("", text)
+    text = _CITE_FIELD_RE.sub("", text)                          # pure tokens (incl. inner of nested)
+    text = _CITE_KV_RE.sub(lambda m: f"({m.group(2).strip()})" if m.group(2).strip() else "", text)
+    text = _CITE_FIELD_RE.sub("", text)                          # any leftover pure tokens
+    return text
+
+
+def _fix_earnings_date(text: str, key_facts: Dict[str, Any]) -> str:
+    """Force the earnings date in the memo to match the validated KEY_FACTS value.
+
+    next_earnings_date is guaranteed >= today by _get_earnings_info, so this corrects
+    the LLM occasionally hallucinating the month (e.g. writing 'May 30' when the data
+    and days-count point to 'July 30') and never lets a past date be cited as a future
+    catalyst. Only touches dates in explicit earnings contexts; other dates are left alone.
+    """
+    if not text:
+        return text
+    iso = str((key_facts or {}).get("next_earnings_date") or "").strip()
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", iso)
+    if not m:
+        return text
+    import datetime as _dt
+    try:
+        d = _dt.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except Exception:
+        return text
+    human = f"{d.strftime('%B')} {d.day}, {d.year}"
+    text = re.sub(r"(?i)(earnings date is\s+)" + _PROSE_DATE, r"\1" + human, text)
+    text = re.sub(r"(?i)(Earnings Release\s*\(\s*)" + _PROSE_DATE + r"(\s*\))", r"\1" + human + r"\2", text)
     return text
 
 
@@ -877,7 +909,7 @@ def run_council(
         )
         logger.warning("Chief analyst pass empty for %s; falling back to R3 takes", ticker)
 
-    enhanced = _clean_memo(enhanced)
+    enhanced = _fix_earnings_date(_clean_memo(enhanced), key_facts)
 
     _cb(100, "complete")
 
