@@ -138,6 +138,7 @@ def test_growth24_scope_rejects_pipeline_paths_and_allows_research_paths():
             staged_paths=[
                 "dl_growth24_candidate_contract_eval.py",
                 "notes/growth24_candidate_contract.md",
+                "scripts/growth24_fixed_policy_stress_summary.py",
                 "tests/test_growth24_candidate_contract_eval.py",
                 "scripts/check_branch_hygiene.py",
                 "run_daily.py",
@@ -150,6 +151,7 @@ def test_growth24_scope_rejects_pipeline_paths_and_allows_research_paths():
     assert not result.ok
     assert is_growth24_scoped_path("dl_growth24_candidate_contract_eval.py")
     assert is_growth24_scoped_path("notes/growth24_candidate_contract.md")
+    assert is_growth24_scoped_path("scripts/growth24_fixed_policy_stress_summary.py")
     assert is_growth24_scoped_path("scripts/check_branch_hygiene.py")
     assert not is_growth24_scoped_path("run_daily.py")
     assert not is_growth24_scoped_path("models/linear_panel.pkl")

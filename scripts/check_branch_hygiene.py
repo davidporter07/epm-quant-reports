@@ -21,6 +21,7 @@ MODEL_BRANCH_PREFIXES = ("model-refresh/", "models/refresh/", "artifact-refresh/
 GROWTH24_SCOPED_PREFIXES = (
     ".githooks/",
     "notes/growth24_",
+    "scripts/growth24_",
     "tests/test_growth24_",
 )
 GROWTH24_SCOPED_NAMES = {
