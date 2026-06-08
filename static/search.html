@@ -33,13 +33,13 @@
   <script>try{if(!sessionStorage.getItem("epm_splash_shown")&&location.pathname.indexOf("login")<0&&location.pathname.indexOf("reset")<0){var _sh=document.createElement("div");_sh.id="fvsShield";_sh.style.cssText="position:fixed;inset:0;z-index:9998;background:#040d1a";document.documentElement.appendChild(_sh);}}catch(e){}</script>
   <title>Fund Search | EPM Market Intelligence</title>
   <link rel="stylesheet" href="/static/css/styles.css?v=20260429c" />
-  <link rel="stylesheet" href="/static/css/design-v2.css?v=20260605a" />
+  <link rel="stylesheet" href="/static/css/design-v2.css?v=20260607b" />
   <link rel="stylesheet" href="/static/css/design-system.css?v=20260429b" />
   <script src="/static/js/plotly-2.35.2.min.js"></script>
   <script src="/static/js/chrome.js?v=20260423a"></script>
   <script defer src="/static/js/site.js?v=20260603a"></script>
   <script defer src="/static/js/search.js?v=20260605a"></script>
-  <script defer src="/static/js/deep_analysis.js?v=20260429a"></script>
+  <script defer src="/static/js/deep_analysis.js?v=20260607b"></script>
   <link rel="icon" type="image/png" href="/static/epm_logo_sq.png">
   <link rel="apple-touch-icon" href="/static/epm_logo_sq.png">
   <meta property="og:image" content="/static/epm_logo.png">
@@ -449,14 +449,31 @@
               <div style="font-size:17px;font-weight:700;margin-bottom:4px;">Council Deep Analysis</div>
               <div style="font-size:11px;color:var(--muted);margin-bottom:10px;">~22 min · Async · Notified on completion</div>
               <div style="font-size:12px;color:var(--muted);line-height:1.6;margin-bottom:16px;">Kronos OHLCV forecast + 7-analyst Council deliberation synthesized with EPM ensemble.</div>
+              <button type="button" id="dalBuilderToggle" class="dal-builder-toggle">⚙ Customize Council <span id="dalBuilderChevron">▾</span></button>
               <button id="dalRunBtn" style="width:100%;padding:10px;border-radius:8px;border:none;font-size:13px;font-weight:700;cursor:pointer;background:linear-gradient(135deg,#d4a84b 0%,#a07828 100%);color:#0a1928;">Run Analyst Council</button>
             </div>
           </div>
+
+          <!-- Council Builder -->
+          <div id="dalCouncilBuilder" class="dal-builder" style="display:none;">
+            <div class="dal-builder-head">
+              <div class="dal-builder-title">Build Your Council</div>
+              <div id="dalRosterSummary" class="dal-roster-summary"></div>
+            </div>
+            <div class="dal-builder-hint">Pick up to <strong>8</strong> analysts. Every council needs at least <strong>1 bullish</strong> and <strong>1 bearish</strong> member. Click <span class="dal-gear-inline">⚙</span> on a selected analyst to tune their personality.</div>
+            <div id="dalMemberGrid" class="dal-member-grid"></div>
+            <div id="dalCustomizePanel" class="dal-customize" style="display:none;"></div>
+            <div class="dal-builder-actions">
+              <button type="button" id="dalResetRoster" class="dal-reset-btn">Reset to default 8</button>
+              <span id="dalBuilderWarn" class="dal-builder-warn"></span>
+            </div>
+          </div>
+
           <!-- Powered by bar -->
           <div style="background:var(--panel-2,#09152a);border:1px solid var(--border);border-radius:8px;padding:10px 16px;display:flex;align-items:center;gap:16px;font-size:11px;color:var(--muted);flex-wrap:wrap;">
             <span>Powered by</span>
             <span style="display:flex;align-items:center;gap:6px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:600;"><span style="width:6px;height:6px;border-radius:50%;background:#d4a84b;display:inline-block;"></span><strong>Kronos</strong> OHLCV Foundation Model</span>
-            <span style="display:flex;align-items:center;gap:6px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:600;"><span style="width:6px;height:6px;border-radius:50%;background:#38bdf8;display:inline-block;"></span><strong>Analyst Council</strong> · 7 Analysts</span>
+            <span style="display:flex;align-items:center;gap:6px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:600;"><span style="width:6px;height:6px;border-radius:50%;background:#38bdf8;display:inline-block;"></span><strong>Analyst Council</strong> · <span id="dalPoweredCount">8 Analysts</span></span>
             <span style="display:flex;align-items:center;gap:6px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:600;"><span style="width:6px;height:6px;border-radius:50%;background:#22c55e;display:inline-block;"></span><strong>EPM</strong> 6-Model Ensemble</span>
           </div>
         </div>
