@@ -33,13 +33,13 @@
   <script>try{if(!sessionStorage.getItem("epm_splash_shown")&&location.pathname.indexOf("login")<0&&location.pathname.indexOf("reset")<0){var _sh=document.createElement("div");_sh.id="fvsShield";_sh.style.cssText="position:fixed;inset:0;z-index:9998;background:#040d1a";document.documentElement.appendChild(_sh);}}catch(e){}</script>
   <title>Fund Search | EPM Market Intelligence</title>
   <link rel="stylesheet" href="/static/css/styles.css?v=20260429c" />
-  <link rel="stylesheet" href="/static/css/design-v2.css?v=20260607b" />
+  <link rel="stylesheet" href="/static/css/design-v2.css?v=20260608a" />
   <link rel="stylesheet" href="/static/css/design-system.css?v=20260429b" />
   <script src="/static/js/plotly-2.35.2.min.js"></script>
   <script src="/static/js/chrome.js?v=20260423a"></script>
   <script defer src="/static/js/site.js?v=20260603a"></script>
   <script defer src="/static/js/search.js?v=20260605a"></script>
-  <script defer src="/static/js/deep_analysis.js?v=20260607b"></script>
+  <script defer src="/static/js/deep_analysis.js?v=20260608a"></script>
   <link rel="icon" type="image/png" href="/static/epm_logo_sq.png">
   <link rel="apple-touch-icon" href="/static/epm_logo_sq.png">
   <meta property="og:image" content="/static/epm_logo.png">
@@ -449,23 +449,8 @@
               <div style="font-size:17px;font-weight:700;margin-bottom:4px;">Council Deep Analysis</div>
               <div style="font-size:11px;color:var(--muted);margin-bottom:10px;">~22 min · Async · Notified on completion</div>
               <div style="font-size:12px;color:var(--muted);line-height:1.6;margin-bottom:16px;">Kronos OHLCV forecast + 7-analyst Council deliberation synthesized with EPM ensemble.</div>
-              <button type="button" id="dalBuilderToggle" class="dal-builder-toggle">⚙ Customize Council <span id="dalBuilderChevron">▾</span></button>
+              <button type="button" id="dalBuilderToggle" class="dal-builder-toggle">⚙ Customize Council</button>
               <button id="dalRunBtn" style="width:100%;padding:10px;border-radius:8px;border:none;font-size:13px;font-weight:700;cursor:pointer;background:linear-gradient(135deg,#d4a84b 0%,#a07828 100%);color:#0a1928;">Run Analyst Council</button>
-            </div>
-          </div>
-
-          <!-- Council Builder -->
-          <div id="dalCouncilBuilder" class="dal-builder" style="display:none;">
-            <div class="dal-builder-head">
-              <div class="dal-builder-title">Build Your Council</div>
-              <div id="dalRosterSummary" class="dal-roster-summary"></div>
-            </div>
-            <div class="dal-builder-hint">Pick up to <strong>8</strong> analysts. Every council needs at least <strong>1 bullish</strong> and <strong>1 bearish</strong> member. Click <span class="dal-gear-inline">⚙</span> on a selected analyst to tune their personality.</div>
-            <div id="dalMemberGrid" class="dal-member-grid"></div>
-            <div id="dalCustomizePanel" class="dal-customize" style="display:none;"></div>
-            <div class="dal-builder-actions">
-              <button type="button" id="dalResetRoster" class="dal-reset-btn">Reset to default 8</button>
-              <span id="dalBuilderWarn" class="dal-builder-warn"></span>
             </div>
           </div>
 
@@ -581,6 +566,26 @@
       </div>
       <div id="descriptionModalCopy" class="description-modal-copy desc-modal-pane is-active" data-desc-pane="description"></div>
       <div id="descriptionModalResearch" class="about-research desc-modal-pane" data-desc-pane="research" hidden></div>
+    </div>
+  </div>
+
+  <!-- Council Builder modal -->
+  <div id="councilBuilderModal" class="modal modal-soft">
+    <div class="modal-inner modal-inner-compact dal-builder-modal">
+      <button id="dalBuilderClose" class="modal-x" type="button" aria-label="Close council builder">×</button>
+      <div class="compact-modal-header">
+        <div class="compact-modal-kicker">Analyst Council</div>
+        <h3 class="compact-modal-title">Build Your Council</h3>
+      </div>
+      <div id="dalRosterSummary" class="dal-roster-summary"></div>
+      <div class="dal-builder-hint">Pick up to <strong>8</strong> analysts. Every council needs at least <strong>1 bullish</strong> and <strong>1 bearish</strong> member. Click <span class="dal-gear-inline">⚙</span> on a selected analyst to tune their personality.</div>
+      <div id="dalCustomizePanel" class="dal-customize" style="display:none;"></div>
+      <div id="dalMemberGrid" class="dal-member-grid"></div>
+      <div class="dal-builder-actions">
+        <button type="button" id="dalResetRoster" class="dal-reset-btn">Reset to default 8</button>
+        <span id="dalBuilderWarn" class="dal-builder-warn"></span>
+        <button type="button" id="dalBuilderRun" class="dal-builder-run">Run Council →</button>
+      </div>
     </div>
   </div>
 

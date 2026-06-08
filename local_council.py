@@ -504,12 +504,14 @@ def _assign_challenges(
 ) -> Dict[str, Dict[str, str]]:
     """Map each persona name → the R1 take it must cross-examine in Round 2.
 
-    Guarantees the bull pole and bear pole each receive ≥1 incoming challenge:
-      - bull-kind analysts challenge the bear pole, bear-kind challenge the bull pole;
-      - neutral analysts challenge the pole opposite their own R1 stance (base
-        neutrals load-balance across the two poles).
-    The roster always carries ≥1 bull and ≥1 bear (enforced upstream), so both
-    poles are covered; the stance-based fallbacks keep it robust if it doesn't.
+    Two guarantees:
+      1. The bull pole and bear pole each receive ≥1 incoming challenge (bull-kind
+         analysts challenge the bear pole, bear-kind the bull pole; neutrals
+         challenge the pole opposite their own R1 stance).
+      2. EVERY member receives ≥1 incoming challenge — a coverage pass redistributes
+         challengers from over-covered poles to anyone left unchallenged, so the
+         debate engages the whole council, not just the two poles.
+    The roster always carries ≥1 bull and ≥1 bear (enforced upstream).
     """
     by_name = {t["name"]: t for t in takes_r1}
     persona_by_name = {p.name: p for p in personas}
@@ -564,6 +566,27 @@ def _assign_challenges(
                 target = _any_other(nm)
         if target and target in by_name:
             assignments[nm] = by_name[target]
+
+    # Coverage pass — make sure NO member is left unchallenged. Redistribute
+    # challengers from over-covered targets (the poles draw the most heat) to any
+    # member with zero incoming challenges, without dropping a pole below 1.
+    from collections import Counter
+    indeg = Counter(t["name"] for t in assignments.values())
+    poles = {p for p in (bull_pole, bear_pole) if p}
+    uncovered = [nm for nm in names if indeg.get(nm, 0) == 0]
+    for u in uncovered:
+        donor = None
+        for chl, tgt in assignments.items():
+            tname = tgt["name"]
+            # Move a challenger off an over-covered target (keep poles ≥1) onto u.
+            if chl != u and indeg[tname] > 1 and not (tname in poles and indeg[tname] <= 1):
+                donor = chl
+                break
+        if donor is not None:
+            old = assignments[donor]["name"]
+            indeg[old] -= 1
+            assignments[donor] = by_name[u]
+            indeg[u] += 1
     return assignments
 
 
@@ -961,7 +984,7 @@ def _chief_analyst_prompt(
     return (
         "IMPORTANT: Your entire response must be written in English only.\n\n"
         f"You are a senior research analyst at a top-tier institutional equity research firm. "
-        f"Your council has just completed a three-round deliberation on {ticker}. "
+        f"Your council has just completed a four-round deliberation on {ticker}. "
         "Write the investment memo that will be delivered to the portfolio manager. "
         "This is NOT a recap of who argued what — it is your authoritative analysis of the stock, "
         "informed by the deliberation but written in your own voice.\n\n"
@@ -970,9 +993,11 @@ def _chief_analyst_prompt(
         "Take a clear position. A memo that hedges in every direction is a failed memo. "
         "If the evidence is mixed, say which side weighs more and why.\n\n"
         "KEY_FACTS — AUTHORITATIVE NUMERIC GROUND TRUTH. Use EXACT values anywhere you cite a number. "
-        "CITATION RULE: every number you state must be followed by its KEY_FACTS field name in "
-        "parentheses — e.g. '68.48% (eps_release_surprise_pct)'. If you cannot name the source field, "
-        "do not state the number.\n"
+        "CITATION RULE: every number you state must be followed by its field name in parentheses, "
+        "formatted EXACTLY as '(field_name)' — lowercase, no 'KEY_FACTS:' prefix, no square brackets. "
+        "Example: '68.48% (eps_release_surprise_pct)'. NEVER write a placeholder such as [trailing_pe] "
+        "or [forward_pe]: if a value is not present in KEY_FACTS, OMIT that number and rephrase rather "
+        "than leaving a placeholder. If you cannot name the source field, do not state the number.\n"
         f"```json\n{_kf_json(key_facts)}\n```\n\n"
         "RESEARCH TEAM FINDINGS (distilled from the council deliberation):\n"
         f"```json\n{json.dumps(distilled, indent=2)}\n```\n\n"
@@ -981,7 +1006,7 @@ def _chief_analyst_prompt(
         "Write exactly these seven sections in order. Start immediately with ## Investment Thesis. "
         "No preamble. No sign-off.\n\n"
         "## Investment Thesis\n"
-        f"The council's Round-3 vote was {_n_bear} bearish / {_n_base} base / {_n_bull} bullish "
+        f"The council's final-round vote was {_n_bear} bearish / {_n_base} base / {_n_bull} bullish "
         f"(computed consensus: {_cs or 'mixed'}). Your headline call is FIXED by this vote — "
         "bearish→UNDERWEIGHT, base→NEUTRAL, bullish→OVERWEIGHT — so for this council the required "
         f"call is {required_rec}. "
@@ -1038,8 +1063,13 @@ def _chief_analyst_prompt(
 # two styles: pure "(current_price)" and labelled "(debt_to_equity: 79.55)". Strip the
 # field labels for display (keeping any value), and decode leaked unicode escapes.
 _UNICODE_ESCAPE_RE = re.compile(r"\\u([0-9a-fA-F]{4})")
-# Generic source tag the model sometimes appends: "(KEY_FACTS)" -> remove.
-_CITE_KEYFACTS_RE = re.compile(r"\s*\(KEY_FACTS\)")
+# Generic source tag the model sometimes appends: "(KEY_FACTS)" or the labelled
+# form "(KEY_FACTS: current_price)" -> remove entirely (the value precedes it).
+_CITE_KEYFACTS_RE = re.compile(r"\s*\(\s*KEY_FACTS(?::[^)]*)?\)")
+# Parenthesized bracket citation: "([mna_note])" / "( [forward_pe] )" -> remove whole paren.
+_CITE_BRACKET_PAREN_RE = re.compile(r"\s*\(\s*\[[a-z][a-z0-9_]*\]\s*\)")
+# Bare square-bracket placeholder the synthesis model leaves unfilled: "[trailing_pe]".
+_BRACKET_FIELD_RE = re.compile(r"\[([a-z][a-z0-9_]*)\]")
 # Pure grounding token: "(current_price)" / "(vix)" -> remove (with leading space).
 _CITE_FIELD_RE = re.compile(r"\s*\((?:[a-z0-9]+(?:_[a-z0-9]+)+|vix)\)")
 # Labelled citation, key may be snake_case OR human words:
@@ -1049,14 +1079,37 @@ _CITE_KV_RE = re.compile(r"\(([a-z][a-z0-9_]*(?: [a-z0-9_]+)*):\s*([^()]*?)\)")
 _PROSE_DATE = r"[A-Z][a-z]+ \d{1,2},? \d{4}"
 
 
-def _clean_memo(text: str) -> str:
+def _fmt_kf_value(v: Any) -> str:
+    """Format a KEY_FACTS value for inline substitution into prose."""
+    if v is None or isinstance(v, bool):
+        return ""
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float):
+        return f"{v:.2f}".rstrip("0").rstrip(".")
+    if isinstance(v, str):
+        s = v.strip()
+        return s if 0 < len(s) <= 60 else ""   # don't inline long notes
+    return ""
+
+
+def _clean_memo(text: str, key_facts: Optional[Dict[str, Any]] = None) -> str:
     if not text:
         return text
+    kf = key_facts or {}
     text = _UNICODE_ESCAPE_RE.sub(lambda m: chr(int(m.group(1), 16)), text)
-    text = _CITE_KEYFACTS_RE.sub("", text)
+    text = _CITE_KEYFACTS_RE.sub("", text)                       # (KEY_FACTS) / (KEY_FACTS: field)
+    text = _CITE_BRACKET_PAREN_RE.sub("", text)                  # ([mna_note]) citation-style
+    # Unfilled "[field]" placeholders: substitute the real KEY_FACTS value when we
+    # have it (the model failed to inline it), else drop the token.
+    text = _BRACKET_FIELD_RE.sub(lambda m: _fmt_kf_value(kf.get(m.group(1))), text)
     text = _CITE_FIELD_RE.sub("", text)                          # pure tokens (incl. inner of nested)
     text = _CITE_KV_RE.sub(lambda m: f"({m.group(2).strip()})" if m.group(2).strip() else "", text)
     text = _CITE_FIELD_RE.sub("", text)                          # any leftover pure tokens
+    # Tidy artifacts left by removed citations/placeholders.
+    text = re.sub(r"\(\s*\)", "", text)                          # empty ()
+    text = re.sub(r"[ \t]{2,}", " ", text)                       # collapsed double spaces
+    text = re.sub(r"\s+([,.;])", r"\1", text)                    # space before punctuation
     return text
 
 
@@ -1226,7 +1279,7 @@ def run_council(
         )
         logger.warning("Chief analyst pass empty for %s; falling back to final-round takes", ticker)
 
-    enhanced = _fix_earnings_date(_clean_memo(enhanced), key_facts)
+    enhanced = _fix_earnings_date(_clean_memo(enhanced, key_facts), key_facts)
 
     _cb(100, "complete")
 
