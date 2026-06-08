@@ -2533,11 +2533,29 @@ def research_profile(symbol: str, request: Request) -> JSONResponse:
 
 
 @app.post("/api/deep/{ticker}")
-def deep_analysis_start(ticker: str, request: Request) -> JSONResponse:
+async def deep_analysis_start(ticker: str, request: Request) -> JSONResponse:
     _require_user(request)
     t = ticker.strip().upper()
     if not _DEEP_TICKER_RE.match(t):
         raise HTTPException(status_code=400, detail="Invalid ticker.")
+
+    # Optional custom council roster (JSON body {"roster": [...]}). No body =
+    # default 8-member council (unchanged behaviour).
+    import council_roster
+    roster = None
+    roster_sig = "default"
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    if isinstance(body, dict) and body.get("roster"):
+        roster = body["roster"]
+        ok, err = council_roster.validate_roster(roster)
+        if not ok:
+            raise HTTPException(status_code=400, detail=err)
+        roster_sig = council_roster.roster_signature(roster)
+        if roster_sig == "default":
+            roster = None  # canonical roster — share the default daily cache
 
     force_fresh = request.query_params.get("force_fresh") == "1"
     earnings_triggered = False
@@ -2580,10 +2598,20 @@ def deep_analysis_start(ticker: str, request: Request) -> JSONResponse:
         force_fresh=force_fresh,
         not_before=not_before,
         earnings_refresh_required=earnings_refresh_required,
+        roster=roster,
+        roster_sig=roster_sig,
     )
     return JSONResponse({"ok": True, "job_id": job_id, "ticker": t,
                          "earnings_triggered": earnings_triggered,
                          "not_before": not_before})
+
+
+@app.get("/api/council/library")
+def council_library(request: Request) -> JSONResponse:
+    """Library of selectable analysts + trait axes for the Council Builder UI."""
+    _require_user(request)
+    import council_roster
+    return JSONResponse({"ok": True, **council_roster.library_payload()})
 
 
 @app.get("/api/deep/{job_id}/status")
@@ -2608,8 +2636,9 @@ def deep_analysis_cancel(job_id: str, request: Request) -> JSONResponse:
 def deep_analysis_agents(job_id: str, request: Request) -> JSONResponse:
     """Return council analyst submissions for a completed job.
 
-    Each persona now has up to 3 posts (R1, R2, R3). The timeline includes
-    real round numbers (1, 2, 3). Backwards-compat: old jobs without
+    Each persona has up to 4 posts (R1-R4). The timeline includes real round
+    numbers. The display roster comes from the job's resolved council (custom
+    rosters) or the static default. Backwards-compat: old jobs without
     takes_by_round fall back to the flat takes list with round = idx+1.
     """
     _require_user(request)
@@ -2621,7 +2650,23 @@ def deep_analysis_agents(job_id: str, request: Request) -> JSONResponse:
 
     result = (status.get("result") or {})
     from local_council import PERSONAS
-    persona_meta = {p.name: p for p in PERSONAS}
+    import council_roster as _cr
+    # Display roster: the job's resolved council if present (custom rosters),
+    # else the static default. system_prompt (for bios) looked up from the library.
+    roster_meta = result.get("council_roster")
+    if roster_meta:
+        roster_list = [
+            {"name": m.get("name", ""), "title": m.get("title", ""),
+             "kind": m.get("kind", "neutral"), "blurb": m.get("blurb", "")}
+            for m in roster_meta
+        ]
+    else:
+        roster_list = [
+            {"name": p.name, "title": p.title, "kind": p.kind, "blurb": ""}
+            for p in PERSONAS
+        ]
+    _sp_by_name = {p.name: p.system_prompt for p in _cr.LIBRARY}
+    _sp_by_name.update({p.name: p.system_prompt for p in PERSONAS})
 
     takes_by_round = result.get("takes_by_round")
 
@@ -2659,27 +2704,28 @@ def deep_analysis_agents(job_id: str, request: Request) -> JSONResponse:
 
         agents = []
         timeline = []
-        for p in PERSONAS:
-            meta  = persona_meta.get(p.name)
-            bio   = meta.system_prompt.split(". ")[0] + "." if meta else ""
-            posts = posts_by_name.get(p.name, [])
-            r3_body = r3_by_name.get(p.name, "")
+        for rp in roster_list:
+            sys_prompt = _sp_by_name.get(rp["name"], "")
+            bio   = rp.get("blurb") or (sys_prompt.split(". ")[0] + "." if sys_prompt else "")
+            posts = posts_by_name.get(rp["name"], [])
+            r3_body = r3_by_name.get(rp["name"], "")
             agents.append({
-                "name":       p.title,
-                "username":   p.name,
+                "name":       rp["title"],
+                "username":   rp["name"],
                 "bio":        bio,
-                "persona":    meta.system_prompt if meta else "",
+                "persona":    sys_prompt,
+                "kind":       rp.get("kind", "neutral"),
                 "post_count": len(posts),
                 "posts":      posts,
                 "verdict":    _parse_r3_verdict(r3_body) if r3_body else {"stance": "base", "rationale": "", "shifted": False, "shift_reason": ""},
             })
             for rnd in sorted(tbr.keys()):
                 round_takes = {t["name"]: t for t in tbr[rnd]}
-                t = round_takes.get(p.name)
+                t = round_takes.get(rp["name"])
                 if t:
                     body = (t.get("take") or "").strip()
                     if body:
-                        timeline.append({"agent": p.title, "content": body, "round": rnd})
+                        timeline.append({"agent": rp["title"], "content": body, "round": rnd})
     else:
         # Legacy fallback: flat takes list, round = idx+1
         takes = result.get("takes") or []
@@ -2689,13 +2735,13 @@ def deep_analysis_agents(job_id: str, request: Request) -> JSONResponse:
             pname = t.get("name", "")
             title = t.get("title", pname.replace("_", " ").title() if pname else f"Analyst {idx+1}")
             body  = (t.get("take") or "").strip()
-            meta  = persona_meta.get(pname)
-            bio   = meta.system_prompt.split(". ")[0] + "." if meta else ""
+            sys_prompt = _sp_by_name.get(pname, "")
+            bio   = sys_prompt.split(". ")[0] + "." if sys_prompt else ""
             agents.append({
                 "name":       title,
                 "username":   pname,
                 "bio":        bio,
-                "persona":    meta.system_prompt if meta else "",
+                "persona":    sys_prompt,
                 "post_count": 1 if body else 0,
                 "posts":      [body] if body else [],
             })

@@ -51,6 +51,11 @@ class Persona:
     # "neutral" forms its own view from evidence; "bull"/"bear" open by arguing
     # their side but vote honestly and may concede in later rounds.
     kind: str = "neutral"
+    # Display-only metadata for the Council Builder UI (not used by the engine).
+    blurb: str = ""        # one-line personality summary
+    style_label: str = ""  # trading / finance style
+    econ_label: str = ""   # economic worldview
+    lens_label: str = ""   # analytical lens / domain
 
 
 PERSONAS: List[Persona] = [
@@ -1089,8 +1094,13 @@ def run_council(
     seed_text: str,
     key_facts: Dict[str, Any],
     progress_cb: Optional[Callable[[int, str], None]] = None,
+    personas: Optional[List[Persona]] = None,
 ) -> Dict[str, Any]:
-    """Run the 7-persona council through 3 deliberation rounds + synthesis.
+    """Run the analyst council through 4 deliberation rounds + synthesis.
+
+    personas: optional custom roster (already resolved, incl. any fund swap).
+    When None, the default PERSONAS list is used and the earnings_catalyst
+    persona is swapped for the fund-structure analyst on funds/ETFs.
 
     progress_cb(percent, label) is called before each Ollama call so the
     cancel signal in deep_analysis_worker is checked between every call.
@@ -1099,19 +1109,20 @@ def run_council(
     Returns:
         {
           "takes":          R1 takes list (backwards-compat),
-          "takes_by_round": {1: [...], 2: [...], 3: [...]},
+          "takes_by_round": {1: [...], 2: [...], 3: [...], 4: [...]},
           "enhanced_markdown": synthesized 6-section report,
-          "raw_markdown":   full R1+R2+R3 transcript, role-grouped,
+          "raw_markdown":   full R1-R4 transcript, role-grouped,
         }
     """
-    # For funds/ETFs, swap the earnings_catalyst persona (earnings are
-    # meaningless for a basket) for the fund-structure analyst.
-    personas = list(PERSONAS)
-    if key_facts.get("is_fund"):
-        personas = [
-            FUND_STRUCTURE_PERSONA if p.name == "earnings_catalyst" else p
-            for p in personas
-        ]
+    if personas is None:
+        # Default roster. For funds/ETFs, swap the earnings_catalyst persona
+        # (earnings are meaningless for a basket) for the fund-structure analyst.
+        personas = list(PERSONAS)
+        if key_facts.get("is_fund"):
+            personas = [
+                FUND_STRUCTURE_PERSONA if p.name == "earnings_catalyst" else p
+                for p in personas
+            ]
     n = len(personas)
 
     def _cb(pct: int, label: str) -> None:

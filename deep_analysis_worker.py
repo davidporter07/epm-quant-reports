@@ -193,11 +193,25 @@ def _run_pipeline(job_id: str, ticker: str) -> None:
     logger.info("Seed doc for %s: %d chars, %d facts, %.1fs",
                 ticker, len(seed_text), len(key_facts), time.time() - t0)
 
-    # Step 1 — Run the local analyst council (22 Ollama calls: 7 R1 + 7 R2 + 7 R3 + 1 synthesis).
-    # Council portion maps to progress 15 -> 85 (R1/R2/R3 persona phase at pct < 87.5),
+    # Step 1 — Run the local analyst council (4N+2 Ollama calls: N each of R1/R2/R3/R4
+    # + distill + synthesis). Council portion maps to progress 15 -> 85 (persona phase),
     # then 85 -> 95 (synthesis phase) which run_council advances at ~88% of its range.
     _update_job(job_id, stage="council_personas", progress=15)
-    n_personas = len(PERSONAS)
+
+    # Resolve the council roster (custom from the job, else the default 8).
+    import council_roster
+    job_rec = _read_job(job_id) or {}
+    roster_spec = job_rec.get("roster") or council_roster.default_roster_spec()
+    try:
+        personas = council_roster.build_personas(
+            roster_spec, is_fund=bool(key_facts.get("is_fund"))
+        )
+    except Exception as exc:
+        logger.warning("Roster build failed for %s (%s); using default council", ticker, exc)
+        personas = council_roster.build_personas(
+            council_roster.default_roster_spec(), is_fund=bool(key_facts.get("is_fund"))
+        )
+    n_personas = len(personas) or len(PERSONAS)
 
     def _progress_cb(pct: int, label: str) -> None:
         with _cancel_lock:
@@ -218,7 +232,15 @@ def _run_pipeline(job_id: str, ticker: str) -> None:
             stage = "council_synthesis"
         _update_job(job_id, stage=stage, progress=min(95, mapped))
 
-    result = run_council(ticker, seed_text, key_facts, progress_cb=_progress_cb)
+    result = run_council(ticker, seed_text, key_facts, progress_cb=_progress_cb, personas=personas)
+
+    # Resolved roster display-meta — lets the report/agents endpoint label the
+    # council correctly even when it differs from the static default PERSONAS.
+    council_roster_meta = [
+        {"name": p.name, "title": p.title, "section_header": p.section_header,
+         "kind": p.kind, "blurb": p.blurb}
+        for p in personas
+    ]
 
     enhanced_markdown = result.get("enhanced_markdown", "")
     raw_markdown      = result.get("raw_markdown", "")
@@ -239,7 +261,8 @@ def _run_pipeline(job_id: str, ticker: str) -> None:
         "summary": "",
         "sections": [],
         "takes":          takes,                  # R1 takes (backwards-compat)
-        "takes_by_round": takes_by_round,         # all 3 rounds keyed by round number
+        "takes_by_round": takes_by_round,         # all 4 rounds keyed by round number
+        "council_roster": council_roster_meta,    # resolved roster display-meta
     }
     _update_job(
         job_id,
@@ -381,9 +404,15 @@ def stop_worker() -> None:
 # Public API used by app.py
 # ---------------------------------------------------------------------------
 
-def get_today_cached_job(ticker: str) -> Optional[dict]:
-    """Return the most-recently-completed non-invalidated job for this ticker from today (UTC)."""
+def get_today_cached_job(ticker: str, roster_sig: str = "default") -> Optional[dict]:
+    """Return the most-recently-completed non-invalidated job for this ticker from today (UTC).
+
+    Only matches jobs with the same roster signature, so a custom-roster request
+    never returns (or is satisfied by) the canonical default-roster daily cache,
+    and custom runs never clobber it.
+    """
     ticker = ticker.upper()
+    roster_sig = roster_sig or "default"
     today = datetime.utcnow().strftime("%Y-%m-%d")
     candidates = []
     for p in _jobs_dir().glob("*.json"):
@@ -392,6 +421,7 @@ def get_today_cached_job(ticker: str) -> Optional[dict]:
             if (j.get("ticker") == ticker
                     and j.get("status") == "completed"
                     and (j.get("completed_at") or "").startswith(today)
+                    and (j.get("roster_sig") or "default") == roster_sig
                     and not j.get("invalidated")):
                 candidates.append(j)
         except Exception:
@@ -422,27 +452,35 @@ def enqueue(
     force_fresh: bool = False,
     not_before: Optional[str] = None,
     earnings_refresh_required: bool = False,
+    roster: Optional[list] = None,
+    roster_sig: str = "default",
 ) -> str:
     """Create a new job and return its job_id.
 
-    - Active job (queued/running) for this ticker → return its job_id (in-progress dedup).
-    - Completed job for today and force_fresh=False → return cached job_id (daily cache).
+    - Active job (queued/running) for this ticker + roster → return its job_id (in-progress dedup).
+    - Completed job for today + matching roster and force_fresh=False → return cached job_id.
     - Otherwise create a new job.
+
+    roster/roster_sig carry an optional custom council. A non-default roster is
+    cached/deduped separately from the canonical default-roster daily run.
     """
     ticker = ticker.upper()
+    roster_sig = roster_sig or "default"
 
-    # In-progress dedup
+    # In-progress dedup (same ticker AND same roster)
     for p in _jobs_dir().glob("*.json"):
         try:
             j = json.loads(p.read_text())
-            if j.get("ticker") == ticker and j.get("status") in ("queued", "running"):
+            if (j.get("ticker") == ticker
+                    and j.get("status") in ("queued", "running")
+                    and (j.get("roster_sig") or "default") == roster_sig):
                 return j["job_id"]
         except Exception:
             continue
 
-    # Daily cache
+    # Daily cache (roster-scoped)
     if not force_fresh:
-        cached = get_today_cached_job(ticker)
+        cached = get_today_cached_job(ticker, roster_sig)
         if cached:
             return cached["job_id"]
 
@@ -457,6 +495,8 @@ def enqueue(
         "invalidated":  False,
         "not_before":   not_before,
         "earnings_refresh_required": earnings_refresh_required,
+        "roster":       roster,
+        "roster_sig":   roster_sig,
         "created_at":   datetime.utcnow().isoformat(),
         "started_at":   None,
         "completed_at": None,
