@@ -703,6 +703,25 @@ def _distill_prompt(
 
 _REC_BY_STANCE = {"bearish": "UNDERWEIGHT", "base": "NEUTRAL", "bullish": "OVERWEIGHT"}
 
+# Tolerate markdown/punctuation between the label and the verdict — advocate
+# personas sometimes emit "**FINAL STANCE:** bull", and a plain \s* would not
+# cross the asterisks, silently dropping that analyst's vote from the tally.
+_FINAL_STANCE_RE = re.compile(
+    r'final\s+stance[\s*_:]*(bear(?:ish)?|base|bull(?:ish)?)', re.IGNORECASE
+)
+
+
+def _count_final_votes(r3_takes: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Tally R3 FINAL STANCE verdicts into {bearish, base, bullish} counts."""
+    votes: Dict[str, int] = {"bearish": 0, "base": 0, "bullish": 0}
+    for t in r3_takes:
+        m = _FINAL_STANCE_RE.search(t.get("take", ""))
+        if m:
+            s = m.group(1).lower()
+            key = "bearish" if s.startswith("bear") else "bullish" if s.startswith("bull") else "base"
+            votes[key] += 1
+    return votes
+
 
 def _chief_analyst_prompt(
     ticker: str,
@@ -934,16 +953,9 @@ def run_council(
     logger.info("Distill done in %.1fs", time.time() - t0)
 
     # Override LLM vote count with Python-computed values from R3 FINAL STANCE fields
-    import re as _re2
     r3_takes = takes_by_round.get(3, [])
     if r3_takes:
-        _votes: Dict[str, int] = {"bearish": 0, "base": 0, "bullish": 0}
-        for t in r3_takes:
-            m = _re2.search(r'final\s+stance:\s*(bear(?:ish)?|base|bull(?:ish)?)', t["take"], _re2.IGNORECASE)
-            if m:
-                s = m.group(1).lower()
-                key = "bearish" if s.startswith("bear") else "bullish" if s.startswith("bull") else "base"
-                _votes[key] += 1
+        _votes = _count_final_votes(r3_takes)
         _consensus = max(_votes, key=_votes.get)
         if distilled is None:
             distilled = {}
