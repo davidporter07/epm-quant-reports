@@ -91,6 +91,24 @@ def test_clean_memo_strips_keyfacts_and_fills_placeholders():
     assert "(14-day)" in lc._clean_memo("RSI (14-day) at 58.3 (rsi_14).", kf)
 
 
+def test_clean_memo_field_in_paren_with_prose():
+    kf = {"ma50": 282.32, "kronos_base_target": 385, "mna_note": "acquiring six AI firms",
+          "legal_regulatory_note": "privacy lawsuits", "eps_release_surprise_pct": 3.61,
+          "mom_5d_pct": 2.68, "beta": 1.2}
+    # No-underscore field token "(ma50)" removed.
+    assert lc._clean_memo("MA ($282.32 (ma50) level).", kf) == "MA ($282.32 level)."
+    # Field token embedded with prose: strip the token (+ dangling connector), keep the prose.
+    assert lc._clean_memo("target $385 (kronos_base_target, implying 25% upside).", kf) \
+        == "target $385 (25% upside)."
+    assert lc._clean_memo("shifts (legal_regulatory_note mentions privacy lawsuits) hurt.", kf) \
+        == "shifts (privacy lawsuits) hurt."
+    # "(value field)" keeps the value.
+    assert lc._clean_memo("beat (3.61% eps_release_surprise_pct) seen.", kf) == "beat (3.61%) seen."
+    # Legit parens preserved through the field-aware pass.
+    for legit in ["(14-day)", "(QQQ)", "($316.94)", "(June)", "(ELEVATED — top third)"]:
+        assert legit in lc._clean_memo(f"text {legit} more.", kf), legit
+
+
 def _stub_ollama(prompt, timeout=600, mode=None):
     if "Write your final" in prompt:
         # Bull advocate keeps a bullish final vote (markdown-bold to exercise tally);

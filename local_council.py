@@ -1093,6 +1093,17 @@ def _fmt_kf_value(v: Any) -> str:
     return ""
 
 
+# snake_case grounding token (≥1 underscore) — never legitimate English prose.
+_SNAKE_FIELD_RE = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")
+# KEY_FACTS field names that are NOT snake_case (no underscore) and so need an
+# explicit list to be scrubbed inside parentheticals — e.g. "(ma50)" / "(beta of 1.2)".
+_KNOWN_SHORT_FIELDS = {"ma50", "ma200", "vix", "beta", "rsi", "roe", "peg"}
+# Connector word left dangling after a field token is removed from a paren.
+_DANGLING_CONNECTOR_RE = re.compile(
+    r"^(?:of|at|is|mentions?|implying|indicating|shows?|reflects?|:)\s+", re.IGNORECASE
+)
+
+
 def _clean_memo(text: str, key_facts: Optional[Dict[str, Any]] = None) -> str:
     if not text:
         return text
@@ -1103,13 +1114,31 @@ def _clean_memo(text: str, key_facts: Optional[Dict[str, Any]] = None) -> str:
     # Unfilled "[field]" placeholders: substitute the real KEY_FACTS value when we
     # have it (the model failed to inline it), else drop the token.
     text = _BRACKET_FIELD_RE.sub(lambda m: _fmt_kf_value(kf.get(m.group(1))), text)
-    text = _CITE_FIELD_RE.sub("", text)                          # pure tokens (incl. inner of nested)
-    text = _CITE_KV_RE.sub(lambda m: f"({m.group(2).strip()})" if m.group(2).strip() else "", text)
-    text = _CITE_FIELD_RE.sub("", text)                          # any leftover pure tokens
+
+    # Field-name-aware paren scrub: the model embeds grounding tokens inside
+    # parentheticals in many shapes — "(ma50)", "(kronos_base_target, implying
+    # 25% upside)", "(3.61% eps_release_surprise_pct)", "(legal_regulatory_note
+    # mentions privacy lawsuits)". Strip the field tokens, KEEP the real prose,
+    # drop the paren only if nothing meaningful remains. Legit parens like
+    # "(14-day)", "(QQQ)", "($316.94)", "(June)" are untouched.
+    short_fields = {str(k) for k in kf.keys() if "_" not in str(k)} | _KNOWN_SHORT_FIELDS
+
+    def _clean_paren(m: "re.Match") -> str:
+        inner = _SNAKE_FIELD_RE.sub("", m.group(1))
+        for nm in sorted(short_fields, key=len, reverse=True):
+            inner = re.sub(r"\b" + re.escape(nm) + r"\b", "", inner)
+        inner = re.sub(r"\s{2,}", " ", inner).strip(" ,;:")
+        inner = _DANGLING_CONNECTOR_RE.sub("", inner).strip(" ,;:")
+        return f"({inner})" if inner.strip() else ""
+
+    text = re.sub(r"\(([^()]*)\)", _clean_paren, text)
+    # Bare snake_case field tokens still sitting in prose outside any paren.
+    text = _SNAKE_FIELD_RE.sub("", text)
     # Tidy artifacts left by removed citations/placeholders.
     text = re.sub(r"\(\s*\)", "", text)                          # empty ()
+    text = re.sub(r"\(\s+", "(", text)                           # "( prose" -> "(prose"
     text = re.sub(r"[ \t]{2,}", " ", text)                       # collapsed double spaces
-    text = re.sub(r"\s+([,.;])", r"\1", text)                    # space before punctuation
+    text = re.sub(r"\s+([,.;)])", r"\1", text)                   # space before punctuation
     return text
 
 
