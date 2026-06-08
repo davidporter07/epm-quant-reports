@@ -351,10 +351,16 @@
 
         function _deriveRecommendation(mdText) {
           const lower = mdText.toLowerCase();
-          const block = lower.slice(0, 600);
-          if (block.includes('overweight') || block.includes('bullish')) return 'bull';
-          if (block.includes('underweight') || block.includes('bearish')) return 'bear';
-          if (block.includes('neutral') || block.includes('base case') || block.includes('hold')) return 'base';
+          // Bind the chip to the explicit headline recommendation the memo states
+          // (the server binds that line to the council's Round-3 vote). Do NOT key
+          // off "bullish"/"bearish" substrings — those appear inside the vote tally
+          // (e.g. "0-bullish vote"), which would flip the chip against the memo.
+          const m = lower.match(/recommendation[^.\n]*?\b(overweight|underweight|neutral)\b/);
+          const fallback = lower.slice(0, 800).match(/\b(overweight|underweight|neutral)\b/);
+          const word = m ? m[1] : (fallback ? fallback[1] : null);
+          if (word === 'overweight') return 'bull';
+          if (word === 'underweight') return 'bear';
+          if (word === 'neutral') return 'base';
           return null;
         }
 
