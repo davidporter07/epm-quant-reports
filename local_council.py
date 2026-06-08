@@ -1,18 +1,22 @@
 """
 local_council.py — Deterministic multi-persona analyst council.
 
-Three-round deliberation:
-  Round 1 (R1): 7 independent stances — each persona reads only KEY_FACTS + seed section.
-  Round 2 (R2): 7 debate responses — each reads all R1 takes, MUST name a dissenting analyst.
-  Round 3 (R3): 7 brief final positions — 60-80 words each after reviewing all R2 takes.
+Four-round adversarial deliberation:
+  Round 1 (R1): N independent stances — each persona reads only KEY_FACTS + seed section.
+                Neutrals must weigh both sides before committing (no built-in lean).
+  Round 2 (R2): N cross-examinations — challenges are ASSIGNED so the leading bull and
+                bear cases are each directly rebutted (no advocate goes unchallenged).
+  Round 3 (R3): N rebuttals — each analyst answers the cross-examination against them
+                (defend with evidence, or concede).
+  Round 4 (R4): N brief final positions & votes after reviewing all R3 rebuttals.
   Synthesis   : 1 senior-editor report covering the full debate arc.
 
 Pipeline:
-  run_council(ticker, seed_text, key_facts) ->
-      7x R1  ->  7x R2  ->  7x R3  ->  synthesis
+  run_council(ticker, seed_text, key_facts, personas=None) ->
+      N x R1 -> N x R2 -> N x R3 -> N x R4 -> distill -> synthesis
       -> {takes, takes_by_round, enhanced_markdown, raw_markdown}
 
-Runtime on deepseek-r1:8b: ~45-75 min (22 Ollama calls; model swap on first call ~60s).
+Runtime on deepseek-r1:8b: ~60-90 min for 8 personas (4N+2 Ollama calls; model swap on first call ~60s).
 """
 
 from __future__ import annotations
@@ -404,6 +408,19 @@ def _persona_prompt(
 ) -> str:
     focus_list = ", ".join(persona.focus_fields) if persona.focus_fields else "(qualitative — no specific fields required)"
     exemplar = _R1_EXEMPLAR.format(ticker=ticker)
+    # De-lean rule for neutral analysts: their stance must be EARNED from the
+    # evidence, not handed down by the role. Advocates (bull/bear) intentionally
+    # open by arguing their side, so they are exempt.
+    if persona.kind == "neutral":
+        balanced_read = (
+            "BALANCED-READ RULE: Before you commit your STANCE, weigh the strongest BULLISH "
+            "reading AND the strongest BEARISH reading of your own focus data. Then commit to "
+            "the stance the evidence actually supports — bullish, base, or bearish. You have NO "
+            "built-in lean: do not default to caution, skepticism, or optimism. If your data is "
+            "genuinely mixed, 'base' is the honest answer; if it points one way, say so plainly.\n\n"
+        )
+    else:
+        balanced_read = ""
     return (
         "IMPORTANT: Respond in English only. Prose only — no bullet lists, no markdown headers, no code fences.\n\n"
         f"PERSONA: {persona.title}\n"
@@ -426,6 +443,7 @@ def _persona_prompt(
         "MECHANISM: 2-3 sentences — the exact transmission chain that produces your predicted outcome\n"
         "WHAT WOULD CHANGE MY MIND: one specific data signal (price level, field value, or named event) "
         "that would invalidate your thesis\n\n"
+        f"{balanced_read}"
         f"{_BANNED_PHRASES_RULE}\n\n"
         f"{_FIELD_GLOSSARY}\n\n"
         "Rules: no hedging, no generic disclaimers, no blockquotes, no quotes. Plain prose per field. "
@@ -453,8 +471,107 @@ def _run_persona(
 
 
 # ---------------------------------------------------------------------------
-# Round 2 — debate with required named disagreement
+# Round 2 — cross-examination with ASSIGNED challenge targets
+#
+# The old design let each analyst self-select one peer to disagree with, so
+# coverage was lopsided — the decisive bull/bear poles could go unchallenged
+# (e.g. a Bull "winning" because nobody ever rebutted it). _assign_challenges
+# routes challenges so the leading bull case AND leading bear case each receive
+# at least one rebuttal, while still pitting every analyst against the position
+# most opposed to its own.
 # ---------------------------------------------------------------------------
+
+_STANCE_RE = re.compile(r'\bstance:\s*(bear(?:ish)?|base|bull(?:ish)?)', re.IGNORECASE)
+
+
+def _parse_stance(take: str) -> str:
+    """Return 'bear' | 'base' | 'bull' from a take's STANCE field (default 'base')."""
+    m = _STANCE_RE.search(take or "")
+    if not m:
+        return "base"
+    s = m.group(1).lower()
+    return "bear" if s.startswith("bear") else "bull" if s.startswith("bull") else "base"
+
+
+def _assign_challenges(
+    takes_r1: List[Dict[str, str]],
+    personas: List[Persona],
+) -> Dict[str, Dict[str, str]]:
+    """Map each persona name → the R1 take it must cross-examine in Round 2.
+
+    Guarantees the bull pole and bear pole each receive ≥1 incoming challenge:
+      - bull-kind analysts challenge the bear pole, bear-kind challenge the bull pole;
+      - neutral analysts challenge the pole opposite their own R1 stance (base
+        neutrals load-balance across the two poles).
+    The roster always carries ≥1 bull and ≥1 bear (enforced upstream), so both
+    poles are covered; the stance-based fallbacks keep it robust if it doesn't.
+    """
+    by_name = {t["name"]: t for t in takes_r1}
+    persona_by_name = {p.name: p for p in personas}
+    stance_of = {t["name"]: _parse_stance(t["take"]) for t in takes_r1}
+
+    def _pole(kind: str) -> Optional[str]:
+        # Prefer the dedicated advocate; else the most extreme stance of that side.
+        want_kind = "bull" if kind == "bull" else "bear"
+        want_stance = "bull" if kind == "bull" else "bear"
+        for t in takes_r1:
+            if persona_by_name.get(t["name"]) and persona_by_name[t["name"]].kind == want_kind:
+                return t["name"]
+        for t in takes_r1:
+            if stance_of[t["name"]] == want_stance:
+                return t["name"]
+        return None
+
+    bull_pole = _pole("bull")
+    bear_pole = _pole("bear")
+    names = [t["name"] for t in takes_r1]
+
+    # Fallbacks when a pole is missing (degenerate rosters / unanimous R1).
+    def _any_other(self_name: str) -> Optional[str]:
+        for nm in names:
+            if nm != self_name:
+                return nm
+        return None
+
+    assignments: Dict[str, Dict[str, str]] = {}
+    base_toggle = 0
+    for t in takes_r1:
+        nm = t["name"]
+        p = persona_by_name.get(nm)
+        kind = p.kind if p else "neutral"
+        target: Optional[str]
+        if kind == "bull":
+            target = bear_pole or bull_pole
+        elif kind == "bear":
+            target = bull_pole or bear_pole
+        else:
+            my = stance_of[nm]
+            if my == "bull":
+                target = bear_pole or bull_pole
+            elif my == "bear":
+                target = bull_pole or bear_pole
+            else:  # base — alternate to spread coverage across both poles
+                target = (bull_pole, bear_pole)[base_toggle % 2] or bear_pole or bull_pole
+                base_toggle += 1
+        if target == nm or target is None:
+            target = (bear_pole if target == nm and nm == bull_pole else bull_pole)
+            if target == nm or target is None:
+                target = _any_other(nm)
+        if target and target in by_name:
+            assignments[nm] = by_name[target]
+    return assignments
+
+
+def _challengers_of(
+    target_name: str,
+    assignments: Dict[str, Dict[str, str]],
+    takes_r2: List[Dict[str, str]],
+) -> List[Dict[str, str]]:
+    """R2 takes from every analyst who was assigned to cross-examine target_name."""
+    challenger_names = [chl for chl, tgt in assignments.items() if tgt.get("name") == target_name]
+    by_name = {t["name"]: t for t in takes_r2}
+    return [by_name[nm] for nm in challenger_names if nm in by_name]
+
 
 def _debate_prompt(
     persona: Persona,
@@ -462,11 +579,13 @@ def _debate_prompt(
     key_facts: Dict[str, Any],
     my_r1_take: str,
     others_r1: List[Dict[str, str]],
+    challenge_target: Optional[Dict[str, str]] = None,
 ) -> str:
     others_block = "\n\n".join(
         f"### {t['title']}\n{t['take']}" for t in others_r1
     )
     exemplar = _R2_EXEMPLAR.format(ticker=ticker)
+    target_title = (challenge_target or {}).get("title") or ""
 
     # Domain constraint — prevents non-TA agents from echo-chambering RSI/ATR
     is_ta = persona.name == "technical_analyst"
@@ -509,24 +628,25 @@ def _debate_prompt(
         f"```json\n{_kf_json_filtered(key_facts, persona.focus_fields)}\n```\n\n"
         "YOUR ROUND 1 TAKE (defend or update this):\n"
         f"```\n{my_r1_take}\n```\n\n"
-        "OTHER ANALYSTS' ROUND 1 TAKES — read these, find at least one you disagree with:\n\n"
+        "OTHER ANALYSTS' ROUND 1 TAKES (full context):\n\n"
         f"{others_block}\n\n"
+        f"YOUR ASSIGNED CROSS-EXAMINATION TARGET: {target_title or 'pick the analyst whose conclusion is most opposed to yours'}.\n"
+        f"You must rebut THIS analyst's Round 1 claim directly in your DISAGREEMENT field.\n\n"
         f"Write a 160-200 word Round 2 response for {ticker}. "
         "Use EXACTLY these six labeled fields, in order:\n\n"
         "STANCE: bearish | base | bullish  — add '(maintained)' or '(updated from Round 1)'\n"
         "CLAIM: one decisive sentence — your thesis after reviewing the other analysts\n"
         "EVIDENCE: 2-3 specific KEY_FACTS field names and exact values that support your claim\n"
         "MECHANISM: 2-3 sentences — the transmission chain from current conditions to your predicted outcome\n"
-        "DISAGREEMENT: name exactly one analyst by role (e.g. 'The Technical Analyst') from the "
-        "OTHER ANALYSTS' ROUND 1 TAKES section — you CANNOT disagree with yourself or your own "
-        "Round 1 take. Identify the specific claim that analyst made + explain precisely why their "
-        "data or logic is wrong, citing at least one KEY_FACTS field\n"
+        f"DISAGREEMENT: cross-examine {target_title or 'your assigned target'} by name. Quote the "
+        "specific claim they made in Round 1 + explain precisely why their data or logic is wrong, "
+        "citing at least one KEY_FACTS field. Attack the strongest version of their case, not a strawman\n"
         "WHAT WOULD CHANGE MY MIND: one specific data signal that would force you to revise your stance\n\n"
         f"{domain_constraint}\n\n"
         f"{_BANNED_PHRASES_RULE}\n\n"
         f"{_FIELD_GLOSSARY}\n\n"
-        "Rules: DISAGREEMENT is mandatory — name a real analyst from the Round 1 takes above. "
-        "Attack a specific claim, not their general stance. No hedging. No generic disclaimers.\n\n"
+        f"Rules: DISAGREEMENT is mandatory and must address {target_title or 'your assigned target'} "
+        "specifically. Attack a specific claim, not their general stance. No hedging.\n\n"
         f"{exemplar}\n"
     )
 
@@ -537,8 +657,9 @@ def _run_debate(
     key_facts: Dict[str, Any],
     my_r1_take: str,
     others_r1: List[Dict[str, str]],
+    challenge_target: Optional[Dict[str, str]] = None,
 ) -> Dict[str, str]:
-    prompt = _debate_prompt(persona, ticker, key_facts, my_r1_take, others_r1)
+    prompt = _debate_prompt(persona, ticker, key_facts, my_r1_take, others_r1, challenge_target)
     t0 = time.time()
     try:
         take = _call_ollama(prompt, timeout=720)
@@ -550,7 +671,97 @@ def _run_debate(
 
 
 # ---------------------------------------------------------------------------
-# Round 3 — brief final positions
+# Round 3 — rebuttal & defense
+#
+# Each analyst sees the cross-examination(s) leveled at them in Round 2 and must
+# answer the strongest objection head-on: defend with evidence, or concede the
+# point. This is the actual back-and-forth — no advocate gets to coast on an
+# unanswered case. Analysts who were not directly challenged respond to the
+# single strongest argument against their stance from Round 2.
+# ---------------------------------------------------------------------------
+
+def _rebuttal_prompt(
+    persona: Persona,
+    ticker: str,
+    key_facts: Dict[str, Any],
+    my_r2_take: str,
+    challengers_r2: List[Dict[str, str]],
+    all_r2: List[Dict[str, str]],
+) -> str:
+    if challengers_r2:
+        challenge_block = "\n\n".join(
+            f"### {t['title']} challenged you:\n{t['take']}" for t in challengers_r2
+        )
+        challenge_intro = (
+            "ANALYSTS WHO CROSS-EXAMINED YOU IN ROUND 2 — answer their strongest objection directly:\n\n"
+            f"{challenge_block}"
+        )
+        defense_instruction = (
+            "DEFENSE: answer the single strongest objection raised against you above — refute it with "
+            "a specific KEY_FACTS field and value, OR explicitly concede it if it is correct"
+        )
+    else:
+        others_block = "\n\n".join(
+            f"### {t['title']}\n{t['take']}" for t in all_r2 if t["name"] != persona.name
+        )
+        challenge_intro = (
+            "No analyst cross-examined you directly. Read the Round 2 responses and answer the "
+            "SINGLE strongest argument against YOUR stance:\n\n"
+            f"{others_block}"
+        )
+        defense_instruction = (
+            "DEFENSE: identify the strongest argument against your stance from Round 2 and answer it — "
+            "refute it with a specific KEY_FACTS field and value, OR explicitly concede it if it is correct"
+        )
+
+    return (
+        "IMPORTANT: Respond in English only. Prose only — no bullet lists, no markdown headers, no code fences.\n\n"
+        f"PERSONA: {persona.title}\n"
+        f"{persona.system_prompt}\n\n"
+        f"TICKER: {ticker}\n\n"
+        "KEY_FACTS — authoritative numeric ground truth. CITATION RULE: when you cite any number, "
+        "quote its KEY_FACTS field name in parentheses, e.g. '91.39% (eps_release_surprise_pct)'. "
+        "If you cannot name the source field, do not state the number:\n"
+        f"```json\n{_kf_json_filtered(key_facts, persona.focus_fields)}\n```\n\n"
+        f"YOUR ROUND 2 POSITION:\n```\n{my_r2_take}\n```\n\n"
+        f"{challenge_intro}\n\n"
+        f"Write a 140-180 word Round 3 rebuttal for {ticker}. "
+        "Use EXACTLY these five labeled fields, in order:\n\n"
+        "STANCE: bearish | base | bullish  — add '(maintained)' or '(updated from Round 2)'\n"
+        f"{defense_instruction}\n"
+        "CONCESSION: state plainly what (if anything) the other side got right — write 'none' only if "
+        "you genuinely concede nothing. Honest concession is rigor, not weakness\n"
+        "WHAT STILL HOLDS: the core of your thesis that survives the cross-examination, with its KEY_FACTS anchor\n"
+        "CONFIDENCE: high | moderate | low — how strongly the evidence supports your stance after the exchange\n\n"
+        "Honesty rule: if the cross-examination decisively beat your case, update your STANCE — do not "
+        "cling to a losing position. But do NOT shift on head-count or social pressure; shift only on evidence.\n\n"
+        f"{_BANNED_PHRASES_RULE}\n\n"
+        f"{_FIELD_GLOSSARY}\n\n"
+        "No hedging. Plain prose per field.\n"
+    )
+
+
+def _run_rebuttal(
+    persona: Persona,
+    ticker: str,
+    key_facts: Dict[str, Any],
+    my_r2_take: str,
+    challengers_r2: List[Dict[str, str]],
+    all_r2: List[Dict[str, str]],
+) -> Dict[str, str]:
+    prompt = _rebuttal_prompt(persona, ticker, key_facts, my_r2_take, challengers_r2, all_r2)
+    t0 = time.time()
+    try:
+        take = _call_ollama(prompt, timeout=720)
+    except Exception as exc:
+        logger.warning("Persona %s R3 (rebuttal) failed: %s", persona.name, exc)
+        take = f"[{persona.title} R3 unavailable — {exc}]"
+    logger.info("Persona %s R3 rebuttal done in %.1fs (%d chars)", persona.name, time.time() - t0, len(take))
+    return {"name": persona.name, "title": persona.title, "take": take}
+
+
+# ---------------------------------------------------------------------------
+# Round 4 — brief final positions & vote
 # ---------------------------------------------------------------------------
 
 def _final_position_prompt(
@@ -559,14 +770,15 @@ def _final_position_prompt(
     key_facts: Dict[str, Any],
     my_r1_take: str,
     my_r2_take: str,
-    all_r2: List[Dict[str, str]],
+    my_r3_take: str,
+    all_r3: List[Dict[str, str]],
 ) -> str:
-    others_r2_block = "\n\n".join(
+    others_r3_block = "\n\n".join(
         f"### {t['title']}\n{t['take']}"
-        for t in all_r2 if t["name"] != persona.name
+        for t in all_r3 if t["name"] != persona.name
     )
 
-    # Domain anchor — mirrors R2 domain_constraint; prevents pile-on conformance in R3.
+    # Domain anchor — mirrors R2 domain_constraint; prevents pile-on conformance in the final round.
     # A persona must hold its domain-grounded view unless a counter-argument cited
     # new evidence from *its own* focus fields. Majority consensus is not a valid shift trigger.
     is_ta = persona.name == "technical_analyst"
@@ -575,7 +787,7 @@ def _final_position_prompt(
         domain_anchor = (
             f"FINAL-STANCE RULE: As the {persona.title}, you opened by arguing the {side} "
             f"case so it was fully heard. Now vote honestly — state the stance the TOTAL "
-            f"weight of evidence supports after three rounds. You MAY concede to the other "
+            f"weight of evidence supports after the cross-examination and rebuttals. You MAY concede to the other "
             f"side if its case proved decisively stronger; conceding when the evidence demands "
             f"it is rigor, not weakness. Do not cling to your opening advocacy against the "
             f"evidence.\n"
@@ -624,8 +836,9 @@ def _final_position_prompt(
         f"```json\n{_kf_json(key_facts)}\n```\n\n"
         f"YOUR ROUND 1:\n{my_r1_take}\n\n"
         f"YOUR ROUND 2:\n{my_r2_take}\n\n"
+        f"YOUR ROUND 3 REBUTTAL:\n{my_r3_take}\n\n"
         f"{domain_anchor}\n\n"
-        f"OTHER ANALYSTS' ROUND 2 RESPONSES:\n\n{others_r2_block}\n\n"
+        f"OTHER ANALYSTS' ROUND 3 REBUTTALS:\n\n{others_r3_block}\n\n"
         "Write your final 60-80 word position statement. "
         "Use EXACTLY these four fields:\n\n"
         "FINAL STANCE: [write exactly one word — bear, base, or bull — nothing else]\n"
@@ -644,16 +857,17 @@ def _run_final_position(
     key_facts: Dict[str, Any],
     my_r1_take: str,
     my_r2_take: str,
-    all_r2: List[Dict[str, str]],
+    my_r3_take: str,
+    all_r3: List[Dict[str, str]],
 ) -> Dict[str, str]:
-    prompt = _final_position_prompt(persona, ticker, key_facts, my_r1_take, my_r2_take, all_r2)
+    prompt = _final_position_prompt(persona, ticker, key_facts, my_r1_take, my_r2_take, my_r3_take, all_r3)
     t0 = time.time()
     try:
         take = _call_ollama(prompt, timeout=600)
     except Exception as exc:
-        logger.warning("Persona %s R3 failed: %s", persona.name, exc)
-        take = f"[{persona.title} R3 unavailable — {exc}]"
-    logger.info("Persona %s R3 done in %.1fs (%d chars)", persona.name, time.time() - t0, len(take))
+        logger.warning("Persona %s R4 (final) failed: %s", persona.name, exc)
+        take = f"[{persona.title} R4 unavailable — {exc}]"
+    logger.info("Persona %s R4 final done in %.1fs (%d chars)", persona.name, time.time() - t0, len(take))
     return {"name": persona.name, "title": persona.title, "take": take}
 
 
@@ -674,19 +888,21 @@ def _distill_prompt(
     r1 = _fmt(takes_by_round.get(1, []))
     r2 = _fmt(takes_by_round.get(2, []))
     r3 = _fmt(takes_by_round.get(3, []))
-    n_analysts = len(takes_by_round.get(3) or takes_by_round.get(1) or [])
+    r4 = _fmt(takes_by_round.get(4, []))
+    final_round = max(takes_by_round) if takes_by_round else 1
+    n_analysts = len(takes_by_round.get(final_round) or takes_by_round.get(1) or [])
 
     return (
         "IMPORTANT: Respond ONLY with valid JSON. No preamble, no markdown fences, no commentary.\n\n"
         "KEY_FACTS — authoritative numeric ground truth. When extracting evidence strings, use "
         "EXACT values from this block:\n"
         f"```json\n{_kf_json(key_facts)}\n```\n\n"
-        f"You have just reviewed a three-round analyst council deliberation on {ticker}. "
+        f"You have just reviewed a four-round analyst council deliberation on {ticker}. "
         "Extract the following into a single JSON object with these exact keys:\n\n"
         '{\n'
         '  "consensus_stance": "bearish" | "base" | "bullish",\n'
         '  "vote_distribution": {"bearish": N, "base": N, "bullish": N},\n'
-        f'  "_vote_instructions": "Count one vote per analyst from their FINAL STANCE in Round 3 only. bear=bearish, bull=bullish, base=base. Sum must equal the number of analysts ({n_analysts}). Do not use Round 1 or Round 2 stances.",\n'
+        f'  "_vote_instructions": "Count one vote per analyst from their FINAL STANCE in Round 4 only. bear=bearish, bull=bullish, base=base. Sum must equal the number of analysts ({n_analysts}). Do not use Round 1, 2, or 3 stances.",\n'
         '  "crux_disagreement": "one sentence — the specific claim the council never resolved",\n'
         '  "strongest_bull": {"analyst": "EXACT role title from the deliberation (e.g. \'Bull Analyst\', \'Growth Analyst\')", "claim": "exact claim", "evidence": "cited data fields and values"},\n'
         '  "strongest_bear": {"analyst": "EXACT role title from the deliberation (e.g. \'Bear Analyst\', \'Valuation Analyst\')", "claim": "exact claim", "evidence": "cited data fields and values"},\n'
@@ -695,8 +911,9 @@ def _distill_prompt(
         '  "key_risks": ["risk 1", "risk 2", "risk 3"]\n'
         '}\n\n'
         f"ROUND 1 — INDEPENDENT STANCES:\n{r1}\n\n"
-        f"ROUND 2 — DEBATE:\n{r2}\n\n"
-        f"ROUND 3 — FINAL POSITIONS:\n{r3}\n\n"
+        f"ROUND 2 — CROSS-EXAMINATION:\n{r2}\n\n"
+        f"ROUND 3 — REBUTTAL & DEFENSE:\n{r3}\n\n"
+        f"ROUND 4 — FINAL POSITIONS:\n{r4}\n\n"
         "Output ONLY the JSON object. No other text."
     )
 
@@ -901,32 +1118,49 @@ def run_council(
         if progress_cb:
             progress_cb(pct, label)
 
-    # Round 1 — independent stances (progress 0 → 35%)
+    # Round 1 — independent stances (progress 0 → 25%)
     takes_r1: List[Dict[str, str]] = []
     for idx, persona in enumerate(personas):
-        _cb(int(idx / n * 35), f"R1: {persona.title}")
+        _cb(int(idx / n * 25), f"R1: {persona.title}")
         takes_r1.append(_run_persona(persona, ticker, key_facts, seed_text))
 
-    # Round 2 — named-disagreement debate (progress 35 → 65%)
+    # Round 2 — assigned cross-examination (progress 25 → 47%).
+    # Challenges are routed so the leading bull and bear cases are always rebutted.
+    challenges = _assign_challenges(takes_r1, personas)
     takes_r2: List[Dict[str, str]] = []
     for idx, persona in enumerate(personas):
-        _cb(35 + int(idx / n * 30), f"R2: {persona.title}")
+        _cb(25 + int(idx / n * 22), f"R2: {persona.title}")
         my_r1  = next(t for t in takes_r1 if t["name"] == persona.name)
         others = [t for t in takes_r1  if t["name"] != persona.name]
-        takes_r2.append(_run_debate(persona, ticker, key_facts, my_r1["take"], others))
+        takes_r2.append(_run_debate(
+            persona, ticker, key_facts, my_r1["take"], others,
+            challenge_target=challenges.get(persona.name),
+        ))
 
-    # Round 3 — brief final positions (progress 65 → 80%)
+    # Round 3 — rebuttal & defense (progress 47 → 68%). Each analyst answers the
+    # cross-examination(s) leveled at them: defend with evidence, or concede.
     takes_r3: List[Dict[str, str]] = []
     for idx, persona in enumerate(personas):
-        _cb(65 + int(idx / n * 15), f"R3: {persona.title}")
+        _cb(47 + int(idx / n * 21), f"R3: {persona.title}")
+        my_r2 = next(t for t in takes_r2 if t["name"] == persona.name)
+        challengers = _challengers_of(persona.name, challenges, takes_r2)
+        takes_r3.append(_run_rebuttal(persona, ticker, key_facts, my_r2["take"], challengers, takes_r2))
+
+    # Round 4 — final positions & vote (progress 68 → 82%).
+    takes_r4: List[Dict[str, str]] = []
+    for idx, persona in enumerate(personas):
+        _cb(68 + int(idx / n * 14), f"R4: {persona.title}")
         my_r1 = next(t for t in takes_r1 if t["name"] == persona.name)
         my_r2 = next(t for t in takes_r2 if t["name"] == persona.name)
-        takes_r3.append(_run_final_position(persona, ticker, key_facts, my_r1["take"], my_r2["take"], takes_r2))
+        my_r3 = next(t for t in takes_r3 if t["name"] == persona.name)
+        takes_r4.append(_run_final_position(
+            persona, ticker, key_facts, my_r1["take"], my_r2["take"], my_r3["take"], takes_r3,
+        ))
 
-    takes_by_round = {1: takes_r1, 2: takes_r2, 3: takes_r3}
+    takes_by_round = {1: takes_r1, 2: takes_r2, 3: takes_r3, 4: takes_r4}
 
-    # Pass 1 — Distill debate to structured JSON (progress 80 → 88%)
-    _cb(80, "distill")
+    # Pass 1 — Distill debate to structured JSON (progress 82 → 88%)
+    _cb(82, "distill")
     distill_p = _distill_prompt(ticker, key_facts, takes_by_round)
     t0 = time.time()
     try:
@@ -952,10 +1186,11 @@ def run_council(
         distilled = {}
     logger.info("Distill done in %.1fs", time.time() - t0)
 
-    # Override LLM vote count with Python-computed values from R3 FINAL STANCE fields
-    r3_takes = takes_by_round.get(3, [])
-    if r3_takes:
-        _votes = _count_final_votes(r3_takes)
+    # Override LLM vote count with Python-computed values from the FINAL ROUND's
+    # FINAL STANCE fields (the last round is the vote round, regardless of count).
+    final_round_takes = takes_by_round[max(takes_by_round)] if takes_by_round else []
+    if final_round_takes:
+        _votes = _count_final_votes(final_round_takes)
         _consensus = max(_votes, key=_votes.get)
         if distilled is None:
             distilled = {}
@@ -976,9 +1211,9 @@ def run_council(
 
     if not enhanced:
         enhanced = "\n\n".join(
-            f"## {t['title']}\n\n{t['take']}" for t in takes_r3
+            f"## {t['title']}\n\n{t['take']}" for t in takes_r4
         )
-        logger.warning("Chief analyst pass empty for %s; falling back to R3 takes", ticker)
+        logger.warning("Chief analyst pass empty for %s; falling back to final-round takes", ticker)
 
     enhanced = _fix_earnings_date(_clean_memo(enhanced), key_facts)
 
@@ -988,7 +1223,8 @@ def run_council(
         f"## {p.title}\n\n"
         f"**Round 1**\n\n{next(t for t in takes_r1 if t['name'] == p.name)['take']}\n\n"
         f"**Round 2**\n\n{next(t for t in takes_r2 if t['name'] == p.name)['take']}\n\n"
-        f"**Round 3**\n\n{next(t for t in takes_r3 if t['name'] == p.name)['take']}"
+        f"**Round 3**\n\n{next(t for t in takes_r3 if t['name'] == p.name)['take']}\n\n"
+        f"**Round 4**\n\n{next(t for t in takes_r4 if t['name'] == p.name)['take']}"
         for p in personas
     )
 

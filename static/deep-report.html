@@ -540,7 +540,7 @@
             if (!timeline.length) {
               tlEl.innerHTML = '<div class="agent-empty">No deliberation posts recorded for this analysis.</div>';
             } else {
-              const ROUND_NAMES = { 1: 'Independent Stances', 2: 'Debate', 3: 'Final Positions' };
+              const ROUND_NAMES = { 1: 'Independent Stances', 2: 'Cross-Examination', 3: 'Rebuttal & Defense', 4: 'Final Positions' };
 
               function _parseStance(text) {
                 const m = text.match(/(?:FINAL\s+)?STANCE:\s*(bear(?:ish)?|base|bull(?:ish)?)/i);
@@ -553,7 +553,7 @@
                 return text
                   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
                   .replace(/\n/g, '<br>')
-                  .replace(/(STANCE|FINAL STANCE|CLAIM|EVIDENCE|MECHANISM|DISAGREEMENT|WHAT WOULD CHANGE MY MIND|RATIONALE|POSITION SHIFTED|WHY):/g,
+                  .replace(/(FINAL STANCE|STANCE|CLAIM|EVIDENCE|MECHANISM|DISAGREEMENT|WHAT WOULD CHANGE MY MIND|WHAT STILL HOLDS|DEFENSE|CONCESSION|CONFIDENCE|RATIONALE|POSITION SHIFTED|WHY):/g,
                     '<span class="dc-field">$1:</span>');
               }
 
@@ -663,6 +663,7 @@
           const mapEl = document.getElementById('debateMap');
           if (mapEl && timeline.length) {
             const ROW_H = 58;
+            const finalRound = Math.max(...timeline.map(e => e.round || 1));
             const analysts = timeline.filter(e => e.round === 1).map(e => e.agent);
             const idxOf = a => analysts.indexOf(a);
 
@@ -704,7 +705,7 @@
             let leftRows = '', rightRows = '';
             analysts.forEach(agent => {
               const col = colorMap[agent] || AVATAR_COLORS[0];
-              const r1 = stanceOf(agent, 1), r3 = stanceOf(agent, 3);
+              const r1 = stanceOf(agent, 1), r3 = stanceOf(agent, finalRound);
               const shifted = r1 && r3 && r1 !== r3;
               const unchallenged = !challenged.has(agent);
               const ini = _initials(agent);
@@ -734,7 +735,7 @@
                 <div class="dm-header">
                   <div class="dm-hdr-label dm-hdr-l">Round 1 — Initial Stances</div>
                   <div class="dm-hdr-label dm-hdr-m">Round 2 — Who Challenged Whom</div>
-                  <div class="dm-hdr-label dm-hdr-r">Round 3 — Final</div>
+                  <div class="dm-hdr-label dm-hdr-r">Round ${finalRound} — Final</div>
                 </div>
                 <div class="dm-wrap">
                   <div class="dm-col-l">${leftRows}</div>

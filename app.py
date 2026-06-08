@@ -2641,8 +2641,7 @@ def deep_analysis_agents(job_id: str, request: Request) -> JSONResponse:
         }
 
     if takes_by_round:
-        # New 3-round format
-        # Normalise keys: JSON serialises int keys as strings
+        # Multi-round format (3 or 4 rounds). Normalise keys: JSON serialises int keys as strings
         tbr = {int(k): v for k, v in takes_by_round.items()}
         # Build per-persona post lists in round order
         posts_by_name: dict = {}
@@ -2653,8 +2652,10 @@ def deep_analysis_agents(job_id: str, request: Request) -> JSONResponse:
                 if body:
                     posts_by_name.setdefault(pname, []).append(body)
 
-        # R3 takes keyed by persona name — used for per-agent verdict card
-        r3_by_name = {t.get("name", ""): (t.get("take") or "").strip() for t in tbr.get(3, [])}
+        # Final-round takes keyed by persona name — used for per-agent verdict card.
+        # The last round is the vote round, whether there are 3 or 4 rounds.
+        final_round = max(tbr.keys()) if tbr else 1
+        r3_by_name = {t.get("name", ""): (t.get("take") or "").strip() for t in tbr.get(final_round, [])}
 
         agents = []
         timeline = []
