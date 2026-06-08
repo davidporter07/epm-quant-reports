@@ -31,7 +31,7 @@
     waiting_earnings:  'Analysis will start after the projected earnings release window',
     earnings_refresh:  'Fetching same-day earnings actuals and current headlines',
     seed_doc:          'Synthesizing Kronos forecasts, EPM models, technicals & news',
-    council_personas:  'Seven specialist analysts writing grounded perspectives',
+    council_personas:  'Specialist analysts deliberating across four rounds',
     council_synthesis: 'Chief Analyst writing the final institutional research note',
     completed:         'Analysis complete',
   };
@@ -323,11 +323,18 @@
 
     try {
       const url = `/api/deep/${encodeURIComponent(ticker)}` + (forceFresh ? '?force_fresh=1' : '');
+      const body = (_roster && _roster.length) ? JSON.stringify({ roster: _roster }) : '{}';
       const r = await fetch(url, {
         method: 'POST',
         credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body,
       });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      if (!r.ok) {
+        let detail = `HTTP ${r.status}`;
+        try { const e = await r.json(); if (e.detail) detail = e.detail; } catch (_) {}
+        throw new Error(detail);
+      }
       const data = await r.json();
       if (!data.ok) throw new Error(data.detail || 'Failed to start');
       _saveJob(ticker, data.job_id);
@@ -347,6 +354,228 @@
     }
   }
 
+  // ── Council Builder ──────────────────────────────────────────────────
+  let _library = null;          // {members, trait_axes, default_roster, max_council, min_council}
+  let _roster = null;           // [{id, traits:{}, custom_text}]
+  let _activeCustomizeId = null;
+  const PER_MEMBER_MIN = 2.7;   // rough runtime per analyst
+
+  async function _loadLibrary() {
+    if (_library) return _library;
+    try {
+      const r = await fetch('/api/council/library', { credentials: 'include' });
+      if (!r.ok) return null;
+      const d = await r.json();
+      if (d && d.ok) _library = d;
+      return _library;
+    } catch (_) { return null; }
+  }
+
+  function _memberById(id) {
+    return (_library && _library.members.find(m => m.id === id)) || null;
+  }
+  function _rosterEntry(id) { return _roster && _roster.find(e => e.id === id); }
+  function _kindCount(kind) {
+    return (_roster || []).filter(e => { const m = _memberById(e.id); return m && m.kind === kind; }).length;
+  }
+  function _rosterValid() {
+    if (!_roster) return false;
+    const n = _roster.length;
+    return n >= (_library.min_council || 3) && n <= (_library.max_council || 8)
+      && _kindCount('bull') >= 1 && _kindCount('bear') >= 1;
+  }
+
+  function _initRoster() {
+    if (_roster || !_library) return;
+    _roster = (_library.default_roster || []).map(id => ({ id, traits: {}, custom_text: '' }));
+  }
+
+  function _kindTag(kind) {
+    const cls = kind === 'bull' ? 'dal-tag-bull' : kind === 'bear' ? 'dal-tag-bear' : 'dal-tag-neutral';
+    const label = kind === 'bull' ? 'Bull' : kind === 'bear' ? 'Bear' : 'Neutral';
+    return `<span class="dal-kind-tag ${cls}">${label}</span>`;
+  }
+
+  function _renderBuilder() {
+    if (!_library) return;
+    _initRoster();
+    const grid = document.getElementById('dalMemberGrid');
+    const summary = document.getElementById('dalRosterSummary');
+    const warn = document.getElementById('dalBuilderWarn');
+    const runBtn = document.getElementById('dalRunBtn');
+    const poweredCount = document.getElementById('dalPoweredCount');
+    if (!grid) return;
+
+    const n = _roster.length;
+    const est = Math.max(1, Math.round(n * PER_MEMBER_MIN));
+    const bulls = _kindCount('bull'), bears = _kindCount('bear');
+    if (summary) {
+      const ok = _rosterValid();
+      summary.innerHTML =
+        `<span class="dal-count">${n}/${_library.max_council}</span>` +
+        `<span class="dal-balance ${bulls >= 1 && bears >= 1 ? 'ok' : 'bad'}">⚖ ${bulls} bull · ${bears} bear ${ok ? '✓' : ''}</span>` +
+        `<span class="dal-est">~${est} min</span>`;
+    }
+    if (poweredCount) poweredCount.textContent = `${n} Analyst${n === 1 ? '' : 's'}`;
+
+    grid.innerHTML = _library.members.map(m => {
+      const sel = !!_rosterEntry(m.id);
+      const customized = sel && _isCustomized(m.id);
+      return `<div class="dal-member ${sel ? 'is-selected' : ''}" data-id="${m.id}">
+        <div class="dal-member-top">
+          <span class="dal-member-name">${m.title}</span>
+          ${_kindTag(m.kind)}
+        </div>
+        <div class="dal-member-blurb">${m.blurb || ''}</div>
+        <div class="dal-member-chips">
+          ${m.style_label ? `<span class="dal-chip">${m.style_label}</span>` : ''}
+          ${m.econ_label ? `<span class="dal-chip">${m.econ_label}</span>` : ''}
+        </div>
+        <div class="dal-member-actions">
+          <button type="button" class="dal-toggle-btn" data-act="toggle" data-id="${m.id}">${sel ? '✓ Selected' : '+ Add'}</button>
+          ${sel ? `<button type="button" class="dal-gear-btn ${customized ? 'is-on' : ''}" data-act="customize" data-id="${m.id}" title="Customize personality">⚙</button>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+
+    grid.querySelectorAll('[data-act]').forEach(b => {
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = b.getAttribute('data-id');
+        if (b.getAttribute('data-act') === 'toggle') _toggleMember(id);
+        else _openCustomize(id);
+      });
+    });
+
+    if (warn) warn.textContent = _rosterValid() ? '' :
+      (n > _library.max_council ? `Max ${_library.max_council} members.`
+        : _kindCount('bull') < 1 ? 'Add at least one bullish analyst.'
+        : _kindCount('bear') < 1 ? 'Add at least one bearish analyst.'
+        : `Pick at least ${_library.min_council} analysts.`);
+
+    // Gate the run button on a valid roster (only while builder governs the launch view).
+    if (runBtn && !runBtn.dataset.running) {
+      runBtn.disabled = !_rosterValid();
+      runBtn.title = _rosterValid() ? '' : 'Council needs 1 bull + 1 bear and 3-8 members';
+    }
+    if (_activeCustomizeId && !_rosterEntry(_activeCustomizeId)) {
+      _activeCustomizeId = null;
+      const panel = document.getElementById('dalCustomizePanel');
+      if (panel) panel.style.display = 'none';
+    } else if (_activeCustomizeId) {
+      _renderCustomize(_activeCustomizeId);
+    }
+  }
+
+  function _isCustomized(id) {
+    const e = _rosterEntry(id);
+    if (!e) return false;
+    return (e.custom_text && e.custom_text.trim()) || Object.values(e.traits || {}).some(v => v);
+  }
+
+  function _toggleMember(id) {
+    const i = _roster.findIndex(e => e.id === id);
+    if (i >= 0) {
+      _roster.splice(i, 1);
+      if (_activeCustomizeId === id) _activeCustomizeId = null;
+    } else {
+      if (_roster.length >= (_library.max_council || 8)) { _renderBuilder(); return; }
+      _roster.push({ id, traits: {}, custom_text: '' });
+    }
+    _renderBuilder();
+  }
+
+  function _openCustomize(id) {
+    _activeCustomizeId = (_activeCustomizeId === id) ? null : id;
+    const panel = document.getElementById('dalCustomizePanel');
+    if (!panel) return;
+    if (!_activeCustomizeId) { panel.style.display = 'none'; return; }
+    _renderCustomize(id);
+  }
+
+  function _renderCustomize(id) {
+    const panel = document.getElementById('dalCustomizePanel');
+    const m = _memberById(id);
+    const entry = _rosterEntry(id);
+    if (!panel || !m || !entry) return;
+    panel.style.display = '';
+    const axes = _library.trait_axes;
+    const selects = Object.keys(axes).map(axisKey => {
+      const axis = axes[axisKey];
+      const cur = (entry.traits || {})[axisKey] || '';
+      const opts = ['<option value="">Default</option>'].concat(
+        axis.options.map(o => `<option value="${o}" ${o === cur ? 'selected' : ''}>${o}</option>`)
+      ).join('');
+      return `<label class="dal-trait"><span>${axis.label}</span><select data-axis="${axisKey}">${opts}</select></label>`;
+    }).join('');
+    const max = _library.custom_text_max || 600;
+    panel.innerHTML = `
+      <div class="dal-customize-head">Customize <strong>${m.title}</strong> ${_kindTag(m.kind)}
+        <button type="button" class="dal-customize-close" data-close="1">✕</button></div>
+      <div class="dal-trait-row">${selects}</div>
+      <div class="dal-custom-guide">Write a custom personality (optional). Describe their <em>investing philosophy, what evidence they weight most, temperament, and economic worldview</em>.<br>
+        <span class="dal-custom-eg">e.g. "A contrarian deep-value investor in the Graham tradition who distrusts momentum, demands a margin of safety, and reads the current rate regime as restrictive."</span></div>
+      <textarea class="dal-custom-text" maxlength="${max}" placeholder="Leave blank to use the default personality…">${(entry.custom_text || '').replace(/</g, '&lt;')}</textarea>
+      <div class="dal-custom-foot"><span class="dal-custom-count">0/${max}</span>
+        <span class="dal-custom-note">Style only — analysts always stay grounded in the data.</span></div>`;
+
+    panel.querySelectorAll('select[data-axis]').forEach(sel => {
+      sel.addEventListener('change', () => {
+        entry.traits = entry.traits || {};
+        if (sel.value) entry.traits[sel.getAttribute('data-axis')] = sel.value;
+        else delete entry.traits[sel.getAttribute('data-axis')];
+        _renderBuilderGearOnly();
+      });
+    });
+    const ta = panel.querySelector('.dal-custom-text');
+    const cnt = panel.querySelector('.dal-custom-count');
+    const _upd = () => { if (cnt) cnt.textContent = `${ta.value.length}/${max}`; };
+    _upd();
+    ta.addEventListener('input', () => { entry.custom_text = ta.value; _upd(); _renderBuilderGearOnly(); });
+    panel.querySelector('[data-close]')?.addEventListener('click', () => { _activeCustomizeId = null; panel.style.display = 'none'; _renderBuilderGearOnly(); });
+  }
+
+  // Light refresh of just the gear "customized" state + summary, without
+  // re-rendering the whole grid (keeps focus in the textarea).
+  function _renderBuilderGearOnly() {
+    const grid = document.getElementById('dalMemberGrid');
+    if (!grid) return;
+    (_roster || []).forEach(e => {
+      const gear = grid.querySelector(`.dal-gear-btn[data-id="${e.id}"]`);
+      if (gear) gear.classList.toggle('is-on', _isCustomized(e.id));
+    });
+  }
+
+  async function _initBuilder() {
+    const lib = await _loadLibrary();
+    if (!lib) return;
+    _initRoster();
+    _renderBuilder();
+    const toggle = document.getElementById('dalBuilderToggle');
+    const builder = document.getElementById('dalCouncilBuilder');
+    const chev = document.getElementById('dalBuilderChevron');
+    if (toggle && builder && !toggle.dataset.wired) {
+      toggle.dataset.wired = '1';
+      toggle.addEventListener('click', () => {
+        const open = builder.style.display === 'none';
+        builder.style.display = open ? '' : 'none';
+        if (chev) chev.textContent = open ? '▴' : '▾';
+        if (open) _renderBuilder();
+      });
+    }
+    const reset = document.getElementById('dalResetRoster');
+    if (reset && !reset.dataset.wired) {
+      reset.dataset.wired = '1';
+      reset.addEventListener('click', () => {
+        _roster = (_library.default_roster || []).map(id => ({ id, traits: {}, custom_text: '' }));
+        _activeCustomizeId = null;
+        const panel = document.getElementById('dalCustomizePanel');
+        if (panel) panel.style.display = 'none';
+        _renderBuilder();
+      });
+    }
+  }
+
   // Called by search.js after each ticker loads
   window.initDeepAnalysis = function (ticker) {
     _stopPolling();
@@ -355,6 +584,9 @@
     const lab = document.getElementById('deepAnalysisLab');
     if (!lab) return;
     lab.style.display = '';
+
+    // Load the council library + render the builder (collapsed by default).
+    _initBuilder();
 
     // Update ticker badge
     const badge = document.getElementById('dalTickerBadge');
