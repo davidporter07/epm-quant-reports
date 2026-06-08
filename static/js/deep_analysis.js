@@ -453,10 +453,16 @@
         : _kindCount('bear') < 1 ? 'Add at least one bearish analyst.'
         : `Pick at least ${_library.min_council} analysts.`);
 
-    // Gate the run button on a valid roster (only while builder governs the launch view).
+    // Gate both run buttons (card + modal) on a valid roster.
+    const valid = _rosterValid();
     if (runBtn && !runBtn.dataset.running) {
-      runBtn.disabled = !_rosterValid();
-      runBtn.title = _rosterValid() ? '' : 'Council needs 1 bull + 1 bear and 3-8 members';
+      runBtn.disabled = !valid;
+      runBtn.title = valid ? '' : 'Council needs 1 bull + 1 bear and 3-8 members';
+    }
+    const builderRun = document.getElementById('dalBuilderRun');
+    if (builderRun) {
+      builderRun.disabled = !valid;
+      builderRun.title = valid ? '' : 'Council needs 1 bull + 1 bear and 3-8 members';
     }
     if (_activeCustomizeId && !_rosterEntry(_activeCustomizeId)) {
       _activeCustomizeId = null;
@@ -491,6 +497,10 @@
     if (!panel) return;
     if (!_activeCustomizeId) { panel.style.display = 'none'; return; }
     _renderCustomize(id);
+    // The customize panel sits at the top of the modal — bring it into view
+    // so tuning a personality never requires scrolling the page.
+    const inner = document.querySelector('#councilBuilderModal .modal-inner');
+    if (inner) inner.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   function _renderCustomize(id) {
@@ -546,21 +556,36 @@
     });
   }
 
+  function _closeBuilderModal() {
+    const modal = document.getElementById('councilBuilderModal');
+    if (modal) modal.classList.remove('active');
+  }
+
   async function _initBuilder() {
     const lib = await _loadLibrary();
     if (!lib) return;
     _initRoster();
     _renderBuilder();
     const toggle = document.getElementById('dalBuilderToggle');
-    const builder = document.getElementById('dalCouncilBuilder');
-    const chev = document.getElementById('dalBuilderChevron');
-    if (toggle && builder && !toggle.dataset.wired) {
+    const modal = document.getElementById('councilBuilderModal');
+    const closeBtn = document.getElementById('dalBuilderClose');
+    if (toggle && modal && !toggle.dataset.wired) {
       toggle.dataset.wired = '1';
-      toggle.addEventListener('click', () => {
-        const open = builder.style.display === 'none';
-        builder.style.display = open ? '' : 'none';
-        if (chev) chev.textContent = open ? '▴' : '▾';
-        if (open) _renderBuilder();
+      toggle.addEventListener('click', () => { _renderBuilder(); modal.classList.add('active'); });
+      closeBtn?.addEventListener('click', _closeBuilderModal);
+      // Click on the backdrop (not the inner card) closes the modal.
+      modal.addEventListener('click', (e) => { if (e.target === modal) _closeBuilderModal(); });
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && modal.classList.contains('active')) _closeBuilderModal();
+      });
+    }
+    const builderRun = document.getElementById('dalBuilderRun');
+    if (builderRun && !builderRun.dataset.wired) {
+      builderRun.dataset.wired = '1';
+      builderRun.addEventListener('click', () => {
+        if (!_rosterValid()) return;
+        _closeBuilderModal();
+        _runDeepAnalysis(_currentTicker, false);
       });
     }
     const reset = document.getElementById('dalResetRoster');

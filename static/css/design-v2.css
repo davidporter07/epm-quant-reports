@@ -3738,3 +3738,26 @@ body[data-auth-state="member"] .pw-guest-prompt {
 }
 .dal-reset-btn:hover { color: var(--text); border-color: var(--accent); }
 .dal-builder-warn { font-size: 11px; color: #e0a23a; font-weight: 600; }
+
+/* Council Builder as a centered modal (reuses .modal / .modal-soft / .modal-inner) */
+.dal-builder-modal {
+  width: min(760px, 94vw);
+  max-height: 86vh;
+  overflow-y: auto;
+  text-align: left;
+}
+.dal-builder-modal .dal-roster-summary { margin: 6px 0 10px; }
+.dal-builder-modal .dal-member-grid { max-height: 46vh; }
+.dal-builder-run {
+  margin-left: auto;
+  padding: 8px 18px;
+  border-radius: 8px;
+  border: none;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  background: linear-gradient(135deg, #d4a84b 0%, #a07828 100%);
+  color: #0a1928;
+}
+.dal-builder-run:disabled { opacity: .5; cursor: not-allowed; }
+.dal-builder-run:not(:disabled):hover { filter: brightness(1.07); }

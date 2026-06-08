@@ -39,6 +39,11 @@ def test_assign_challenges_covers_both_poles():
     # Nobody challenges themselves.
     for challenger, target in assignments.items():
         assert challenger != target["name"]
+    # Full coverage: EVERY member receives at least one incoming challenge.
+    from collections import Counter
+    indeg = Counter(t["name"] for t in assignments.values())
+    for p in personas:
+        assert indeg.get(p.name, 0) >= 1, f"{p.name} left unchallenged"
 
 
 def test_assign_challenges_pole_from_stance_when_no_advocate():
@@ -65,6 +70,25 @@ def test_challengers_of():
     # At least one analyst challenged the bull pole, and we can resolve their R2 take.
     assert len(challengers) >= 1
     assert all("name" in c for c in challengers)
+
+
+def test_clean_memo_strips_keyfacts_and_fills_placeholders():
+    kf = {"current_price": 307.34, "trailing_pe": 35.9, "forward_pe": 38.5,
+          "rel_perf_1m_diff_pct": -0.8, "mna_note": "acquired AI-focused firms",
+          "volatility_regime": "ELEVATED"}
+    # (KEY_FACTS: field) citation removed (value precedes it).
+    assert lc._clean_memo("trades at $307.34 (KEY_FACTS: current_price).", kf) == "trades at $307.34."
+    # Unfilled [field] placeholders substituted from KEY_FACTS.
+    out = lc._clean_memo("P/E of [trailing_pe] and [forward_pe].", kf)
+    assert "35.9" in out and "38.5" in out and "[" not in out
+    # Negative pct placeholder filled.
+    assert lc._clean_memo("differential of [rel_perf_1m_diff_pct]%.", kf) == "differential of -0.8%."
+    # Parenthesized bracket citation removed entirely.
+    assert lc._clean_memo("firms ([mna_note]) position it.", kf) == "firms position it."
+    # Bare (KEY_FACTS) tag removed.
+    assert lc._clean_memo("risk (KEY_FACTS: volatility_regime) rises.", kf) == "risk rises."
+    # Legit parenthetical (not a field token) preserved.
+    assert "(14-day)" in lc._clean_memo("RSI (14-day) at 58.3 (rsi_14).", kf)
 
 
 def _stub_ollama(prompt, timeout=600, mode=None):
