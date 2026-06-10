@@ -249,6 +249,55 @@ migration commit(s) + `python post_run.py`. No env changes to undo.
 
 ---
 
+## PR D — Data freshness hard gates (IMPLEMENTED 2026-06-10, pending deploy approval)
+
+Prevents stale market-data inputs from silently producing reports. Root cause: the
+YCharts scraper was frozen for 24+ days (5/08→6/01) with only a console warning.
+
+### Design
+
+New module `services/data_freshness.py` — pure functions, injectable params for
+tests, never raises out of the check runner. Results persisted to
+`data/data_freshness.json` (synced via `data/` SYNC_DIRS) so `/api/health`
+surfaces pipeline-time verdicts; server never re-runs mtime checks.
+
+**Critical checks** (block email when `DATA_FRESHNESS_ENFORCE=1`):
+
+| Check | File | Rule |
+|---|---|---|
+| `ycharts_scrape` | `data/ycharts_live.json` | `scrape_date` ≤ `FRESH_YCHARTS_MAX_AGE_DAYS` (default 3) |
+| `features_csv` | `data/features_from_ycharts.csv` | exists + mtime ≤ max age |
+| `arbitrated` | `data/market_data_arbitrated.json` | `arbitrated_date == today` on market days |
+
+**Optional checks** (warn only, never block):
+`enrichment`, `economic_calendar`, `dl_forecasts`
+
+### Wiring
+
+- `send_email.py`: after the narrative gate — run checks, write report, print warns,
+  block if `gate_message()` returns non-None (enforce=1 + critical fail only).
+- `post_run.py`: warn-only summary before sync. Never blocks manual deploys.
+- `app.py /api/health`: new `checks["data_freshness"]` section. File absent = not
+  degraded. Degrades only when report shows critical fail + enforce=true + market open.
+
+### Deployment sequence
+
+1. `python -m pytest tests/ -q` → 350 passed.
+2. Add to **laptop** `.env`: `DATA_FRESHNESS_ENFORCE=0` (and server `.env` for parity).
+3. `python post_run.py` — services/data_freshness.py syncs, health shows
+   `data_freshness: {present: false}` until the first pipeline run.
+4. Observe tomorrow's 9am run: warn lines in send_email output,
+   `data/data_freshness.json` produced + synced, health `present:true`.
+5. After clean observed run: set `DATA_FRESHNESS_ENFORCE=1` in laptop `.env`.
+   No redeploy needed for the pipeline gate.
+
+### Rollback
+
+- **Behavior**: set `DATA_FRESHNESS_ENFORCE=0` — instant, no code change.
+- **Code**: `git revert a70365a ffb5bf3 ad41fe7` + `python post_run.py`.
+
+---
+
 ## Open risks (running list)
 
 - Server watchdog alerts require `GMAIL_APP_PASSWORD` on the server — if
