@@ -1,4 +1,7 @@
-"""PR 0/1: daily wrapper orchestration + live-site freshness check (fully mocked)."""
+"""PR 0/1: daily wrapper orchestration + live-site freshness check (fully mocked).
+PR A: dirty-code guard."""
+import os
+
 import run_daily
 import check_site_freshness as csf
 
@@ -78,6 +81,31 @@ def test_undeterminable_branch_does_not_block():
         [], runner=runner, fresh_checker=lambda: (True, "fresh"),
         branch_checker=lambda: "")
     assert rc == 0
+
+
+# --- dirty-code guard (PR A) ------------------------------------------------
+
+def test_dirty_tree_refuses_run_exit_4():
+    runner = _recording_runner([0, 0])
+    rc = run_daily.main(
+        [], runner=runner, fresh_checker=lambda: (True, "fresh"),
+        dirty_checker=lambda: ["app.py"],
+    )
+    assert rc == 4
+    assert runner.calls == [], "must not generate/email/deploy when tree is dirty"
+
+
+def test_allow_dirty_flag_bypasses_guard(monkeypatch):
+    from post_run import _ALLOW_DIRTY_ENV
+    monkeypatch.delenv(_ALLOW_DIRTY_ENV, raising=False)
+    runner = _recording_runner([0, 0])
+    rc = run_daily.main(
+        ["--allow-dirty"], runner=runner, fresh_checker=lambda: (True, "fresh"),
+        dirty_checker=lambda: ["app.py"],
+    )
+    assert rc == 0
+    assert any("send_email.py" in " ".join(c) for c in runner.calls)
+    assert os.environ.get(_ALLOW_DIRTY_ENV) == "1"
 
 
 # --- check_site_freshness logic --------------------------------------------

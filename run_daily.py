@@ -27,6 +27,7 @@ Exit codes:
   1  report generation/email step failed — nothing deployed
   2  site is stale/unreachable after sync — investigate
   3  wrong branch — refused to run (working tree not on the pipeline branch)
+  4  dirty working tree — refused to run (uncommitted deployable code changes)
 """
 from __future__ import annotations
 
@@ -131,6 +132,7 @@ def main(
     runner: Optional[Callable[[list[str]], int]] = None,
     fresh_checker: Optional[Callable[[], Tuple[bool, str]]] = None,
     branch_checker: Optional[Callable[[], str]] = None,
+    dirty_checker: Optional[Callable[[], list[str]]] = None,
 ) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--skip-freshness", action="store_true",
@@ -138,6 +140,8 @@ def main(
     ap.add_argument("--allow-branch", action="store_true",
                     help=f"Bypass the {PIPELINE_BRANCH!r}-branch guard (intentional "
                          f"manual run from a feature/research branch).")
+    ap.add_argument("--allow-dirty", action="store_true",
+                    help="Bypass the dirty-code guard (run with uncommitted changes).")
     args = ap.parse_args(argv)
 
     runner = runner or _default_runner
@@ -163,6 +167,29 @@ def main(
                 _record_status("branch_guard", False, msg)
                 _send_alert("branch_guard", msg)
                 return 3
+
+    # 0b. Dirty-code guard — refuse to ship uncommitted deployable code changes.
+    #     Inert under pytest unless dirty_checker is injected (mirrors branch guard).
+    from post_run import _ALLOW_DIRTY_ENV, _git_dirty_code_paths
+    if args.allow_dirty:
+        os.environ[_ALLOW_DIRTY_ENV] = "1"
+    else:
+        dirty_fn = dirty_checker or (
+            None if "PYTEST_CURRENT_TEST" in os.environ else _git_dirty_code_paths
+        )
+        if dirty_fn is not None:
+            dirty = dirty_fn()
+            if dirty:
+                msg = (
+                    f"REFUSING TO RUN: {len(dirty)} deployable code file(s) have "
+                    f"uncommitted changes: {', '.join(dirty[:5])}"
+                    + ("..." if len(dirty) > 5 else "")
+                    + ". Commit or stash, or override with --allow-dirty."
+                )
+                print(f"[run_daily] {msg}")
+                _record_status("dirty_guard", False, msg)
+                _send_alert("dirty_guard", msg)
+                return 4
 
     # 1. Generate + email. send_email.py owns the freshness GATE that blocks stale
     #    or non-LLM reports, so a non-zero exit here means we must NOT deploy.

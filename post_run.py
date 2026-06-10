@@ -19,6 +19,7 @@ import argparse
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -57,6 +58,165 @@ SYNC_PY_FILES = [
     "pm_research.py",
     "research_service.py",
 ]
+
+# Deployable CODE paths — dirty state here means the deploy would ship code
+# that git doesn't know about. Pipeline-generated artifacts (models/, data/,
+# charts/, epm-quant-reports/, docs/) are mutated daily and are excluded.
+_DEPLOY_CODE_PATHS = SYNC_PY_FILES + [
+    "services", "providers", "config", "static", "commentary",
+]
+
+# Tracked root .py files that are laptop-only BY DESIGN: research scripts,
+# training pipelines, build tools, orchestrators, and one-off harnesses.
+# Every tracked root .py must appear in SYNC_PY_FILES or here.
+# tests/test_post_run_sync.py::test_root_py_inventory_classified enforces this.
+_NOT_DEPLOYED_PY = frozenset({
+    "_test_qwen_raw.py", "_test_recap_scenarios.py", "_test_repair.py",
+    "arimax_model.py", "build_directional_feature_panel.py",
+    "build_growth24_foundation_sidecar_features.py",
+    "build_growth24_pead_hmm_panel.py", "build_growth24_sector_relative_panel.py",
+    "build_quantcup_price_dl_panel.py", "build_training_dataset.py",
+    "check_site_freshness.py", "combine_growth24_stress_weight_36c.py",
+    "compare_llm_models.py", "data_utils.py", "deep_learning_model.py",
+    "dl_abstention_gate_eval.py", "dl_cap_aware_replay_report.py",
+    "dl_champion_card_report.py", "dl_champion_failure_analysis.py",
+    "dl_cleanbaseline_eval.py", "dl_directional_loss_experiment.py",
+    "dl_dual_head_experiment.py", "dl_expanded_feature_ensemble_eval.py",
+    "dl_expanded_feature_seed_grid.py", "dl_experiment_eval.py",
+    "dl_experiment_train.py", "dl_growth24_current_control_gate.py",
+    "dl_growth24_dispersion_gate_backtest.py", "dl_growth24_encoder_probe.py",
+    "dl_growth24_ensemble_gate.py", "dl_growth24_paper_maturity_check.py",
+    "dl_growth24_paper_outcome.py", "dl_growth24_shadow_paper.py",
+    "dl_hmm_abstention_filter_report.py", "dl_long_only_gate_eval.py",
+    "dl_panel_diagnostics.py", "dl_rank_head_distill_train.py",
+    "dl_rank_head_ensemble_eval.py", "dl_rank_head_experiment.py",
+    "dl_rank_head_historical_blind_loop.py", "dl_rank_head_paper_trade.py",
+    "dl_rank_head_shadow_backtest.py", "dl_rank_head_shadow_forecast.py",
+    "dl_rank_head_shadow_score.py", "dl_rank_head_walkforward.py",
+    "dl_regime_gate_report.py", "dl_regime_test_commands.py",
+    "dl_rolling_sign_calibration_eval.py", "dl_shadow_diagnostic_report.py",
+    "dl_sign_calibration_eval.py", "dl_sign_regularized_experiment.py",
+    "dl_ticker_cooldown_regime_replay.py", "dl_ticker_cooldown_replay.py",
+    "dl_ticker_cooldown_stress_diff_report.py",
+    "dl_ticker_cooldown_tolerance_regime_replay.py",
+    "dl_ticker_holdout_report.py", "dl_warmstart_eval.py", "dl_warmstart_train.py",
+    "exp5_log_volume_clean_baseline.py", "fama_french_model.py",
+    "feature_dashboard_gen.py", "feature_drift_monitor.py",
+    "feature_promoter.py", "feature_tester.py", "feature_validator.py",
+    "forecast_common.py", "gather_qlora_data.py", "generate_charts.py",
+    "generate_toggle_chart.py", "institutional_model.py", "linear_model.py",
+    "ml_model.py", "model_leaderboard.py", "model_ranking.py", "news_store.py",
+    "post_run.py", "push_to_github.py", "quantconnect_model.py",
+    "record_predictions.py", "refresh_fama_french_factors.py",
+    "refresh_growth24_price_cache.py", "refresh_quant_cup_price_cache.py",
+    "regime_detector.py", "run_daily.py", "scrape_ycharts.py",
+    "snapshot_engine.py", "summarize_distill_sweep.py",
+    "sync_forecasts_to_features.py", "test_earnings_trigger.py",
+    "universe_config.py", "update_sentiment.py",
+})
+
+_ALLOW_DIRTY_ENV = "EPM_ALLOW_DIRTY_DEPLOY"
+_HEALTH_URL = "https://epm-market-intelligence.com/api/health"
+
+
+def _git_dirty_code_paths() -> list[str]:
+    """Return deployable code paths with uncommitted changes. Never raises."""
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "--"] + _DEPLOY_CODE_PATHS,
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            print("[SYNC] WARNING: git status failed — skipping dirty check")
+            return []
+        dirty = []
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(None, 1)
+            dirty.append(parts[1] if len(parts) == 2 else parts[0])
+        return dirty
+    except Exception as e:
+        print(f"[SYNC] WARNING: git check failed ({e}) — skipping dirty check")
+        return []
+
+
+def _unlisted_root_py() -> list[str]:
+    """Return tracked root .py files not in SYNC_PY_FILES or _NOT_DEPLOYED_PY."""
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "*.py"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            return []
+        deployed = set(SYNC_PY_FILES)
+        return [
+            name for name in result.stdout.splitlines()
+            if "/" not in name and name.endswith(".py")
+            and name not in deployed
+            and name not in _NOT_DEPLOYED_PY
+        ]
+    except Exception:
+        return []
+
+
+def _restart_service(dest: str, key_args: list[str]) -> bool:
+    """SSH restart of epm.service on the server. Returns True on success."""
+    ssh_args = [a for a in key_args if a != "-O"]
+    cmd = ["ssh", *ssh_args, dest, "sudo systemctl restart epm.service"]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if result.returncode == 0:
+            print("[SYNC] epm.service restarted.")
+            return True
+        print(f"[SYNC] Restart failed (exit {result.returncode}): {result.stderr.strip()}")
+        return False
+    except subprocess.TimeoutExpired:
+        print("[SYNC] Restart timed out after 60s.")
+        return False
+    except Exception as e:
+        print(f"[SYNC] Restart failed: {e}")
+        return False
+
+
+def _probe_health(
+    url: str = _HEALTH_URL,
+    attempts: int = 6,
+    delay: int = 3,
+) -> tuple[bool, str]:
+    """Probe /api/health after restart. Returns (reachable, detail).
+    HTTP 200 with any valid JSON counts as reachable; degraded passes with a warning."""
+    import json as _json
+    import urllib.request as _req
+    import urllib.error as _uerr
+    for attempt in range(1, attempts + 1):
+        try:
+            with _req.urlopen(url, timeout=10) as resp:
+                if resp.status != 200:
+                    if attempt < attempts:
+                        time.sleep(delay)
+                        continue
+                    return False, f"HTTP {resp.status}"
+                data = _json.loads(resp.read().decode())
+                status = data.get("status", "unknown")
+                if status != "ok":
+                    print("  " + "!" * 64)
+                    print(f"  [SYNC][WARN] /api/health returned status={status!r}.")
+                    print("  Deploy succeeded but the app reports degraded state.")
+                    print("  " + "!" * 64)
+                return True, f"status={status}"
+        except _uerr.URLError:
+            if attempt < attempts:
+                print(f"[SYNC] /api/health not yet reachable "
+                      f"(attempt {attempt}/{attempts}), retrying in {delay}s...")
+                time.sleep(delay)
+            else:
+                return False, "unreachable after all retries"
+        except Exception as e:
+            return False, f"probe error: {e}"
+    return False, "unreachable"
 
 
 def run(cmd: list[str]) -> int:
@@ -121,14 +281,38 @@ def _scp_dir(local: Path, remote: str, key_args: list[str]) -> int:
         return 1
 
 
-def sync_to_server() -> bool:
-    """Push outputs + app files to the server. Returns True only if EVERY transfer
-    succeeded. Previously this returned None unconditionally, so a total failure (e.g.
-    the server offline — every scp times out) looked identical to success and the
-    deploy silently no-op'd. Now it tallies successes and shouts on any failure."""
-    print("\n[SYNC] Pushing output to server...")
+def sync_to_server(*, allow_dirty: bool = False) -> bool:
+    """Push outputs + app files to the server, restart the service, and verify
+    /api/health. Returns True only if all transfers, the restart, and the health
+    probe succeed."""
     dest = f"{SERVER_USER}@{SERVER_HOST}"
     key_args = ["-i", SSH_KEY, "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=20", "-O"]
+
+    if not allow_dirty and os.getenv(_ALLOW_DIRTY_ENV, "") not in ("1", "true"):
+        dirty = _git_dirty_code_paths()
+        if dirty:
+            print("  " + "!" * 64)
+            print(f"  [SYNC] REFUSING TO DEPLOY: {len(dirty)} deployable code file(s)")
+            print("  have uncommitted changes:")
+            for f in dirty:
+                print(f"    {f}")
+            print("  Commit or stash before deploying. Override with:")
+            print("    python post_run.py --allow-dirty")
+            print(f"    {_ALLOW_DIRTY_ENV}=1 python post_run.py")
+            print("  " + "!" * 64)
+            return False
+
+    unlisted = _unlisted_root_py()
+    if unlisted:
+        print("  " + "!" * 64)
+        print(f"  [SYNC][WARN] {len(unlisted)} root .py file(s) are unclassified")
+        print("  (not in SYNC_PY_FILES or _NOT_DEPLOYED_PY) and will NOT be deployed:")
+        for f in unlisted:
+            print(f"    {f}")
+        print("  Add to SYNC_PY_FILES (server) or _NOT_DEPLOYED_PY (laptop-only).")
+        print("  " + "!" * 64)
+
+    print("\n[SYNC] Pushing output to server...")
     errors = 0
     ok = 0
 
@@ -164,7 +348,22 @@ def sync_to_server() -> bool:
             errors += 1
 
     if errors == 0:
-        print(f"[SYNC] All {ok} target(s) synced successfully.")
+        if not _restart_service(dest, key_args):
+            print("  " + "!" * 64)
+            print("  [SYNC][FAILED] Code synced but epm.service RESTART FAILED.")
+            print("  The server may still be running OLD code. Investigate with:")
+            print(f"  ssh dporter02@{SERVER_HOST} sudo systemctl status epm.service")
+            print("  " + "!" * 64)
+            return False
+        health_ok, health_detail = _probe_health()
+        if not health_ok:
+            print("  " + "!" * 64)
+            print("  [SYNC][FAILED] Restart issued but /api/health is unreachable.")
+            print(f"  Detail: {health_detail}")
+            print("  Check: journalctl -u epm.service -n 50")
+            print("  " + "!" * 64)
+            return False
+        print(f"[SYNC] All {ok} target(s) deployed + restarted + health: {health_detail}")
         return True
 
     # Failure path — make it impossible to miss (this masked the 2026-06-02 offline deploy).
@@ -183,6 +382,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tickers", type=str, default=MAG7_DEFAULT)
     ap.add_argument("--skip-dl", action="store_true", help="Skip deep learning inference")
+    ap.add_argument("--allow-dirty", action="store_true",
+                    help="Bypass the dirty-code guard (deploy with uncommitted changes).")
     args = ap.parse_args()
 
     py = sys.executable
@@ -252,7 +453,7 @@ def main():
 
     # Sync output to server — surface a failed deploy loudly (non-zero exit) instead of
     # silently "succeeding" while nothing transferred.
-    if not sync_to_server():
+    if not sync_to_server(allow_dirty=args.allow_dirty):
         print("[post_run] Server sync FAILED — see banner above. Outputs are NOT deployed.")
         return 1
     return 0

@@ -1,5 +1,8 @@
 """PR0.1: post_run sync must use relative names (no Windows absolute C:\\ paths that
-scp parses as host:path) and must exclude server-owned/local-only/managed entries."""
+scp parses as host:path) and must exclude server-owned/local-only/managed entries.
+PR A: dirty-tree guard, unlisted-py warning, restart+probe after sync."""
+import urllib.request
+
 import pytest
 
 pr = pytest.importorskip("post_run")
@@ -68,3 +71,128 @@ def test_scp_dir_empty_returns_zero(tmp_path, monkeypatch):
     rc = pr._scp_dir(tmp_path, "user@host:/opt/app/data", ["-i", "key"])
     assert rc == 0
     assert called["ran"] is False  # nothing to send -> no scp invocation
+
+
+# --- PR A: dirty guard, unlisted-py warning, restart + probe -----------------
+
+class _OK:
+    returncode = 0
+
+
+def _stub_scp_ok(monkeypatch):
+    monkeypatch.setattr(pr.subprocess, "run", lambda *a, **kw: _OK())
+
+
+def test_sync_refuses_dirty_tree(monkeypatch):
+    """Dirty code paths must refuse the deploy before any scp runs."""
+    monkeypatch.setattr(pr, "_git_dirty_code_paths", lambda: ["app.py"])
+    scp_calls = []
+    monkeypatch.setattr(pr.subprocess, "run", lambda cmd, **kw: scp_calls.append(cmd) or _OK())
+    assert pr.sync_to_server() is False
+    assert not scp_calls, "scp must not run when tree is dirty"
+
+
+def test_sync_allows_dirty_with_flag(monkeypatch):
+    """allow_dirty=True bypasses the dirty guard and proceeds to transfers."""
+    monkeypatch.setattr(pr, "_git_dirty_code_paths", lambda: ["app.py"])
+    monkeypatch.setattr(pr, "_unlisted_root_py", lambda: [])
+    monkeypatch.setattr(pr, "_restart_service", lambda dest, key_args: True)
+    monkeypatch.setattr(pr, "_probe_health", lambda **kw: (True, "status=ok"))
+    _stub_scp_ok(monkeypatch)
+    assert pr.sync_to_server(allow_dirty=True) is True
+
+
+def test_sync_allows_dirty_via_env_var(monkeypatch):
+    """EPM_ALLOW_DIRTY_DEPLOY=1 bypasses the dirty guard."""
+    monkeypatch.setattr(pr, "_git_dirty_code_paths", lambda: ["app.py"])
+    monkeypatch.setattr(pr, "_unlisted_root_py", lambda: [])
+    monkeypatch.setattr(pr, "_restart_service", lambda dest, key_args: True)
+    monkeypatch.setattr(pr, "_probe_health", lambda **kw: (True, "status=ok"))
+    monkeypatch.setenv(pr._ALLOW_DIRTY_ENV, "1")
+    _stub_scp_ok(monkeypatch)
+    assert pr.sync_to_server() is True
+
+
+def test_sync_warns_on_unlisted_py(monkeypatch, capsys):
+    """Unlisted root .py emits a warning banner but does NOT fail the deploy."""
+    monkeypatch.setattr(pr, "_git_dirty_code_paths", lambda: [])
+    monkeypatch.setattr(pr, "_unlisted_root_py", lambda: ["brand_new_module.py"])
+    monkeypatch.setattr(pr, "_restart_service", lambda dest, key_args: True)
+    monkeypatch.setattr(pr, "_probe_health", lambda **kw: (True, "status=ok"))
+    _stub_scp_ok(monkeypatch)
+    assert pr.sync_to_server() is True
+    out = capsys.readouterr().out
+    assert "brand_new_module.py" in out
+    assert "WARN" in out
+
+
+def test_sync_restart_failure_fails_run(monkeypatch):
+    """Transfers OK but restart fails → sync_to_server returns False."""
+    monkeypatch.setattr(pr, "_git_dirty_code_paths", lambda: [])
+    monkeypatch.setattr(pr, "_unlisted_root_py", lambda: [])
+    monkeypatch.setattr(pr, "_restart_service", lambda dest, key_args: False)
+    monkeypatch.setattr(pr, "_probe_health", lambda **kw: (True, "status=ok"))
+    _stub_scp_ok(monkeypatch)
+    assert pr.sync_to_server() is False
+
+
+def test_sync_health_probe_failure_fails_run(monkeypatch):
+    """Restart OK but health probe unreachable → sync_to_server returns False."""
+    monkeypatch.setattr(pr, "_git_dirty_code_paths", lambda: [])
+    monkeypatch.setattr(pr, "_unlisted_root_py", lambda: [])
+    monkeypatch.setattr(pr, "_restart_service", lambda dest, key_args: True)
+    monkeypatch.setattr(pr, "_probe_health", lambda **kw: (False, "unreachable after all retries"))
+    _stub_scp_ok(monkeypatch)
+    assert pr.sync_to_server() is False
+
+
+def test_sync_full_success(monkeypatch):
+    """Transfer + restart + probe all OK → True."""
+    monkeypatch.setattr(pr, "_git_dirty_code_paths", lambda: [])
+    monkeypatch.setattr(pr, "_unlisted_root_py", lambda: [])
+    monkeypatch.setattr(pr, "_restart_service", lambda dest, key_args: True)
+    monkeypatch.setattr(pr, "_probe_health", lambda **kw: (True, "status=ok"))
+    _stub_scp_ok(monkeypatch)
+    assert pr.sync_to_server() is True
+
+
+def test_probe_health_degraded_passes_with_warning(monkeypatch, capsys):
+    """status=degraded is reachable (True) but prints a loud warning banner."""
+    import json
+
+    class _FakeResp:
+        status = 200
+        def read(self):
+            return json.dumps({"status": "degraded"}).encode()
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda url, timeout=None: _FakeResp())
+    ok, detail = pr._probe_health(url="https://example.com/api/health", attempts=1, delay=0)
+    assert ok is True
+    assert "degraded" in detail
+    out = capsys.readouterr().out
+    assert "degraded" in out
+
+
+def test_root_py_inventory_classified():
+    """Repo invariant: every tracked root .py is in SYNC_PY_FILES or _NOT_DEPLOYED_PY."""
+    import subprocess
+    from pathlib import Path
+    result = subprocess.run(
+        ["git", "ls-files", "*.py"],
+        capture_output=True, text=True,
+        cwd=str(Path(__file__).resolve().parent.parent),
+    )
+    deployed = set(pr.SYNC_PY_FILES)
+    unclassified = [
+        name for name in result.stdout.splitlines()
+        if "/" not in name and name.endswith(".py")
+        and name not in deployed
+        and name not in pr._NOT_DEPLOYED_PY
+    ]
+    assert not unclassified, (
+        f"These root .py files are neither deployed nor classified as laptop-only: "
+        f"{unclassified}. "
+        f"Add to SYNC_PY_FILES (server) or _NOT_DEPLOYED_PY (laptop-only)."
+    )
