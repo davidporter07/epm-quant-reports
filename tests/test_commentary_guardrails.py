@@ -539,6 +539,7 @@ def test_sync_to_server_returns_true_on_success(monkeypatch):
     monkeypatch.setattr(post_run, "_git_dirty_code_paths", lambda: [])
     monkeypatch.setattr(post_run, "_unlisted_root_py", lambda: [])
     monkeypatch.setattr(post_run, "_restart_service", lambda dest, key_args: True)
+    monkeypatch.setattr(post_run, "_probe_health_origin", lambda **kw: (True, "origin status=ok"))
     monkeypatch.setattr(post_run, "_probe_health", lambda **kw: (True, "status=ok"))
     monkeypatch.setattr(post_run, "_scp_dir", lambda *a, **k: 0)
     assert post_run.sync_to_server() is True
