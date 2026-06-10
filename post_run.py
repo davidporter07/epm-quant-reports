@@ -218,11 +218,13 @@ def push_status_file(
 
 def _probe_health(
     url: str = _HEALTH_URL,
-    attempts: int = 6,
-    delay: int = 3,
+    attempts: int = 12,
+    delay: int = 5,
 ) -> tuple[bool, str]:
     """Probe /api/health after restart. Returns (reachable, detail).
-    HTTP 200 with any valid JSON counts as reachable; degraded passes with a warning."""
+    HTTP 200 with any valid JSON counts as reachable; degraded passes with a warning.
+    Defaults give ~60s of patience (12 × 5s) so a slow gunicorn startup after scp
+    does not race the first health check and produce a spurious last_run_failed status."""
     import json as _json
     import urllib.request as _req
     import urllib.error as _uerr

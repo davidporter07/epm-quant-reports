@@ -175,6 +175,39 @@ def test_probe_health_degraded_passes_with_warning(monkeypatch, capsys):
     assert "degraded" in out
 
 
+def test_probe_health_delayed_startup_eventually_passes(monkeypatch):
+    """App unreachable for N-1 attempts then comes up OK — probe returns True.
+
+    Regression guard: the old 6×3s window raced a slow post-scp restart and
+    returned (False, 'unreachable') before the app was ready, poisoning
+    run_daily_status.json with last_run_failed:post_run on an otherwise clean run.
+    """
+    import json
+
+    class _FakeResp:
+        status = 200
+        def read(self):
+            return json.dumps({"status": "ok"}).encode()
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+
+    calls = {"n": 0}
+
+    def _urlopen(url, timeout=None):
+        calls["n"] += 1
+        if calls["n"] < 4:  # fail first 3, succeed on 4th
+            import urllib.error as _uerr
+            raise _uerr.URLError("connection refused")
+        return _FakeResp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", _urlopen)
+    monkeypatch.setattr(pr.time, "sleep", lambda _: None)
+    ok, detail = pr._probe_health(url="https://example.com/api/health", attempts=12, delay=0)
+    assert ok is True
+    assert "ok" in detail
+    assert calls["n"] == 4
+
+
 def test_root_py_inventory_classified():
     """Repo invariant: every tracked root .py is in SYNC_PY_FILES or _NOT_DEPLOYED_PY."""
     import subprocess
