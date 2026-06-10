@@ -103,7 +103,8 @@ def _send_alert(report_date: Optional[str], alert_to: str) -> None:
         f"Check: logs/run_daily.log and logs/run_daily_status.json"
     )
     html = f"<pre style='font-family:monospace;font-size:13px'>{body}</pre>"
-    email_service.send_message(alert_to, subject, html, body)
+    # Internal alert — Gmail only; Resend is reserved for subscriber mail.
+    email_service.send_message(alert_to, subject, html, body, provider="gmail")
 
 
 def _run_tick(
@@ -124,8 +125,8 @@ def _run_tick(
         print("[watchdog] alert skipped: ALERT_EMAIL not set")
         return False
     from services import email_service  # noqa: PLC0415
-    if not email_service.mail_configured():
-        print("[watchdog] alert skipped: no mail creds configured")
+    if not email_service.gmail_configured():
+        print("[watchdog] alert skipped: GMAIL_APP_PASSWORD not configured")
         return False
     try:
         send_fn(report_date, alert_to)

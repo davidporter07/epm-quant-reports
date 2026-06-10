@@ -71,7 +71,7 @@ def test_run_tick_sends_alert_and_marks_dedup(monkeypatch):
     monkeypatch.setattr(ws, "_last_alert_date", None)
 
     import services.email_service as _es
-    monkeypatch.setattr(_es, "mail_configured", lambda: True)
+    monkeypatch.setattr(_es, "gmail_configured", lambda: True)
 
     sent_to = []
     now = datetime(2026, 6, 8, 11, 0)
@@ -91,7 +91,7 @@ def test_run_tick_sender_raises_no_dedup(monkeypatch):
     monkeypatch.setattr(ws, "_last_alert_date", None)
 
     import services.email_service as _es
-    monkeypatch.setattr(_es, "mail_configured", lambda: True)
+    monkeypatch.setattr(_es, "gmail_configured", lambda: True)
 
     def _explode(rpt, to):
         raise RuntimeError("SMTP timeout")

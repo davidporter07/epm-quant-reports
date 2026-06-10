@@ -10,6 +10,16 @@ sends, and pipeline failure alerts). Provider config is env-driven:
     (GMAIL_APP_PASSWORD), preserving the original behaviour so nothing breaks
     before the domain sender is provisioned.
 
+Routing policy (2026-06-10):
+  - Resend (domain sender) is reserved for OUTWARD-FACING product mail: the
+    daily report and subscriber transactional mail (password reset, opt-in
+    confirmation).
+  - INTERNAL ops alerts (run_daily failure alerts, server watchdog) must pass
+    provider="gmail" so they never consume the Resend domain sender.
+  - The daily report's default send path gains a Gmail fallback: if the Resend
+    SMTP send fails, the message is re-sent via Gmail (From rewritten) so the
+    report still goes out.
+
 Env vars (see .env.example):
   RESEND_API_KEY      Resend API key (acts as the SMTP password when present)
   MAIL_FROM           e.g. "EPM Market Intelligence <reports@epm-market-intelligence.com>"
@@ -96,6 +106,23 @@ def _mail_config() -> dict:
     }
 
 
+def _gmail_config() -> dict:
+    """Gmail config for INTERNAL mail (ops alerts) and as the Resend fallback.
+
+    Deliberately ignores the MAIL_SMTP_* overrides — those are scoped to the
+    active (Resend) provider and would break a Gmail login if applied here.
+    """
+    user = os.getenv("GMAIL_USER", "").strip() or _LEGACY_GMAIL_FROM
+    return {
+        "host": _SMTP_HOST,
+        "port": _SMTP_PORT,
+        "user": user,
+        "password": os.getenv("GMAIL_APP_PASSWORD", "").strip(),
+        "from": user,
+        "provider": "gmail",
+    }
+
+
 def mail_configured() -> bool:
     """True when outbound mail has working credentials (Resend or Gmail).
 
@@ -103,6 +130,11 @@ def mail_configured() -> bool:
     before attempting a send.
     """
     return bool(_mail_config()["password"])
+
+
+def gmail_configured() -> bool:
+    """True when the internal Gmail path (alerts / Resend fallback) can send."""
+    return bool(_gmail_config()["password"])
 
 
 def get_mail_from() -> str:
@@ -115,30 +147,83 @@ def _envelope_addr(addr: str) -> str:
     return parseaddr(addr)[1] or addr
 
 
-def send_raw(msg, to_addrs: list[str] | str, from_addr: str | None = None) -> None:
-    """Send a pre-built MIME message via the configured SMTP provider.
+def _set_from(msg, sender: str) -> None:
+    """Replace the From header on a prebuilt MIME message."""
+    if "From" in msg:
+        del msg["From"]
+    msg["From"] = sender
 
-    Used by send_email.py, which builds a rich multipart/related message
-    (inline logo + PDF attachment) and just needs the shared credentials.
-    """
-    cfg = _mail_config()
-    if not cfg["password"]:
-        raise EmailError(
-            "No mail credentials configured (set RESEND_API_KEY or GMAIL_APP_PASSWORD)."
-        )
-    if isinstance(to_addrs, str):
-        to_addrs = [to_addrs]
-    sender = from_addr or cfg["from"]
+
+def _smtp_send(cfg: dict, sender: str, to_addrs: list[str], msg) -> None:
+    """One SMTP_SSL send attempt against the given provider config."""
     envelope_from = _envelope_addr(sender)
     try:
         context = ssl.create_default_context()
         with smtplib.SMTP_SSL(cfg["host"], cfg["port"], context=context) as server:
             server.login(cfg["user"], cfg["password"])
             server.sendmail(envelope_from, to_addrs, msg.as_string())
-    except EmailError:
-        raise
     except Exception as exc:
-        raise EmailError(f"Failed to send email: {exc}") from exc
+        raise EmailError(
+            f"Failed to send email via {cfg['provider']}: {exc}"
+        ) from exc
+
+
+def send_raw(
+    msg,
+    to_addrs: list[str] | str,
+    from_addr: str | None = None,
+    provider: str | None = None,
+) -> None:
+    """Send a pre-built MIME message via the configured SMTP provider.
+
+    Used by send_email.py, which builds a rich multipart/related message
+    (inline logo + PDF attachment) and just needs the shared credentials.
+
+    provider:
+      - None (default): env-driven (Resend when RESEND_API_KEY is set). If the
+        Resend send FAILS and Gmail creds exist, the message is re-sent via
+        Gmail with the From header rewritten — the daily report must go out.
+      - "gmail": internal-only path (ops alerts). Never touches Resend.
+    """
+    if isinstance(to_addrs, str):
+        to_addrs = [to_addrs]
+
+    if provider == "gmail":
+        gmail = _gmail_config()
+        if not gmail["password"]:
+            raise EmailError(
+                "GMAIL_APP_PASSWORD is not set — internal (Gmail) mail cannot be sent."
+            )
+        sender = from_addr or gmail["from"]
+        _set_from(msg, sender)
+        _smtp_send(gmail, sender, to_addrs, msg)
+        return
+
+    cfg = _mail_config()
+    if not cfg["password"]:
+        raise EmailError(
+            "No mail credentials configured (set RESEND_API_KEY or GMAIL_APP_PASSWORD)."
+        )
+    sender = from_addr or cfg["from"]
+    try:
+        _smtp_send(cfg, sender, to_addrs, msg)
+        return
+    except EmailError as exc:
+        if cfg["provider"] != "resend":
+            raise
+        gmail = _gmail_config()
+        if not gmail["password"]:
+            raise
+        print(f"[mail][WARN] Resend send failed: {exc}")
+        print("[mail][WARN] Falling back to Gmail — investigate Resend before the next run.")
+        _set_from(msg, gmail["from"])
+        try:
+            _smtp_send(gmail, gmail["from"], to_addrs, msg)
+            print(f"[mail][WARN] Sent via Gmail fallback to {len(to_addrs)} recipient(s).")
+        except EmailError as exc2:
+            raise EmailError(
+                f"Resend failed ({exc}); Gmail fallback also failed ({exc2})"
+            ) from exc2
 
 
 def send_message(
@@ -148,20 +233,26 @@ def send_message(
     plain: str,
     headers: dict | None = None,
     from_addr: str | None = None,
+    provider: str | None = None,
 ) -> None:
     """Send a simple multipart/alternative email via the configured provider.
 
-    Used for password-reset, double-opt-in confirmation, and failure alerts.
+    Used for password-reset and double-opt-in confirmation (default provider)
+    and for internal ops alerts (provider="gmail" — never via Resend).
     """
+    if provider == "gmail":
+        default_from = _gmail_config()["from"]
+    else:
+        default_from = get_mail_from()
     msg = MIMEMultipart("alternative")
-    msg["From"] = from_addr or get_mail_from()
+    msg["From"] = from_addr or default_from
     msg["To"] = to_email
     msg["Subject"] = subject
     for key, value in (headers or {}).items():
         msg[key] = value
     msg.attach(MIMEText(plain, "plain"))
     msg.attach(MIMEText(html, "html"))
-    send_raw(msg, [to_email], from_addr=msg["From"])
+    send_raw(msg, [to_email], from_addr=msg["From"], provider=provider)
 
 
 def send_password_reset_email(to_email: str, username: str, reset_url: str) -> None:

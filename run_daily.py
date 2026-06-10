@@ -100,8 +100,10 @@ def _send_alert(stage: str, detail: str) -> None:
         alert_to = os.getenv("ALERT_EMAIL", "").strip()
         if not alert_to:
             return
-        if not email_service.mail_configured():
-            print("[run_daily] (alert skipped: no mail creds configured)")
+        # Internal alerts go via Gmail only — Resend is reserved for the
+        # daily report / subscriber mail.
+        if not email_service.gmail_configured():
+            print("[run_daily] (alert skipped: GMAIL_APP_PASSWORD not configured)")
             return
         subject = f"[EPM ALERT] daily run failed at '{stage}'"
         body = (
@@ -112,7 +114,7 @@ def _send_alert(stage: str, detail: str) -> None:
             f"Check logs/run_daily.log and logs/run_daily_status.json."
         )
         html = f"<pre style='font-family:monospace;font-size:13px'>{body}</pre>"
-        email_service.send_message(alert_to, subject, html, body)
+        email_service.send_message(alert_to, subject, html, body, provider="gmail")
         print(f"[run_daily] alert email sent to {alert_to}")
     except Exception as exc:  # pragma: no cover - defensive
         print(f"[run_daily] (alert email failed: {exc})")
