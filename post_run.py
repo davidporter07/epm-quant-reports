@@ -216,15 +216,71 @@ def push_status_file(
         return False
 
 
-def _probe_health(
-    url: str = _HEALTH_URL,
+def _probe_health_origin(
+    ssh_dest: str = f"{SERVER_USER}@{SERVER_HOST}",
+    ssh_key: str = SSH_KEY,
+    port: int = 8000,
     attempts: int = 12,
     delay: int = 5,
 ) -> tuple[bool, str]:
-    """Probe /api/health after restart. Returns (reachable, detail).
+    """Probe /api/health on the server's loopback via SSH+curl.
+
+    Deploy-critical: proves epm.service restarted and FastAPI is serving.
+    Not subject to Cloudflare WAF or laptop-side connectivity/UA blocks."""
+    import json as _json
+    curl_cmd = f"curl -fsS --max-time 10 http://127.0.0.1:{port}/api/health"
+    ssh_args = [
+        "ssh", "-i", ssh_key,
+        "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=20",
+        ssh_dest, curl_cmd,
+    ]
+    for attempt in range(1, attempts + 1):
+        try:
+            r = subprocess.run(ssh_args, capture_output=True, text=True, timeout=30)
+            if r.returncode != 0:
+                stderr_snip = r.stderr.strip()[:120] if r.stderr else ""
+                if attempt < attempts:
+                    print(f"[SYNC] origin health not yet ready "
+                          f"(attempt {attempt}/{attempts}, exit {r.returncode}"
+                          + (f": {stderr_snip}" if stderr_snip else "")
+                          + f"), retrying in {delay}s...")
+                    time.sleep(delay)
+                    continue
+                return False, (f"origin curl exit {r.returncode}"
+                               + (f": {stderr_snip}" if stderr_snip else ""))
+            try:
+                data = _json.loads(r.stdout)
+            except Exception:
+                return False, f"origin health non-JSON body: {r.stdout[:120]!r}"
+            status = data.get("status", "unknown")
+            if status != "ok":
+                print("  " + "!" * 64)
+                print(f"  [SYNC][WARN] origin /api/health returned status={status!r}.")
+                print("  Deploy succeeded but the app reports degraded state.")
+                print("  " + "!" * 64)
+            return True, f"origin status={status}"
+        except subprocess.TimeoutExpired:
+            if attempt < attempts:
+                print(f"[SYNC] origin health SSH timed out "
+                      f"(attempt {attempt}/{attempts}), retrying in {delay}s...")
+                time.sleep(delay)
+            else:
+                return False, "origin SSH timed out after all retries"
+        except Exception as exc:
+            return False, f"origin probe error: {type(exc).__name__}: {exc}"
+    return False, "origin unreachable after all retries"
+
+
+def _probe_health(
+    url: str = _HEALTH_URL,
+    attempts: int = 3,
+    delay: int = 5,
+) -> tuple[bool, str]:
+    """Probe /api/health via the public HTTPS URL. Secondary/warn-only.
+
     HTTP 200 with any valid JSON counts as reachable; degraded passes with a warning.
-    Defaults give ~60s of patience (12 × 5s) so a slow gunicorn startup after scp
-    does not race the first health check and produce a spurious last_run_failed status."""
+    Cloudflare may block urllib's UA with 403 — callers must not fail a deploy solely
+    on this probe's result; use _probe_health_origin for the deploy-critical check."""
     import json as _json
     import urllib.request as _req
     import urllib.error as _uerr
@@ -244,16 +300,28 @@ def _probe_health(
                     print("  Deploy succeeded but the app reports degraded state.")
                     print("  " + "!" * 64)
                 return True, f"status={status}"
-        except _uerr.URLError:
+        except _uerr.HTTPError as e:
+            body_snip = ""
+            try:
+                body_snip = e.read(256).decode(errors="replace")
+            except Exception:
+                pass
+            detail = f"HTTP {e.code}" + (f" — {body_snip[:80]}" if body_snip else "")
             if attempt < attempts:
-                print(f"[SYNC] /api/health not yet reachable "
-                      f"(attempt {attempt}/{attempts}), retrying in {delay}s...")
+                print(f"[SYNC] public health {detail} (attempt {attempt}/{attempts}), retrying in {delay}s...")
                 time.sleep(delay)
             else:
-                return False, "unreachable after all retries"
-        except Exception as e:
-            return False, f"probe error: {e}"
-    return False, "unreachable"
+                return False, detail
+        except _uerr.URLError as e:
+            if attempt < attempts:
+                print(f"[SYNC] public health not reachable "
+                      f"(attempt {attempt}/{attempts}): {e.reason}, retrying in {delay}s...")
+                time.sleep(delay)
+            else:
+                return False, f"unreachable: {e.reason}"
+        except Exception as exc:
+            return False, f"probe error: {type(exc).__name__}: {exc}"
+    return False, "unreachable after all retries"
 
 
 def run(cmd: list[str]) -> int:
@@ -392,15 +460,22 @@ def sync_to_server(*, allow_dirty: bool = False) -> bool:
             print(f"  ssh dporter02@{SERVER_HOST} sudo systemctl status epm.service")
             print("  " + "!" * 64)
             return False
-        health_ok, health_detail = _probe_health()
-        if not health_ok:
+        origin_ok, origin_detail = _probe_health_origin()
+        if not origin_ok:
             print("  " + "!" * 64)
-            print("  [SYNC][FAILED] Restart issued but /api/health is unreachable.")
-            print(f"  Detail: {health_detail}")
+            print("  [SYNC][FAILED] Restart issued but origin /api/health is unreachable.")
+            print(f"  Detail: {origin_detail}")
             print("  Check: journalctl -u epm.service -n 50")
             print("  " + "!" * 64)
             return False
-        print(f"[SYNC] All {ok} target(s) deployed + restarted + health: {health_detail}")
+        # Secondary: public URL — warn only (Cloudflare may block urllib UA with 403)
+        pub_ok, pub_detail = _probe_health()
+        if not pub_ok:
+            print("  " + "!" * 64)
+            print(f"  [SYNC][WARN] Public health probe failed: {pub_detail}")
+            print("  Origin is healthy; this is likely a Cloudflare/WAF/UA issue.")
+            print("  " + "!" * 64)
+        print(f"[SYNC] All {ok} target(s) deployed + restarted + health: {origin_detail}")
         return True
 
     # Failure path — make it impossible to miss (this masked the 2026-06-02 offline deploy).

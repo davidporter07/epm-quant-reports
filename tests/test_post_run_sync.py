@@ -97,6 +97,7 @@ def test_sync_allows_dirty_with_flag(monkeypatch):
     monkeypatch.setattr(pr, "_git_dirty_code_paths", lambda: ["app.py"])
     monkeypatch.setattr(pr, "_unlisted_root_py", lambda: [])
     monkeypatch.setattr(pr, "_restart_service", lambda dest, key_args: True)
+    monkeypatch.setattr(pr, "_probe_health_origin", lambda **kw: (True, "origin status=ok"))
     monkeypatch.setattr(pr, "_probe_health", lambda **kw: (True, "status=ok"))
     _stub_scp_ok(monkeypatch)
     assert pr.sync_to_server(allow_dirty=True) is True
@@ -107,6 +108,7 @@ def test_sync_allows_dirty_via_env_var(monkeypatch):
     monkeypatch.setattr(pr, "_git_dirty_code_paths", lambda: ["app.py"])
     monkeypatch.setattr(pr, "_unlisted_root_py", lambda: [])
     monkeypatch.setattr(pr, "_restart_service", lambda dest, key_args: True)
+    monkeypatch.setattr(pr, "_probe_health_origin", lambda **kw: (True, "origin status=ok"))
     monkeypatch.setattr(pr, "_probe_health", lambda **kw: (True, "status=ok"))
     monkeypatch.setenv(pr._ALLOW_DIRTY_ENV, "1")
     _stub_scp_ok(monkeypatch)
@@ -118,6 +120,7 @@ def test_sync_warns_on_unlisted_py(monkeypatch, capsys):
     monkeypatch.setattr(pr, "_git_dirty_code_paths", lambda: [])
     monkeypatch.setattr(pr, "_unlisted_root_py", lambda: ["brand_new_module.py"])
     monkeypatch.setattr(pr, "_restart_service", lambda dest, key_args: True)
+    monkeypatch.setattr(pr, "_probe_health_origin", lambda **kw: (True, "origin status=ok"))
     monkeypatch.setattr(pr, "_probe_health", lambda **kw: (True, "status=ok"))
     _stub_scp_ok(monkeypatch)
     assert pr.sync_to_server() is True
@@ -131,26 +134,50 @@ def test_sync_restart_failure_fails_run(monkeypatch):
     monkeypatch.setattr(pr, "_git_dirty_code_paths", lambda: [])
     monkeypatch.setattr(pr, "_unlisted_root_py", lambda: [])
     monkeypatch.setattr(pr, "_restart_service", lambda dest, key_args: False)
+    monkeypatch.setattr(pr, "_probe_health_origin", lambda **kw: (True, "origin status=ok"))
     monkeypatch.setattr(pr, "_probe_health", lambda **kw: (True, "status=ok"))
     _stub_scp_ok(monkeypatch)
     assert pr.sync_to_server() is False
 
 
-def test_sync_health_probe_failure_fails_run(monkeypatch):
-    """Restart OK but health probe unreachable → sync_to_server returns False."""
+def test_sync_origin_health_failure_fails_deploy(monkeypatch):
+    """Restart OK but origin health unreachable → deploy fails.
+
+    Origin probe is deploy-critical; even if public URL were accessible,
+    a dead origin means epm.service did not come up correctly."""
     monkeypatch.setattr(pr, "_git_dirty_code_paths", lambda: [])
     monkeypatch.setattr(pr, "_unlisted_root_py", lambda: [])
     monkeypatch.setattr(pr, "_restart_service", lambda dest, key_args: True)
-    monkeypatch.setattr(pr, "_probe_health", lambda **kw: (False, "unreachable after all retries"))
+    monkeypatch.setattr(pr, "_probe_health_origin", lambda **kw: (False, "origin curl exit 7: Connection refused"))
+    monkeypatch.setattr(pr, "_probe_health", lambda **kw: (True, "status=ok"))
     _stub_scp_ok(monkeypatch)
     assert pr.sync_to_server() is False
 
 
-def test_sync_full_success(monkeypatch):
-    """Transfer + restart + probe all OK → True."""
+def test_sync_origin_passes_when_public_fails(monkeypatch, capsys):
+    """Origin OK but public URL fails → deploy still succeeds with a warning.
+
+    Cloudflare blocks urllib's UA with 403 — this must never fail a deploy
+    when the server itself is healthy."""
     monkeypatch.setattr(pr, "_git_dirty_code_paths", lambda: [])
     monkeypatch.setattr(pr, "_unlisted_root_py", lambda: [])
     monkeypatch.setattr(pr, "_restart_service", lambda dest, key_args: True)
+    monkeypatch.setattr(pr, "_probe_health_origin", lambda **kw: (True, "origin status=ok"))
+    monkeypatch.setattr(pr, "_probe_health", lambda **kw: (False, "HTTP 403 — <html>"))
+    _stub_scp_ok(monkeypatch)
+    result = pr.sync_to_server()
+    assert result is True
+    out = capsys.readouterr().out
+    assert "WARN" in out
+    assert "403" in out
+
+
+def test_sync_full_success(monkeypatch):
+    """Transfer + restart + both probes OK → True."""
+    monkeypatch.setattr(pr, "_git_dirty_code_paths", lambda: [])
+    monkeypatch.setattr(pr, "_unlisted_root_py", lambda: [])
+    monkeypatch.setattr(pr, "_restart_service", lambda dest, key_args: True)
+    monkeypatch.setattr(pr, "_probe_health_origin", lambda **kw: (True, "origin status=ok"))
     monkeypatch.setattr(pr, "_probe_health", lambda **kw: (True, "status=ok"))
     _stub_scp_ok(monkeypatch)
     assert pr.sync_to_server() is True
@@ -206,6 +233,54 @@ def test_probe_health_delayed_startup_eventually_passes(monkeypatch):
     assert ok is True
     assert "ok" in detail
     assert calls["n"] == 4
+
+
+def test_probe_health_http_error_detail_surfaced(monkeypatch):
+    """HTTPError (e.g. Cloudflare 403) surfaces the status code in the return value.
+
+    Regression guard: HTTPError is a URLError subclass, so before this fix it was
+    silently swallowed as 'unreachable', burning all retries with no diagnostic."""
+    import urllib.error as _uerr
+
+    class _FakeHTTPError(_uerr.HTTPError):
+        def __init__(self):
+            super().__init__(url="https://example.com", code=403, msg="Forbidden",
+                             hdrs=None, fp=None)
+        def read(self, n=256):
+            return b"<html>Access denied</html>"
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda url, timeout=None: (_ for _ in ()).throw(_FakeHTTPError()))
+    monkeypatch.setattr(pr.time, "sleep", lambda _: None)
+    ok, detail = pr._probe_health(url="https://example.com/api/health", attempts=1, delay=0)
+    assert ok is False
+    assert "403" in detail
+
+
+def test_probe_health_origin_succeeds_on_delayed_startup(monkeypatch):
+    """Origin probe retries until SSH+curl succeeds — returns (True, 'origin status=ok')."""
+    import json
+
+    calls = {"n": 0}
+
+    def _fake_run(cmd, capture_output=False, text=False, timeout=None):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return type("R", (), {"returncode": 7, "stdout": "", "stderr": "Connection refused"})()
+        return type("R", (), {
+            "returncode": 0,
+            "stdout": json.dumps({"status": "ok"}),
+            "stderr": "",
+        })()
+
+    monkeypatch.setattr(pr.subprocess, "run", _fake_run)
+    monkeypatch.setattr(pr.time, "sleep", lambda _: None)
+    ok, detail = pr._probe_health_origin(
+        ssh_dest="dporter02@127.0.0.1", ssh_key="/dev/null",
+        attempts=12, delay=0,
+    )
+    assert ok is True
+    assert "origin status=ok" in detail
+    assert calls["n"] == 3
 
 
 def test_root_py_inventory_classified():
