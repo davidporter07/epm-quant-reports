@@ -1600,6 +1600,38 @@ def health() -> dict:
     except Exception:
         checks["watchdog"] = {"alive": False, "error": "check_failed"}
 
+    # 8. Data freshness — reads the report written by the laptop pipeline
+    # (data/data_freshness.json, synced via data/ SYNC_DIRS). File absent = not
+    # degraded (first deploy before the pipeline has run). Degrades only when
+    # the persisted report shows critical failures AND enforce was on AND market open.
+    try:
+        _df_path = DATA_DIR / "data_freshness.json"
+        if not _df_path.exists():
+            checks["data_freshness"] = {"present": False}
+        else:
+            with _df_path.open(encoding="utf-8") as _dfh:
+                _df_payload = json.load(_dfh)
+            _df_enforce = bool(_df_payload.get("enforce", False))
+            _df_results = _df_payload.get("results", [])
+            _df_critical_failing = [r["name"] for r in _df_results
+                                     if r.get("critical") and not r.get("ok")
+                                     and r.get("status") != "skipped"]
+            _df_failing = [r["name"] for r in _df_results
+                           if not r.get("ok") and r.get("status") != "skipped"]
+            checks["data_freshness"] = {
+                "present": True,
+                "ts": _df_payload.get("ts"),
+                "enforce": _df_enforce,
+                "failing": _df_failing,
+                "critical_failing": _df_critical_failing,
+            }
+            if _df_enforce and _df_critical_failing and mkt_open:
+                overall_ok = False
+                for _dfn in _df_critical_failing:
+                    reasons.append(f"data_freshness:{_dfn}")
+    except Exception:
+        checks["data_freshness"] = {"present": False, "error": "check_failed"}
+
     return {"status": "ok" if overall_ok else "degraded", "checks": checks, "reasons": reasons}
 
 

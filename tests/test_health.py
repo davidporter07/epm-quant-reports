@@ -249,3 +249,76 @@ def test_prev_market_day_skips_holiday():
     memorial_day = date(2026, 5, 25)  # Monday
     result = _prev_market_day(date(2026, 5, 26), _us_holidays={memorial_day})
     assert result == date(2026, 5, 22)  # prev Friday
+
+
+# ---------------------------------------------------------------------------
+# data_freshness check (PR D)
+# ---------------------------------------------------------------------------
+
+def _df_report(*, enforce: bool, critical_failing: list, failing: list = None) -> str:
+    """Build a minimal data_freshness.json payload string for tests."""
+    from datetime import datetime, timezone
+    results = []
+    for name in (critical_failing or []):
+        results.append({"name": name, "critical": True, "ok": False,
+                        "detail": f"{name} stale", "status": "stale"})
+    for name in (failing or []):
+        if name not in (critical_failing or []):
+            results.append({"name": name, "critical": False, "ok": False,
+                            "detail": f"{name} missing", "status": "missing"})
+    return json.dumps({
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "today": "2026-06-10",
+        "enforce": enforce,
+        "results": results,
+    })
+
+
+def test_data_freshness_absent_not_degraded(monkeypatch, tmp_path):
+    """No data_freshness.json = present:false, health not degraded."""
+    monkeypatch.setattr("app.DATA_DIR", tmp_path)
+    client = _client_with_mocks(monkeypatch)
+    body = client.get("/api/health").json()
+    df = body["checks"]["data_freshness"]
+    assert df["present"] is False
+    assert not any("data_freshness" in r for r in body["reasons"])
+
+
+def test_data_freshness_all_passing_not_degraded(monkeypatch, tmp_path):
+    (tmp_path / "data_freshness.json").write_text(
+        _df_report(enforce=True, critical_failing=[], failing=[]), encoding="utf-8"
+    )
+    monkeypatch.setattr("app.DATA_DIR", tmp_path)
+    client = _client_with_mocks(monkeypatch)
+    body = client.get("/api/health").json()
+    df = body["checks"]["data_freshness"]
+    assert df["present"] is True
+    assert df["critical_failing"] == []
+    assert not any("data_freshness" in r for r in body["reasons"])
+
+
+def test_data_freshness_enforce_on_critical_fail_market_open_degrades(monkeypatch, tmp_path):
+    (tmp_path / "data_freshness.json").write_text(
+        _df_report(enforce=True, critical_failing=["ycharts_scrape"]), encoding="utf-8"
+    )
+    monkeypatch.setattr("app.DATA_DIR", tmp_path)
+    # Force market open
+    import app as _app
+    monkeypatch.setattr(_app, "mkt_open", True, raising=False)
+    client = _client_with_mocks(monkeypatch)
+    body = client.get("/api/health").json()
+    assert "data_freshness:ycharts_scrape" in body["reasons"]
+    assert body["status"] == "degraded"
+
+
+def test_data_freshness_enforce_off_critical_fail_not_degraded(monkeypatch, tmp_path):
+    (tmp_path / "data_freshness.json").write_text(
+        _df_report(enforce=False, critical_failing=["ycharts_scrape"]), encoding="utf-8"
+    )
+    monkeypatch.setattr("app.DATA_DIR", tmp_path)
+    client = _client_with_mocks(monkeypatch)
+    body = client.get("/api/health").json()
+    df = body["checks"]["data_freshness"]
+    assert df["enforce"] is False
+    assert "ycharts_scrape" in df["critical_failing"]
+    assert not any("data_freshness" in r for r in body["reasons"])
