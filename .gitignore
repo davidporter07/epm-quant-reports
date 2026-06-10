@@ -65,3 +65,6 @@ ssh
 *.diff
 .gitnexus
 static/js/plotly-2.35.2.min.js
+
+# Local analysis files
+Portfolio/
