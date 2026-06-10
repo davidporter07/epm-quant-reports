@@ -31,10 +31,12 @@ from typing import Any, Callable, Dict, List, Optional
 
 import requests
 
+from services import runtime_config as _rc
+
 logger = logging.getLogger(__name__)
 
-OLLAMA_URL   = os.environ.get("LOCAL_OLLAMA_URL",    "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("COUNCIL_OLLAMA_MODEL", "deepseek-r1:8b")
+OLLAMA_URL   = _rc.ollama_url()
+OLLAMA_MODEL = _rc.council_model()
 
 
 # ---------------------------------------------------------------------------

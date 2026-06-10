@@ -28,9 +28,10 @@ import requests
 
 import pm_research
 from services import research_store
+from services import runtime_config as _rc
 
-_OLLAMA_URL = os.getenv("LOCAL_OLLAMA_URL", "http://localhost:11434")
-_RESEARCH_MODEL = os.getenv("RESEARCH_OLLAMA_MODEL") or os.getenv("CHAT_OLLAMA_MODEL", "qwen3.5:4b")
+_OLLAMA_URL = _rc.ollama_url()
+_RESEARCH_MODEL = _rc.research_model()
 # Concurrency is modest on purpose: the server GPU (A2000, ~5.75GB) can only
 # hold one small model at a time, so a burst of cold requests thrashes VRAM.
 _MAX_WORKERS = 2

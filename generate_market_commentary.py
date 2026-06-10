@@ -58,8 +58,10 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-OLLAMA_HOST    = os.getenv("LOCAL_OLLAMA_URL",     "http://100.101.63.65:11434")
-OLLAMA_MODEL   = os.getenv("COMMENTARY_OLLAMA_MODEL", "qwen3.5:9b")
+from services import runtime_config as _rc
+
+OLLAMA_HOST    = _rc.ollama_url()
+OLLAMA_MODEL   = _rc.commentary_model()
 OLLAMA_TIMEOUT = int(os.getenv("LOCAL_OLLAMA_TIMEOUT", "900"))
 
 # Topic spotlight: detect dominant news theme, write grounded story with fund tie-ins
