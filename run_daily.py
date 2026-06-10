@@ -118,6 +118,16 @@ def _send_alert(stage: str, detail: str) -> None:
         print(f"[run_daily] (alert email failed: {exc})")
 
 
+def _push_status() -> None:
+    """Push logs/run_daily_status.json to the server so /api/health can read it.
+    Never raises — must not change exit codes."""
+    try:
+        from post_run import push_status_file
+        push_status_file()
+    except Exception as exc:
+        print(f"[run_daily] (status push failed: {exc})")
+
+
 def _default_runner(cmd: list[str]) -> int:
     print("[run_daily] >", " ".join(cmd))
     try:
@@ -166,6 +176,7 @@ def main(
                        f"(Override: run_daily.py --allow-branch.)")
                 print(f"[run_daily] {msg}")
                 _record_status("branch_guard", False, msg)
+                _push_status()
                 _send_alert("branch_guard", msg)
                 return 3
 
@@ -189,6 +200,7 @@ def main(
                 )
                 print(f"[run_daily] {msg}")
                 _record_status("dirty_guard", False, msg)
+                _push_status()
                 _send_alert("dirty_guard", msg)
                 return 4
 
@@ -199,6 +211,7 @@ def main(
         msg = f"send_email.py exited {rc} — report not deployed. Aborting."
         print(f"[run_daily] {msg}")
         _record_status("send_email", False, msg)
+        _push_status()
         _send_alert("send_email", msg)
         return 1
 
@@ -220,6 +233,7 @@ def main(
         _record_status("ok" if not post_run_warn else "post_run", not bool(post_run_warn),
                        "freshness check skipped by flag" +
                        (f" ({post_run_warn})" if post_run_warn else ""))
+        _push_status()
         return 5 if post_run_warn else 0
 
     if fresh_checker is None:
@@ -232,6 +246,7 @@ def main(
                f"website is behind. Re-run `python post_run.py` and check sync logs.")
         print(f"[run_daily] {msg}")
         _record_status("freshness", False, msg)
+        _push_status()
         _send_alert("freshness", msg)
         return 2
 
@@ -239,8 +254,10 @@ def main(
     print(f"[run_daily] OK — {ok_detail}")
     if post_run_warn:
         _record_status("post_run", False, ok_detail)
+        _push_status()
         return 5
     _record_status("ok", True, ok_detail)
+    _push_status()
     return 0
 
 

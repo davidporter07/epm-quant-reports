@@ -158,3 +158,53 @@ def test_extract_report_date_top_level_fallback():
 def test_extract_report_date_missing_returns_none():
     assert csf._extract_report_date({"ok": True, "commentary": {}}) is None
     assert csf._extract_report_date("not a dict") is None
+
+
+# --- PR B: push_status_file wiring -------------------------------------------
+
+def test_push_called_on_ok_exit(monkeypatch):
+    pushed = []
+    monkeypatch.setattr(run_daily, "_push_status", lambda: pushed.append(1))
+    monkeypatch.setattr(run_daily, "_record_status", lambda *a, **k: None)
+    monkeypatch.setattr(run_daily, "_send_alert", lambda *a, **k: None)
+    runner = _recording_runner([0, 0])
+    rc = run_daily.main([], runner=runner, fresh_checker=lambda: (True, "fresh"))
+    assert rc == 0
+    assert pushed, "push must be called on ok exit"
+
+
+def test_push_called_on_email_fail_exit(monkeypatch):
+    pushed = []
+    monkeypatch.setattr(run_daily, "_push_status", lambda: pushed.append(1))
+    monkeypatch.setattr(run_daily, "_record_status", lambda *a, **k: None)
+    monkeypatch.setattr(run_daily, "_send_alert", lambda *a, **k: None)
+    runner = _recording_runner([1])  # email fails
+    rc = run_daily.main([], runner=runner, fresh_checker=lambda: (True, "fresh"))
+    assert rc == 1
+    assert pushed, "push must be called even when email fails"
+
+
+def test_push_called_on_stale_exit(monkeypatch):
+    pushed = []
+    monkeypatch.setattr(run_daily, "_push_status", lambda: pushed.append(1))
+    monkeypatch.setattr(run_daily, "_record_status", lambda *a, **k: None)
+    monkeypatch.setattr(run_daily, "_send_alert", lambda *a, **k: None)
+    runner = _recording_runner([0, 0])
+    rc = run_daily.main([], runner=runner, fresh_checker=lambda: (False, "STALE"))
+    assert rc == 2
+    assert pushed, "push must be called on stale exit"
+
+
+def test_push_failure_does_not_alter_exit_code(monkeypatch):
+    """push_status_file() raising (network down) must not change run_daily exit code."""
+    import post_run
+
+    def _fail():
+        raise OSError("network down")
+
+    monkeypatch.setattr(post_run, "push_status_file", _fail)
+    monkeypatch.setattr(run_daily, "_record_status", lambda *a, **k: None)
+    monkeypatch.setattr(run_daily, "_send_alert", lambda *a, **k: None)
+    runner = _recording_runner([0, 0])
+    rc = run_daily.main([], runner=runner, fresh_checker=lambda: (True, "fresh"))
+    assert rc == 0  # push failure must not change exit code

@@ -53,6 +53,7 @@ from services.email_service import (
 )
 from deep_analysis_worker import (cancel_job, enqueue, get_job_status, get_today_cached_job,
                                    invalidate_today_cache, start_worker, stop_worker, worker_status)
+from services.watchdog_service import start_watchdog, stop_watchdog, watchdog_status
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -1394,6 +1395,23 @@ def download_current_report() -> FileResponse:
     return FileResponse(latest, filename=latest.name, media_type="application/pdf")
 
 
+def _prev_market_day(d, *, _us_holidays=None):
+    """Return the most recent market day strictly before d. Pure + testable."""
+    from datetime import timedelta
+    if _us_holidays is None:
+        try:
+            import holidays as _hol
+            _us_holidays = _hol.US()
+        except Exception:
+            _us_holidays = frozenset()
+    prev = d - timedelta(days=1)
+    for _ in range(14):
+        if prev.weekday() < 5 and prev not in _us_holidays:
+            return prev
+        prev -= timedelta(days=1)
+    return prev
+
+
 @app.get("/api/health")
 def health() -> dict:
     """Operational health for monitoring. Aggregates lightweight checks and never
@@ -1403,6 +1421,7 @@ def health() -> dict:
     """
     checks: dict = {}
     overall_ok = True
+    reasons: list = []
 
     # 1. Commentary present + fresh on market days.
     # NOTE: computed inline (not imported from check_site_freshness) — that module is a
@@ -1463,18 +1482,124 @@ def health() -> dict:
         checks["deep_worker"] = {"alive": False}
         overall_ok = False
 
-    # 4. Ollama reachability (the host/IP is deliberately NOT returned)
+    # 4. Ollama reachability + required model availability
     try:
         import requests as _req
         r = _req.get(f"{_CHAT_OLLAMA_HOST}/api/tags", timeout=3)
         checks["ollama"] = {"reachable": bool(r.ok)}
         if not r.ok:
             overall_ok = False
+        else:
+            try:
+                _tags = r.json()
+                _loaded = {m.get("name", "") for m in (_tags.get("models") or [])}
+                _chat_m = _CHAT_OLLAMA_MODEL
+                _council_m = os.getenv("COUNCIL_OLLAMA_MODEL", "deepseek-r1:8b")
+                _missing_m = [m for m in (_chat_m, _council_m) if m not in _loaded]
+                checks["ollama"]["models"] = {
+                    "chat": _chat_m in _loaded,
+                    "council": _council_m in _loaded,
+                }
+                for _m in _missing_m:
+                    overall_ok = False
+                    reasons.append(f"ollama_model_missing:{_m}")
+            except Exception:
+                checks["ollama"]["models"] = {"check_failed": True}
     except Exception:
         checks["ollama"] = {"reachable": False}
         overall_ok = False
 
-    return {"status": "ok" if overall_ok else "degraded", "checks": checks}
+    # 5. Last pipeline run (status file pushed from laptop by post_run.push_status_file)
+    try:
+        from datetime import date as _d2
+        _status_path = DATA_DIR / "run_daily_status.json"
+        if not _status_path.exists():
+            checks["last_run"] = {"present": False}
+            # Info-only — first deploy before any push has happened
+        else:
+            with _status_path.open(encoding="utf-8") as _fh:
+                _sr = json.load(_fh)
+            _ts_str = _sr.get("ts", "")
+            _stage = _sr.get("stage", "")
+            _ok_flag = bool(_sr.get("ok", False))
+            _age_h = None
+            _run_date = None
+            try:
+                from datetime import datetime as _dt2, timezone as _tz2
+                _run_ts = _dt2.fromisoformat(_ts_str.replace("Z", "+00:00"))
+                _age_h = (_dt2.now(_tz2.utc) - _run_ts.astimezone(_tz2.utc)).total_seconds() / 3600
+                _run_date = _run_ts.astimezone(_tz2.utc).date()
+            except Exception:
+                pass
+            _run_stale = False
+            if _run_date is not None:
+                try:
+                    _prev = _prev_market_day(_d2.today())
+                    _run_stale = _run_date < _prev
+                except Exception:
+                    pass
+            checks["last_run"] = {
+                "present": True,
+                "ts": _ts_str,
+                "stage": _stage,
+                "ok": _ok_flag,
+                "age_hours": round(_age_h, 1) if _age_h is not None else None,
+            }
+            if not _ok_flag:
+                overall_ok = False
+                reasons.append(f"last_run_failed:{_stage}")
+            elif _run_stale:
+                overall_ok = False
+                reasons.append("last_run_stale")
+    except Exception:
+        checks["last_run"] = {"present": False, "error": "check_failed"}
+
+    # 6. Database writability (users.db + research cache)
+    try:
+        import sqlite3 as _sqlite3
+        from services.auth_service import DB_PATH as _users_db_path
+        _research_db_path = Path(os.getenv("RESEARCH_DB_PATH", "research_cache.db"))
+        _db_results: dict = {}
+        _any_readonly = False
+        for _db_name, _db_path in [("users", _users_db_path), ("research", _research_db_path)]:
+            if not Path(_db_path).exists():
+                _db_results[_db_name] = {"exists": False}
+                continue
+            try:
+                _conn = _sqlite3.connect(str(_db_path), timeout=2)
+                _conn.execute("BEGIN IMMEDIATE")
+                _conn.execute("ROLLBACK")
+                _conn.close()
+                _db_results[_db_name] = {"writable": True}
+            except _sqlite3.OperationalError as _exc:
+                _emsg = str(_exc).lower()
+                if "readonly" in _emsg:
+                    _db_results[_db_name] = {"writable": False}
+                    _any_readonly = True
+                    reasons.append(f"db_readonly:{_db_name}")
+                elif "locked" in _emsg:
+                    _db_results[_db_name] = {"writable": True, "busy": True}
+                else:
+                    _db_results[_db_name] = {"writable": False, "error": str(_exc)[:80]}
+                    _any_readonly = True
+                    reasons.append(f"db_error:{_db_name}")
+            except Exception as _exc:
+                _db_results[_db_name] = {"writable": False, "error": "check_failed"}
+                _any_readonly = True
+                reasons.append(f"db_error:{_db_name}")
+        checks["db"] = _db_results
+        if _any_readonly:
+            overall_ok = False
+    except Exception:
+        checks["db"] = {"error": "check_failed"}
+
+    # 7. Watchdog thread liveness
+    try:
+        checks["watchdog"] = watchdog_status()
+    except Exception:
+        checks["watchdog"] = {"alive": False, "error": "check_failed"}
+
+    return {"status": "ok" if overall_ok else "degraded", "checks": checks, "reasons": reasons}
 
 
 @app.get("/api/suggest-tickers")
@@ -1695,6 +1820,16 @@ def _startup_deep_worker() -> None:
 @app.on_event("shutdown")
 def _shutdown_deep_worker() -> None:
     stop_worker()
+
+
+@app.on_event("startup")
+def _startup_watchdog() -> None:
+    start_watchdog()
+
+
+@app.on_event("shutdown")
+def _shutdown_watchdog() -> None:
+    stop_watchdog()
 
 
 @app.on_event("startup")

@@ -186,6 +186,36 @@ def _restart_service(dest: str, key_args: list[str]) -> bool:
         return False
 
 
+def push_status_file(
+    local_status: str = "logs/run_daily_status.json",
+    remote_dest: str = f"{SERVER_USER}@{SERVER_HOST}:{SERVER_PATH}/data/run_daily_status.json",
+) -> bool:
+    """scp the run_daily status file to data/ on the server so /api/health can read it.
+
+    Mirrors the error posture of _restart_service: returns bool, never raises.
+    The -O flag keeps legacy SFTP mode (same as sync_to_server key_args).
+    """
+    local = Path(local_status)
+    if not local.exists():
+        print(f"[push_status] {local_status} not found — skipping")
+        return False
+    key_args = ["-i", SSH_KEY, "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=20", "-O"]
+    cmd = ["scp", *key_args, str(local), remote_dest]
+    try:
+        rc = subprocess.run(cmd, capture_output=True, timeout=30).returncode
+        if rc == 0:
+            print(f"[push_status] {local_status} → server [OK]")
+            return True
+        print(f"[push_status] scp failed (exit {rc})")
+        return False
+    except subprocess.TimeoutExpired:
+        print("[push_status] scp timed out after 30s")
+        return False
+    except Exception as exc:
+        print(f"[push_status] failed: {exc}")
+        return False
+
+
 def _probe_health(
     url: str = _HEALTH_URL,
     attempts: int = 6,

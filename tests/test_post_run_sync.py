@@ -196,3 +196,64 @@ def test_root_py_inventory_classified():
         f"{unclassified}. "
         f"Add to SYNC_PY_FILES (server) or _NOT_DEPLOYED_PY (laptop-only)."
     )
+
+
+# --- PR B: push_status_file ---------------------------------------------------
+
+def test_push_status_file_builds_correct_scp_cmd(tmp_path, monkeypatch):
+    """push_status_file must scp the status file to data/ on the server."""
+    status_file = tmp_path / "run_daily_status.json"
+    status_file.write_text('{"ts":"2026-06-09T14:00:00Z","stage":"ok","ok":true}', encoding="utf-8")
+
+    captured = {}
+
+    class _OK:
+        returncode = 0
+
+    def _fake_run(cmd, capture_output=None, timeout=None):
+        captured["cmd"] = cmd
+        return _OK()
+
+    monkeypatch.setattr(pr.subprocess, "run", _fake_run)
+
+    result = pr.push_status_file(
+        local_status=str(status_file),
+        remote_dest="dporter02@server:/opt/epm/data/run_daily_status.json",
+    )
+    assert result is True
+    assert "scp" in captured["cmd"]
+    assert any("run_daily_status.json" in a for a in captured["cmd"])
+    assert any("data/run_daily_status.json" in a for a in captured["cmd"])
+    assert "-O" in captured["cmd"]
+
+
+def test_push_status_file_missing_file_returns_false(monkeypatch):
+    result = pr.push_status_file(
+        local_status="/nonexistent/run_daily_status.json",
+        remote_dest="user@host:/path",
+    )
+    assert result is False
+
+
+def test_push_status_file_scp_failure_returns_false(tmp_path, monkeypatch):
+    status_file = tmp_path / "run_daily_status.json"
+    status_file.write_text("{}", encoding="utf-8")
+
+    class _Fail:
+        returncode = 1
+
+    monkeypatch.setattr(pr.subprocess, "run", lambda *a, **k: _Fail())
+    result = pr.push_status_file(local_status=str(status_file), remote_dest="user@host:/path")
+    assert result is False
+
+
+def test_push_status_file_exception_returns_false(tmp_path, monkeypatch):
+    status_file = tmp_path / "run_daily_status.json"
+    status_file.write_text("{}", encoding="utf-8")
+
+    def _raise(*a, **k):
+        raise OSError("network down")
+
+    monkeypatch.setattr(pr.subprocess, "run", _raise)
+    result = pr.push_status_file(local_status=str(status_file), remote_dest="user@host:/path")
+    assert result is False
