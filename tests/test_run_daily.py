@@ -95,6 +95,17 @@ def test_dirty_tree_refuses_run_exit_4():
     assert runner.calls == [], "must not generate/email/deploy when tree is dirty"
 
 
+def test_post_run_failure_with_fresh_site_exits_5(monkeypatch):
+    """post_run fails (deploy error) but site is fresh → exit 5 + alert sent."""
+    alerts = []
+    monkeypatch.setattr(run_daily, "_send_alert", lambda stage, detail: alerts.append(stage))
+    monkeypatch.setattr(run_daily, "_record_status", lambda *a, **k: None)
+    runner = _recording_runner([0, 1])  # email ok, post_run fails
+    rc = run_daily.main([], runner=runner, fresh_checker=lambda: (True, "fresh"))
+    assert rc == 5
+    assert "post_run" in alerts
+
+
 def test_allow_dirty_flag_bypasses_guard(monkeypatch):
     from post_run import _ALLOW_DIRTY_ENV
     monkeypatch.delenv(_ALLOW_DIRTY_ENV, raising=False)

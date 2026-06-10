@@ -57,6 +57,9 @@ SYNC_PY_FILES = [
     "council_roster.py",
     "pm_research.py",
     "research_service.py",
+    "news_store.py",
+    "snapshot_engine.py",
+    "universe_config.py",
 ]
 
 # Deployable CODE paths — dirty state here means the deploy would ship code
@@ -105,14 +108,14 @@ _NOT_DEPLOYED_PY = frozenset({
     "feature_promoter.py", "feature_tester.py", "feature_validator.py",
     "forecast_common.py", "gather_qlora_data.py", "generate_charts.py",
     "generate_toggle_chart.py", "institutional_model.py", "linear_model.py",
-    "ml_model.py", "model_leaderboard.py", "model_ranking.py", "news_store.py",
+    "ml_model.py", "model_leaderboard.py", "model_ranking.py",
     "post_run.py", "push_to_github.py", "quantconnect_model.py",
     "record_predictions.py", "refresh_fama_french_factors.py",
     "refresh_growth24_price_cache.py", "refresh_quant_cup_price_cache.py",
     "regime_detector.py", "run_daily.py", "scrape_ycharts.py",
-    "snapshot_engine.py", "summarize_distill_sweep.py",
+    "summarize_distill_sweep.py",
     "sync_forecasts_to_features.py", "test_earnings_trigger.py",
-    "universe_config.py", "update_sentiment.py",
+    "update_sentiment.py",
 })
 
 _ALLOW_DIRTY_ENV = "EPM_ALLOW_DIRTY_DEPLOY"
@@ -125,6 +128,7 @@ def _git_dirty_code_paths() -> list[str]:
         result = subprocess.run(
             ["git", "status", "--porcelain", "--"] + _DEPLOY_CODE_PATHS,
             capture_output=True, text=True, timeout=15,
+            cwd=str(Path(__file__).resolve().parent),
         )
         if result.returncode != 0:
             print("[SYNC] WARNING: git status failed — skipping dirty check")
@@ -148,6 +152,7 @@ def _unlisted_root_py() -> list[str]:
         result = subprocess.run(
             ["git", "ls-files", "*.py"],
             capture_output=True, text=True, timeout=15,
+            cwd=str(Path(__file__).resolve().parent),
         )
         if result.returncode != 0:
             return []

@@ -28,6 +28,7 @@ Exit codes:
   2  site is stale/unreachable after sync — investigate
   3  wrong branch — refused to run (working tree not on the pipeline branch)
   4  dirty working tree — refused to run (uncommitted deployable code changes)
+  5  deploy step failed (sync/restart/health) — email sent but server may run old code
 """
 from __future__ import annotations
 
@@ -201,20 +202,25 @@ def main(
         _send_alert("send_email", msg)
         return 1
 
-    # 2. Post-run tasks + sync to server. A sync hiccup is non-fatal here because
-    #    the freshness check below is the real gate on whether the site is current.
+    # 2. Post-run tasks + sync to server. A non-zero exit means the deploy itself
+    #    failed (dirty guard, transfer error, restart failure, or health probe). We
+    #    still run the freshness check so the operator sees content state too, but
+    #    exit 5 surfaces the deploy failure even when content happens to be fresh.
     rc = runner([PY, "post_run.py"])
     post_run_warn = ""
     if rc != 0:
-        post_run_warn = f"post_run.py exited {rc} — sync may be incomplete; verifying site..."
+        post_run_warn = f"post_run.py exited {rc} — deploy may be incomplete; verifying site..."
         print(f"[run_daily] {post_run_warn}")
+        _record_status("post_run", False, post_run_warn)
+        _send_alert("post_run", post_run_warn)
 
     # 3. Verify the public site actually reflects today's analysis.
     if args.skip_freshness:
         print("[run_daily] freshness check skipped by flag.")
-        _record_status("ok", True, "freshness check skipped by flag" +
+        _record_status("ok" if not post_run_warn else "post_run", not bool(post_run_warn),
+                       "freshness check skipped by flag" +
                        (f" ({post_run_warn})" if post_run_warn else ""))
-        return 0
+        return 5 if post_run_warn else 0
 
     if fresh_checker is None:
         from check_site_freshness import is_site_fresh
@@ -231,6 +237,9 @@ def main(
 
     ok_detail = detail + (f" (warning: {post_run_warn})" if post_run_warn else "")
     print(f"[run_daily] OK — {ok_detail}")
+    if post_run_warn:
+        _record_status("post_run", False, ok_detail)
+        return 5
     _record_status("ok", True, ok_detail)
     return 0
 
