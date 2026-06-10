@@ -417,6 +417,16 @@ def sync_to_server(*, allow_dirty: bool = False) -> bool:
         print("  Add to SYNC_PY_FILES (server) or _NOT_DEPLOYED_PY (laptop-only).")
         print("  " + "!" * 64)
 
+    # Data freshness — warn-only summary before sync (never blocks manual deploys).
+    # The pipeline gate runs earlier in send_email.py; this surfaces the same
+    # information in the deploy log for operator awareness.
+    try:
+        from services import data_freshness as _df_sync
+        for _w in _df_sync.warn_lines(_df_sync.run_checks()):
+            print(f"[SYNC] {_w}")
+    except Exception as _df_sync_exc:
+        print(f"[SYNC] (data freshness check failed: {_df_sync_exc})")
+
     print("\n[SYNC] Pushing output to server...")
     errors = 0
     ok = 0

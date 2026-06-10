@@ -1207,6 +1207,24 @@ def main(argv=None) -> int:
             logging.error(_fresh_err)
             return 1
 
+        # Data freshness gate — check market data inputs are not stale.
+        # With DATA_FRESHNESS_ENFORCE=0 (default) this is warn-only; with =1 a
+        # critical failure blocks the email the same way the narrative gate does.
+        try:
+            from services import data_freshness as _df
+            _df_results = _df.run_checks(today=_today)
+            _df.write_report(_df_results, today=_today)
+            for _w in _df.warn_lines(_df_results):
+                print(_w)
+                logging.warning(_w)
+            _df_gate = _df.gate_message(_df_results)
+            if _df_gate:
+                print(_df_gate)
+                logging.error(_df_gate)
+                return 1
+        except Exception as _df_exc:
+            logging.warning(f"[DATA-FRESHNESS] check raised unexpectedly ({_df_exc}); continuing")
+
         # --send-only skipped monitor.py, which normally regenerates the PDF. Both the
         # served report site AND the email's PDF attachment are built from report.pdf,
         # so without this they'd be stale relative to the fresh commentary the email
