@@ -489,9 +489,10 @@ function buildMetricPill(card) {
 }
 
 function buildSymbolCard(card, compact = false, clickable = true) {
+  const cardClass = compact ? "live-card live-card--compact" : "live-card";
   if (card.error) {
     return `
-      <article class="live-card live-card--error">
+      <article class="${cardClass} live-card--error">
         <div class="card-header">
           <div class="card-header-top">
             <h4>${escapeHtml(card.ticker || "Symbol")}</h4>
@@ -505,7 +506,7 @@ function buildSymbolCard(card, compact = false, clickable = true) {
   const description = shortText(card.description || card.industry || card.sector || "Live market card", 100);
 
   const inner = `
-    <article class="live-card">
+    <article class="${cardClass}">
       <div class="card-header">
         <div class="card-header-top">
           <h4>${escapeHtml(card.ticker || "")}</h4>
@@ -571,7 +572,7 @@ function renderCardGrid(selector, cards, compact = false, clickable = true) {
 function renderHomePayload(payload) {
   renderInto("#homeMarketStrip", (payload.market_strip || []).map(buildMetricPill).join("") || '<div class="placeholder-item">No market strip data.</div>');
   renderCardGrid("#homeFeaturedCards", payload.featured_cards || [], false, true);
-  renderCardGrid("#homePortfolioCards", payload.portfolio_watchlist || [], false, true);
+  renderCardGrid("#homePortfolioCards", payload.portfolio_watchlist || [], true, true);
   renderInto("#homeTopNews", (payload.top_news || []).map(buildNewsItem).join("") || '<div class="placeholder-item">No ranked headlines available.</div>');
   const generatedEl = document.getElementById("homeGeneratedAt");
   if (generatedEl && payload.generated_at) generatedEl.textContent = `Updated ${payload.generated_at}`;
@@ -637,7 +638,7 @@ function getThemeColor(name, fallback) {
 
 
 function isCompactViewport() {
-  return window.innerWidth <= 820;
+  return window.innerWidth <= 820 || document.body?.dataset?.density === 'dense' || document.documentElement?.dataset?.density === 'dense';
 }
 
 function queueResponsivePlotResize(target) {
@@ -928,6 +929,7 @@ function renderMarketSummary(payload) {
 }
 
 async function renderMarketsVisuals(payload) {
+  _lastMarketsVisualPayload = payload;
   const comparison = payload.index_comparison || [];
   if (comparison.length) {
     renderMarketComparisonChart('marketsIndexComparisonChart', comparison);
@@ -1204,10 +1206,23 @@ function renderSecInsider(insiderData) {
   const data      = insiderData || {};
   const summary   = data.summary || {};
   const trades    = data.transactions || [];
+  const hasSummary = Boolean(summary.buy_count || summary.sell_count);
+
+  if (!hasSummary && !trades.length) {
+    if (summaryEl) {
+      summaryEl.innerHTML = `
+        <div class="insider-calm-state">
+          <strong>No recent open-market insider trades.</strong>
+          <span>For once, nobody crossed the line between conviction and conflict.</span>
+        </div>`;
+    }
+    if (listEl) listEl.innerHTML = '';
+    return;
+  }
 
   // ── Summary bar ────────────────────────────────────────────────────────
   if (summaryEl) {
-    if (!summary.buy_count && !summary.sell_count) {
+    if (!hasSummary) {
       summaryEl.innerHTML = '<div class="econ-empty">No insider data available — run daily pipeline to populate.</div>';
     } else {
       const ratio    = summary.buy_ratio != null ? (summary.buy_ratio * 100).toFixed(0) : '—';
@@ -1341,7 +1356,7 @@ async function initHomePage() {
   const prefs = epmGetCachedPrefs();
   const customTickers = (prefs?.featured_tickers?.length) ? prefs.featured_tickers : null;
   const homeUrl = buildHomeUrl(customTickers);
-  const cacheKey = customTickers ? 'api_cache_home_custom' : 'api_cache_home';
+  const cacheKey = customTickers ? 'api_cache_home_custom_v2' : 'api_cache_home_v2';
 
   // Wire up watchlist editor — refreshes data when saved
   const reloadWithTickers = async (newTickers) => {
@@ -1526,7 +1541,20 @@ function startQuotesPoller(stripSelector, badgeSelector) {
   });
 }
 
+let _lastMarketsVisualPayload = null;
+let _marketsDensityRefreshBound = false;
+
+function bindMarketsDensityRefresh() {
+  if (_marketsDensityRefreshBound) return;
+  _marketsDensityRefreshBound = true;
+  window.addEventListener('epm:densitychange', () => {
+    if (document.body.dataset.page !== 'markets' || !_lastMarketsVisualPayload) return;
+    setTimeout(() => { renderMarketsVisuals(_lastMarketsVisualPayload); }, 40);
+  });
+}
+
 async function initMarketsPage() {
+  bindMarketsDensityRefresh();
   const cacheKey = 'api_cache_markets';
   try {
     const cached = readSessionJson(cacheKey, 180000);

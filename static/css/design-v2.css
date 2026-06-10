@@ -1585,6 +1585,7 @@ body[data-theme="light"] .mini-stat {
   grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
   gap: 18px;
   margin-top: 4px;
+  min-width: 0;
 }
 
 .podium-card {
@@ -1595,6 +1596,8 @@ body[data-theme="light"] .mini-stat {
   display: flex;
   flex-direction: column;
   gap: 0;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .podium-card-header {
@@ -1683,6 +1686,7 @@ body[data-theme="light"] .mini-stat {
 .lookback-actual-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 8px;
   font-size: 12px;
@@ -1699,7 +1703,8 @@ body[data-theme="light"] .mini-stat {
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--text-muted, #6b7f9e);
-  margin-left: auto;
+  margin-left: 0;
+  min-width: 0;
 }
 .lookback-predictions { display: flex; flex-direction: column; gap: 4px; }
 .lookback-row {
@@ -1726,15 +1731,18 @@ body[data-theme="light"] .mini-stat {
   border-radius: 8px;
   background: rgba(255,255,255,0.025);
   border: 1px solid rgba(255,255,255,0.06);
+  min-width: 0;
+  overflow: hidden;
 }
 .leaderboard-model-row {
   display: grid;
-  grid-template-columns: 42px minmax(122px, 1.4fr) repeat(5, minmax(54px, auto)) minmax(112px, 1fr);
+  grid-template-columns: 34px minmax(0, 1fr) repeat(3, minmax(40px, auto));
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   padding: 8px 0;
   border-top: 1px solid rgba(255,255,255,0.055);
   font-size: 11px;
+  min-width: 0;
 }
 .leaderboard-model-row:first-of-type { border-top: 0; }
 .leaderboard-model-row.is-top-three .leaderboard-rank {
@@ -1782,6 +1790,10 @@ body[data-theme="light"] .mini-stat {
   min-width: 0;
   font-variant-numeric: tabular-nums;
 }
+.leaderboard-model-row .leaderboard-stat.optional,
+.leaderboard-model-row .leaderboard-lookback {
+  display: none;
+}
 
 /* Light mode */
 [data-theme="light"] .podium-card {
@@ -1798,8 +1810,9 @@ body[data-theme="light"] .mini-stat {
   .podium-grid { grid-template-columns: 1fr; }
   .podium-model-name { font-size: 10px; }
   .leaderboard-model-row {
-    grid-template-columns: 38px minmax(96px, 1fr) repeat(3, minmax(48px, auto));
+    grid-template-columns: 32px minmax(0, 1fr) repeat(2, minmax(40px, auto));
   }
+  .leaderboard-stat--dir,
   .leaderboard-stat.optional,
   .leaderboard-lookback {
     display: none;

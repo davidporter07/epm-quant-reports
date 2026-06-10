@@ -218,7 +218,7 @@ class MarketBoardService:
             raise RuntimeError("MarketBoardService requires either a page_service or a snapshot_engine.")
 
     def get_home_payload(self) -> dict[str, Any]:
-        cache_key = ("home_payload",)
+        cache_key = ("home_payload", "watchlist_topup_v1")
         cached = self._cache_get(cache_key)
         if cached is not None:
             return cached
@@ -233,8 +233,17 @@ class MarketBoardService:
         # unavailable. Cards still refresh intraday via build_symbol_cards + the
         # 600s cache TTL, so membership updates daily and prices update intraday.
         watch_dynamic = [s for s in self._load_names_to_watch() if s.upper() not in mag7_set]
-        watchlist_symbols = (watch_dynamic or
-                             [s for s in portfolio_symbols if s.upper() not in mag7_set])[:4]
+        watch_fallback = [s for s in portfolio_symbols if s.upper() not in mag7_set]
+        watchlist_symbols: list[str] = []
+        seen_watchlist: set[str] = set()
+        for symbol in watch_dynamic + watch_fallback:
+            key = symbol.upper()
+            if key in seen_watchlist:
+                continue
+            seen_watchlist.add(key)
+            watchlist_symbols.append(symbol)
+            if len(watchlist_symbols) >= 4:
+                break
         payload = {
             "generated_at": self._today_iso(),
             "market_strip": self._decorate_index_cards(self.build_symbol_cards(market_strip_symbols[:7], period="3m")),

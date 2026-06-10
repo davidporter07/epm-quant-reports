@@ -541,9 +541,9 @@ function renderPodiumLeaderboard(forecastTickers, chartDataMap) {
         <div class="leaderboard-model-row${rank <= 3 ? ' is-top-three' : ''}">
           <span class="leaderboard-rank">#${rank}</span>
           <span class="leaderboard-model" style="color:${modelColor}">${modelLabel}</span>
-          <span class="leaderboard-stat"><span>MAE</span>${metricPct(r.MAE)}</span>
-          <span class="leaderboard-stat"><span>RMSE</span>${metricPct(r.RMSE)}</span>
-          <span class="leaderboard-stat"><span>Dir</span>${dirAcc}</span>
+          <span class="leaderboard-stat leaderboard-stat--mae"><span>MAE</span>${metricPct(r.MAE)}</span>
+          <span class="leaderboard-stat leaderboard-stat--rmse"><span>RMSE</span>${metricPct(r.RMSE)}</span>
+          <span class="leaderboard-stat leaderboard-stat--dir"><span>Dir</span>${dirAcc}</span>
           <span class="leaderboard-stat optional"><span>Corr</span>${corr}</span>
           <span class="leaderboard-stat optional"><span>N</span>${obs}</span>
           <span class="leaderboard-lookback">${lookbackHTML}</span>

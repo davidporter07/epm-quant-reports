@@ -239,6 +239,7 @@
   function setDensity(val) {
     try { localStorage.setItem('epm_density_pref', val); } catch (_) {}
     _syncDensityToBody();
+    try { window.dispatchEvent(new CustomEvent('epm:densitychange', { detail: { density: val } })); } catch (_) {}
   }
 
   function _syncDensityToBody() {
