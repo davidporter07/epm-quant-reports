@@ -160,6 +160,10 @@ one-time resolution log.
 - `log_resolved()` — one-line startup summary of resolved endpoints (called
   from app.py startup and pipeline entry), so prod/laptop divergence is
   visible in logs instead of discovered during incidents.
+- The module must `load_dotenv(override=False)` on import (same pattern as
+  `email_service`): laptop pipeline processes (`run_daily.py`,
+  `generate_market_commentary.py`) do NOT otherwise load `.env`, so a
+  required `LOCAL_OLLAMA_URL` would falsely fail on the laptop without this.
 
 Required vs allowed defaults: **required** = anything where the correct value
 differs between laptop and server (`LOCAL_OLLAMA_URL`). **Allowed default** =
@@ -198,9 +202,11 @@ everywhere.
 ### Risks & decisions needed
 
 - **R1**: making `LOCAL_OLLAMA_URL` required fails fast if either machine's
-  env lacks it. Pre-deploy verification step: confirm it is present in the
-  laptop env AND `/opt/epm-market-intelligence/.env` BEFORE merging the
-  app.py migration. (Decision: hard-require vs warn+default `127.0.0.1`.)
+  env lacks it. Laptop `.env` VERIFIED 2026-06-10 (has `LOCAL_OLLAMA_URL` +
+  `EPM_SERVER_URL`). Server still unverified — run on the server:
+  `sudo grep -c "^LOCAL_OLLAMA_URL=." /opt/epm-market-intelligence/.env`
+  (want `1`) BEFORE merging the app.py migration.
+  (Decision: hard-require vs warn+default `127.0.0.1`.)
 - **R2**: `app.py` chat default changes from the stale LAN IP — if the server
   somehow relied on the old default (it shouldn't; env is set), chat breaks.
   Mitigated by R1 verification + origin health probe checks Ollama.
