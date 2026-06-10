@@ -15,15 +15,16 @@ Env:
 """
 from __future__ import annotations
 
-import os
 from typing import Any, Dict, List, Optional
 
 import requests
 
+from services import runtime_config as _rc
+
 
 class SearxNGProvider:
     def __init__(self, base_url: Optional[str] = None, timeout: float = 8.0):
-        self.base_url = (base_url or os.getenv("SEARXNG_URL", "http://127.0.0.1:8080")).rstrip("/")
+        self.base_url = (base_url or _rc.searxng_url()).rstrip("/")
         self.timeout = timeout
 
     def available(self) -> bool:

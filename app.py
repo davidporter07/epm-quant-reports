@@ -54,6 +54,7 @@ from services.email_service import (
 from deep_analysis_worker import (cancel_job, enqueue, get_job_status, get_today_cached_job,
                                    invalidate_today_cache, start_worker, stop_worker, worker_status)
 from services.watchdog_service import start_watchdog, stop_watchdog, watchdog_status
+from services import runtime_config as _rc
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -1494,7 +1495,7 @@ def health() -> dict:
                 _tags = r.json()
                 _loaded = {m.get("name", "") for m in (_tags.get("models") or [])}
                 _chat_m = _CHAT_OLLAMA_MODEL
-                _council_m = os.getenv("COUNCIL_OLLAMA_MODEL", "deepseek-r1:8b")
+                _council_m = _rc.council_model()
                 _missing_m = [m for m in (_chat_m, _council_m) if m not in _loaded]
                 checks["ollama"]["models"] = {
                     "chat": _chat_m in _loaded,
@@ -2391,8 +2392,8 @@ def _council_is_running() -> bool:
     return False
 
 
-_CHAT_OLLAMA_HOST = os.getenv("LOCAL_OLLAMA_URL", "http://192.168.1.145:11434")
-_CHAT_OLLAMA_MODEL = os.getenv("CHAT_OLLAMA_MODEL", "qwen3.5:4b")
+_CHAT_OLLAMA_HOST = _rc.ollama_url()
+_CHAT_OLLAMA_MODEL = _rc.chat_model()
 _CHAT_TIMEOUT = int(os.getenv("LOCAL_OLLAMA_TIMEOUT", "120"))
 
 _CHAT_SYSTEM_PROMPT = """You are EPM Market Intelligence's AI assistant  a concise, professional market strategist.

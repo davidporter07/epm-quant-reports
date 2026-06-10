@@ -42,10 +42,10 @@ TO = os.getenv("INTERNAL_RECIPIENT", "dporter@epmfinancial.com")
 # nginx (the Tailscale IP:8000 is NOT reachable), so the laptop must go through the
 # public HTTPS origin; the route is guarded by INTERNAL_API_KEY. The send falls back
 # to the internal recipient only if this is unreachable or the key is unset.
-EPM_SERVER_URL = os.getenv("EPM_SERVER_URL", "https://epm-market-intelligence.com").rstrip("/")
-INTERNAL_RECIPIENTS_URL = os.getenv(
-    "INTERNAL_RECIPIENTS_URL", f"{EPM_SERVER_URL}/api/internal/daily-recipients"
-)
+from services import runtime_config as _rc
+
+EPM_SERVER_URL = _rc.epm_server_url()
+INTERNAL_RECIPIENTS_URL = _rc.internal_recipients_url()
 # CAN-SPAM: a physical postal address must appear in the footer of bulk mail.
 MAIL_PHYSICAL_ADDRESS = os.getenv("MAIL_PHYSICAL_ADDRESS", "EPM Financial")
 def _build_subject():

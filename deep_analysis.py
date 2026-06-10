@@ -23,9 +23,10 @@ import yfinance as yf
 import research_service
 from earnings_refresh import load_recent_earnings_release, ticker_variants
 from news_store import load_news_store
+from services import runtime_config as _rc
 from universe_config import get_portfolio_tickers
 
-KRONOS_URL = "http://127.0.0.1:8100"
+KRONOS_URL = _rc.kronos_url()
 DATA_DIR = Path("data")
 
 # Hard ceiling (seconds) on the background web-research enrichment per deep-analysis
