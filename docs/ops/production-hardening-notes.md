@@ -110,7 +110,21 @@ python post_run.py          # origin probe is the deploy verdict
 
 ---
 
-## PR C — Config centralization (PLANNED, not started)
+## PR C — Config centralization (IMPLEMENTED 2026-06-10, pending deploy approval)
+
+Implemented as planned below, in four staged commits:
+1. `services/runtime_config.py` + 16 unit tests (no callers)
+2. pipeline cluster migrated (generate_market_commentary,
+   commentary/ollama_commentary, local_council, research_service)
+3. app.py (stale LAN default eliminated), deep_analysis (KRONOS_URL env
+   override added), searxng_provider, send_email
+4. endpoint-literal lint test (`tests/test_endpoint_literals.py`) +
+   `.env.example` docs; lint immediately caught and fixed two leftover
+   literals (email_service docstring LAN IP, searxng docstring default)
+
+Decisions taken: R1 hard-require `LOCAL_OLLAMA_URL` (verified present in
+BOTH .envs before stage 2 — server returned grep count 1); D1 model-name
+defaults centralized; D2 post_run.py excluded. Env var names unchanged.
 
 ### Problem
 

@@ -262,7 +262,7 @@ def send_password_reset_email(to_email: str, username: str, reset_url: str) -> N
     Args:
         to_email:  Recipient email address.
         username:  Their username, used in the greeting.
-        reset_url: The full reset link, e.g. http://192.168.1.133:8000/reset-password?token=abc
+        reset_url: The full reset link, e.g. https://epm-market-intelligence.com/reset-password?token=abc
     """
     subject = "EPM Market Intelligence — Password Reset Request"
 

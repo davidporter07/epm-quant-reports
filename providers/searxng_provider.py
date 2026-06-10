@@ -11,7 +11,7 @@ absent" identically, so the feature degrades gracefully until the container
 is stood up.
 
 Env:
-  SEARXNG_URL  base URL of the JSON API (default http://127.0.0.1:8080)
+  SEARXNG_URL  base URL of the JSON API (default via services/runtime_config)
 """
 from __future__ import annotations
 
