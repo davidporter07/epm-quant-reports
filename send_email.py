@@ -82,8 +82,36 @@ COMMENTARY_JSON = ROOT / 'data' / 'latest_commentary.json'
 # PDF is written into the GitHub Pages repo (epm-quant-reports)
 _PDF1 = ROOT / 'epm-quant-reports' / 'report.pdf'
 _PDF2 = ROOT / 'report.pdf'
-PDF_REPORT = str(_PDF1 if _PDF1.exists() else _PDF2)
 GITHUB_LINK = "https://epm-market-intelligence.com"
+
+# Exit code 6: partial send — some recipients failed but others succeeded.
+# run_daily deploys the site (subscribers already have mail linking to it)
+# and fires an ops alert. Re-running send_email.py --send-only retries only
+# the failed recipients via the per-recipient ledger.
+EXIT_PARTIAL_SEND = 6
+
+
+def _pdf_report_path() -> str:
+    """Resolve PDF path at call time so mtime checks are accurate."""
+    return str(_PDF1 if _PDF1.exists() else _PDF2)
+
+
+def _check_pdf(today: str) -> "tuple[bool, str]":
+    """Return (pdf_ok, detail). SEND_REQUIRE_PDF=1 makes a missing/stale PDF block the send."""
+    require = os.getenv("SEND_REQUIRE_PDF", "0").strip() == "1"
+    try:
+        p = Path(_pdf_report_path())
+        if not p.exists():
+            detail = f"PDF not found at {p}"
+            return (False, f"[BLOCK] {detail} — set SEND_REQUIRE_PDF=0 to warn-only") if require else (False, f"[WARN] {detail}")
+        mtime_d = datetime.fromtimestamp(p.stat().st_mtime).date()
+        today_d = date.fromisoformat(today)
+        if mtime_d != today_d:
+            detail = f"PDF mtime {mtime_d} != today {today_d}"
+            return (False, f"[BLOCK] {detail} — set SEND_REQUIRE_PDF=0 to warn-only") if require else (False, f"[WARN] {detail}")
+        return True, f"PDF fresh (mtime {mtime_d})"
+    except Exception as exc:
+        return False, f"[WARN] PDF check error: {exc}"
 
 # Prefer venv python if present; fall back to current interpreter
 _VENV_PY = ROOT / '.venv' / 'Scripts' / 'python.exe'
@@ -1004,15 +1032,19 @@ def _footer_html(unsubscribe_url: "str | None" = None) -> str:
     return "".join(parts)
 
 
-def get_daily_recipients() -> list[dict]:
-    """The daily-email recipient list: the always-on internal recipient plus the
-    confirmed opt-in subscribers fetched from the server. Falls back to the internal
-    recipient alone if the server is unreachable or no internal key is configured —
-    the daily email must never fail to go out to the internal recipient."""
+def fetch_daily_recipients() -> "tuple[list[dict], bool]":
+    """Return (recipients, fetch_ok).
+
+    fetch_ok=False when the subscriber list could not be retrieved (key unset,
+    server unreachable, or request error) — the returned list contains only the
+    internal recipient. The caller should treat fetch_ok=False as a partial-send
+    condition so a re-run can retry subscriber delivery once the server is reachable.
+    """
     recipients = [{"email": TO, "unsubscribe_url": None}]
     key = os.getenv("INTERNAL_API_KEY", "").strip()
     if not key or requests is None:
-        return recipients
+        print("[WARN] INTERNAL_API_KEY not set; sending to internal recipient only.")
+        return recipients, False
     try:
         resp = requests.get(
             INTERNAL_RECIPIENTS_URL,
@@ -1027,8 +1059,19 @@ def get_daily_recipients() -> list[dict]:
                 seen.add(email.lower())
                 recipients.append({"email": email, "unsubscribe_url": r.get("unsubscribe_url")})
         print(f"[RECIPIENTS] {len(recipients)} recipient(s): internal + {len(recipients) - 1} subscriber(s).")
+        return recipients, True
     except Exception as exc:
         print(f"[WARN] Could not fetch subscriber list ({exc}); sending to internal recipient only.")
+        return recipients, False
+
+
+def get_daily_recipients() -> list[dict]:
+    """The daily-email recipient list (thin wrapper around fetch_daily_recipients).
+
+    Callers that don't need the fetch_ok flag use this for back-compat.
+    The daily email must never fail to go out to the internal recipient.
+    """
+    recipients, _ = fetch_daily_recipients()
     return recipients
 
 
@@ -1109,8 +1152,9 @@ def build_email(to_addr: "str | None" = None, unsubscribe_url: "str | None" = No
 
     msg.attach(related)
 
-    if os.path.exists(PDF_REPORT):
-        with open(PDF_REPORT, "rb") as f:
+    _pdf_path = _pdf_report_path()
+    if os.path.exists(_pdf_path):
+        with open(_pdf_path, "rb") as f:
             pdf = MIMEApplication(f.read(), _subtype="pdf")
             pdf.add_header("Content-Disposition", "attachment", filename="Quant_Report.pdf")
             msg.attach(pdf)
@@ -1242,26 +1286,66 @@ def main(argv=None) -> int:
                 logging.error(f" --send-only PDF regen failed: {_pdf_err}")
                 print(f" [WARN] PDF regen failed ({_pdf_err}) — sending with existing PDF.")
 
-        logging.info(" Preparing and sending email...")
-        recipients = get_daily_recipients()
-        sent = 0
-        for rec in recipients:
+        # --- Recipient fetch + ledger idempotency ---
+        from services import send_ledger as _sl
+        logging.info(" Fetching recipients and loading send ledger...")
+        _recipients, _fetch_ok = fetch_daily_recipients()
+        _ledger = _sl.load_ledger(_today)
+        _done = _sl.successful_recipients(_ledger)
+        _pending = [r for r in _recipients if r["email"].lower() not in _done]
+
+        if not _pending:
+            print(f" All {len(_recipients)} recipient(s) already sent today (ledger). Skipping.")
+            logging.info(" All recipients already sent today (ledger).")
+            return 0
+
+        # PDF check (warn-only by default; blocks when SEND_REQUIRE_PDF=1)
+        _pdf_ok, _pdf_detail = _check_pdf(_today)
+        if not _pdf_ok:
+            print(f" {_pdf_detail}")
+            logging.warning(_pdf_detail)
+            if "[BLOCK]" in _pdf_detail:
+                return 1
+
+        _ledger = _sl.record_attempt_start(_ledger, fetch_ok=_fetch_ok, pdf_ok=_pdf_ok)
+
+        logging.info(f" Sending to {len(_pending)} pending recipient(s)...")
+        for rec in _pending:
             try:
                 msg = build_email(to_addr=rec["email"], unsubscribe_url=rec.get("unsubscribe_url"))
-                email_service.send_raw(msg, [rec["email"]])
-                sent += 1
+                _provider = email_service.send_raw(msg, [rec["email"]])
+                _ledger = _sl.record_result(_ledger, rec["email"], ok=True, provider=_provider, error=None)
             except Exception as send_exc:
-                logging.error(f" Failed to send to {rec['email']}: {send_exc}")
-                print(f" [WARN] Failed to send to {rec['email']}: {send_exc}")
+                _err = str(send_exc)
+                logging.error(f" Failed to send to {rec['email']}: {_err}")
+                print(f" [WARN] Failed to send to {rec['email']}: {_err}")
+                _ledger = _sl.record_result(_ledger, rec["email"], ok=False, provider=None, error=_err)
+            _sl.write_ledger(_ledger)  # crash-safe: written after every result
 
-        if sent == 0:
+        _sl.write_summary(_ledger, internal_email=TO)
+
+        _total_ok = sum(1 for r in _ledger["recipients"].values() if r.get("ok"))
+        _failed = len(_pending) - _total_ok
+
+        if _total_ok == 0:
             logging.error(" Email send failed for ALL recipients.")
             print(" [ERROR] Email send failed for all recipients.")
             return 1
 
-        logging.info(f" Email sent to {sent}/{len(recipients)} recipient(s).")
+        if _failed > 0 or not _fetch_ok:
+            _partial_msg = (
+                f" [WARN] PARTIAL send: {_total_ok}/{len(_pending)} sent"
+                + (f", {_failed} failed" if _failed else "")
+                + ("" if _fetch_ok else ", subscriber list unavailable")
+                + ". Re-run 'python send_email.py --send-only' to retry."
+            )
+            logging.warning(_partial_msg)
+            print(_partial_msg)
+            return EXIT_PARTIAL_SEND
+
+        logging.info(f" Email sent to {_total_ok}/{len(_pending)} recipient(s).")
         mark_sent_today()
-        print(f" Email sent to {sent}/{len(recipients)} recipient(s).")
+        print(f" Email sent to {_total_ok}/{len(_pending)} recipient(s).")
         return 0
     except Exception as e:
         logging.error(f" Error in workflow: {e}")

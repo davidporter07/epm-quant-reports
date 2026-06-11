@@ -1,5 +1,8 @@
 """PR2: send_email.main() must return non-zero on real failures (monitor / SMTP)
-and a clean 0 for the already-sent / market-closed skips."""
+and a clean 0 for the already-sent / market-closed skips.
+PR E: ledger idempotency, exit 6 (partial / fetch failure), PDF gate.
+"""
+import json
 import subprocess
 import types
 
@@ -9,21 +12,39 @@ import pytest
 # the environment can't import it.
 se = pytest.importorskip("send_email")
 
+from services import send_ledger as _sl
+
 
 def _ok_run(*a, **k):
     return types.SimpleNamespace(returncode=0)
 
 
+def _make_recipients(fetch_ok=True):
+    """Return (recipients_list, fetch_ok) — matches fetch_daily_recipients() signature."""
+    return [{"email": se.TO, "unsubscribe_url": None}], fetch_ok
+
+
 @pytest.fixture(autouse=True)
-def _no_real_io(monkeypatch):
-    # Never write the real sent-log or build a real email during these tests.
+def _no_real_io(monkeypatch, tmp_path):
+    """Isolate every test from real filesystem, network, and subprocess side effects."""
     monkeypatch.setattr(se, "mark_sent_today", lambda: None)
     monkeypatch.setattr(se, "build_email",
                         lambda *a, **k: types.SimpleNamespace(as_string=lambda: "msg"))
-    # Single internal recipient so the send loop never touches the network for the list.
-    monkeypatch.setattr(se, "get_daily_recipients",
-                        lambda: [{"email": se.TO, "unsubscribe_url": None}])
+    # main() calls fetch_daily_recipients(); wire a default of (internal, fetch_ok=True)
+    monkeypatch.setattr(se, "fetch_daily_recipients", lambda: _make_recipients(True))
+    # PDF is always ok by default
+    monkeypatch.setattr(se, "_check_pdf", lambda today: (True, "PDF fresh"))
+    # Route ledger/summary writes to tmp_path so tests stay isolated
+    ledger_path = tmp_path / "ledger.json"
+    summary_path = tmp_path / "summary.json"
+    import services.send_ledger as _sl_mod
+    monkeypatch.setattr(_sl_mod, "_LEDGER_PATH", ledger_path)
+    monkeypatch.setattr(_sl_mod, "_SUMMARY_PATH", summary_path)
 
+
+# ---------------------------------------------------------------------------
+# Legacy fast-path tests (PR2 — unchanged behaviour)
+# ---------------------------------------------------------------------------
 
 def test_already_sent_returns_zero_and_does_not_run(monkeypatch):
     monkeypatch.setattr(se, "already_sent_today", lambda: True)
@@ -62,7 +83,7 @@ def test_smtp_failure_returns_nonzero(monkeypatch):
     monkeypatch.setattr(se, "already_sent_today", lambda: False)
     monkeypatch.setattr(se, "is_market_open", lambda: True)
     monkeypatch.setattr(se.subprocess, "run", _ok_run)
-    monkeypatch.setattr(se, "_check_commentary_fresh", lambda today: None)  # fresh
+    monkeypatch.setattr(se, "_check_commentary_fresh", lambda today: None)
 
     def _send_boom(*a, **k):
         raise OSError("smtp down")
@@ -82,7 +103,234 @@ def test_success_returns_zero_and_marks_sent(monkeypatch):
 
     sent = {"n": 0}
     monkeypatch.setattr(se.email_service, "send_raw",
-                        lambda *a, **k: sent.__setitem__("n", sent["n"] + 1))
+                        lambda *a, **k: sent.__setitem__("n", sent["n"] + 1) or "resend")
     assert se.main([]) == 0
     assert marked["v"] is True
     assert sent["n"] == 1
+
+
+# ---------------------------------------------------------------------------
+# PR E: partial send → exit 6, no mark_sent_today
+# ---------------------------------------------------------------------------
+
+def _two_recipients():
+    return [
+        {"email": se.TO, "unsubscribe_url": None},
+        {"email": "sub@example.com", "unsubscribe_url": "https://x.com/unsub"},
+    ], True
+
+
+def test_partial_send_exits_6_no_legacy_mark(monkeypatch):
+    """First recipient succeeds, second fails → exit 6, mark_sent_today NOT called."""
+    monkeypatch.setattr(se, "already_sent_today", lambda: False)
+    monkeypatch.setattr(se, "is_market_open", lambda: True)
+    monkeypatch.setattr(se.subprocess, "run", _ok_run)
+    monkeypatch.setattr(se, "_check_commentary_fresh", lambda today: None)
+    monkeypatch.setattr(se, "fetch_daily_recipients", _two_recipients)
+
+    results = iter(["resend", OSError("smtp error")])
+
+    def _mixed(*a, **k):
+        r = next(results)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    monkeypatch.setattr(se.email_service, "send_raw", _mixed)
+
+    marked = {"v": False}
+    monkeypatch.setattr(se, "mark_sent_today", lambda: marked.__setitem__("v", True))
+
+    rc = se.main([])
+    assert rc == se.EXIT_PARTIAL_SEND
+    assert marked["v"] is False
+
+
+def test_all_fail_exits_1(monkeypatch):
+    monkeypatch.setattr(se, "already_sent_today", lambda: False)
+    monkeypatch.setattr(se, "is_market_open", lambda: True)
+    monkeypatch.setattr(se.subprocess, "run", _ok_run)
+    monkeypatch.setattr(se, "_check_commentary_fresh", lambda today: None)
+
+    monkeypatch.setattr(se.email_service, "send_raw", lambda *a, **k: (_ for _ in ()).throw(OSError("down")))
+    assert se.main([]) == 1
+
+
+# ---------------------------------------------------------------------------
+# PR E: idempotent retry via ledger
+# ---------------------------------------------------------------------------
+
+def test_idempotent_retry_sends_only_failed_recipients(monkeypatch, tmp_path):
+    """Pre-seed ledger with internal recipient ok → only sub@example.com is sent."""
+    monkeypatch.setattr(se, "already_sent_today", lambda: False)
+    monkeypatch.setattr(se, "is_market_open", lambda: True)
+    monkeypatch.setattr(se.subprocess, "run", _ok_run)
+    monkeypatch.setattr(se, "_check_commentary_fresh", lambda today: None)
+    monkeypatch.setattr(se, "fetch_daily_recipients", _two_recipients)
+
+    import services.send_ledger as _sl_mod
+    from datetime import datetime, timezone
+    today = datetime.now().strftime("%Y-%m-%d")
+    # Pre-seed: internal already sent ok
+    ledger = _sl_mod._empty_ledger(today)
+    ledger["recipients"][se.TO.lower()] = {"ok": True, "provider": "resend", "error": None, "ts": "x"}
+    _sl_mod._LEDGER_PATH.write_text(json.dumps(ledger), encoding="utf-8")
+
+    sent_to = []
+    monkeypatch.setattr(se.email_service, "send_raw",
+                        lambda msg, addrs, **k: sent_to.extend(addrs) or "resend")
+
+    marked = {"v": False}
+    monkeypatch.setattr(se, "mark_sent_today", lambda: marked.__setitem__("v", True))
+
+    rc = se.main([])
+    assert rc == 0
+    assert marked["v"] is True
+    assert sent_to == ["sub@example.com"]  # only the pending recipient
+
+
+def test_complete_ledger_skips_all_sends(monkeypatch, tmp_path):
+    """If ledger shows all recipients done, send loop is skipped entirely."""
+    monkeypatch.setattr(se, "already_sent_today", lambda: False)
+    monkeypatch.setattr(se, "is_market_open", lambda: True)
+    monkeypatch.setattr(se.subprocess, "run", _ok_run)
+    monkeypatch.setattr(se, "_check_commentary_fresh", lambda today: None)
+    monkeypatch.setattr(se, "fetch_daily_recipients", _two_recipients)
+
+    import services.send_ledger as _sl_mod
+    from datetime import datetime
+    today = datetime.now().strftime("%Y-%m-%d")
+    ledger = _sl_mod._empty_ledger(today)
+    for email in [se.TO.lower(), "sub@example.com"]:
+        ledger["recipients"][email] = {"ok": True, "provider": "resend", "error": None, "ts": "x"}
+    _sl_mod._LEDGER_PATH.write_text(json.dumps(ledger), encoding="utf-8")
+
+    send_called = {"n": 0}
+    monkeypatch.setattr(se.email_service, "send_raw",
+                        lambda *a, **k: send_called.__setitem__("n", send_called["n"] + 1))
+
+    rc = se.main([])
+    assert rc == 0
+    assert send_called["n"] == 0
+
+
+# ---------------------------------------------------------------------------
+# PR E: internal recipient failure
+# ---------------------------------------------------------------------------
+
+def test_internal_fails_exits_6(monkeypatch):
+    """Internal send fails, subscriber succeeds → exit 6 (not 1)."""
+    monkeypatch.setattr(se, "already_sent_today", lambda: False)
+    monkeypatch.setattr(se, "is_market_open", lambda: True)
+    monkeypatch.setattr(se.subprocess, "run", _ok_run)
+    monkeypatch.setattr(se, "_check_commentary_fresh", lambda today: None)
+    monkeypatch.setattr(se, "fetch_daily_recipients", _two_recipients)
+
+    def _internal_fails(msg, addrs, **k):
+        if addrs == [se.TO]:
+            raise OSError("internal smtp error")
+        return "resend"
+
+    monkeypatch.setattr(se.email_service, "send_raw", _internal_fails)
+
+    marked = {"v": False}
+    monkeypatch.setattr(se, "mark_sent_today", lambda: marked.__setitem__("v", True))
+
+    rc = se.main([])
+    assert rc == se.EXIT_PARTIAL_SEND
+    assert marked["v"] is False
+
+
+# ---------------------------------------------------------------------------
+# PR E: subscriber fetch failure → exit 6, no mark_sent_today
+# ---------------------------------------------------------------------------
+
+def test_fetch_failure_exits_6_no_mark(monkeypatch):
+    """fetch_ok=False → internal-only send, exit 6, no mark_sent_today."""
+    monkeypatch.setattr(se, "already_sent_today", lambda: False)
+    monkeypatch.setattr(se, "is_market_open", lambda: True)
+    monkeypatch.setattr(se.subprocess, "run", _ok_run)
+    monkeypatch.setattr(se, "_check_commentary_fresh", lambda today: None)
+    # fetch fails — only internal recipient, fetch_ok=False
+    monkeypatch.setattr(se, "fetch_daily_recipients", lambda: _make_recipients(False))
+    monkeypatch.setattr(se.email_service, "send_raw", lambda *a, **k: "resend")
+
+    marked = {"v": False}
+    monkeypatch.setattr(se, "mark_sent_today", lambda: marked.__setitem__("v", True))
+
+    rc = se.main([])
+    assert rc == se.EXIT_PARTIAL_SEND
+    assert marked["v"] is False
+
+
+def test_fetch_recovery_retry_exits_0(monkeypatch, tmp_path):
+    """Retry after fetch recovers: internal already in ledger → sends only subscribers."""
+    monkeypatch.setattr(se, "already_sent_today", lambda: False)
+    monkeypatch.setattr(se, "is_market_open", lambda: True)
+    monkeypatch.setattr(se.subprocess, "run", _ok_run)
+    monkeypatch.setattr(se, "_check_commentary_fresh", lambda today: None)
+    # Fetch recovered — now returns all recipients
+    monkeypatch.setattr(se, "fetch_daily_recipients", _two_recipients)
+
+    import services.send_ledger as _sl_mod
+    from datetime import datetime
+    today = datetime.now().strftime("%Y-%m-%d")
+    # Pre-seed ledger: internal was sent ok in the prior failed run
+    ledger = _sl_mod._empty_ledger(today)
+    ledger["fetch_ok"] = False
+    ledger["recipients"][se.TO.lower()] = {"ok": True, "provider": "resend", "error": None, "ts": "x"}
+    _sl_mod._LEDGER_PATH.write_text(json.dumps(ledger), encoding="utf-8")
+
+    sent_to = []
+    monkeypatch.setattr(se.email_service, "send_raw",
+                        lambda msg, addrs, **k: sent_to.extend(addrs) or "resend")
+
+    marked = {"v": False}
+    monkeypatch.setattr(se, "mark_sent_today", lambda: marked.__setitem__("v", True))
+
+    rc = se.main([])
+    assert rc == 0
+    assert marked["v"] is True
+    assert sent_to == ["sub@example.com"]  # only the subscriber, not the internal
+
+
+# ---------------------------------------------------------------------------
+# PR E: PDF gate
+# ---------------------------------------------------------------------------
+
+def test_pdf_missing_with_require_blocks_before_send(monkeypatch):
+    """SEND_REQUIRE_PDF=1 + missing PDF → exit 1 before any send."""
+    monkeypatch.setattr(se, "already_sent_today", lambda: False)
+    monkeypatch.setattr(se, "is_market_open", lambda: True)
+    monkeypatch.setattr(se.subprocess, "run", _ok_run)
+    monkeypatch.setattr(se, "_check_commentary_fresh", lambda today: None)
+    monkeypatch.setattr(se, "_check_pdf", lambda today: (False, "[BLOCK] PDF not found — SEND_REQUIRE_PDF=1"))
+
+    send_called = {"n": 0}
+    monkeypatch.setattr(se.email_service, "send_raw",
+                        lambda *a, **k: send_called.__setitem__("n", send_called["n"] + 1))
+
+    rc = se.main([])
+    assert rc == 1
+    assert send_called["n"] == 0
+
+
+def test_pdf_missing_default_warn_sends_anyway(monkeypatch):
+    """SEND_REQUIRE_PDF=0 (default): missing PDF logs a warning but send proceeds."""
+    monkeypatch.setattr(se, "already_sent_today", lambda: False)
+    monkeypatch.setattr(se, "is_market_open", lambda: True)
+    monkeypatch.setattr(se.subprocess, "run", _ok_run)
+    monkeypatch.setattr(se, "_check_commentary_fresh", lambda today: None)
+    monkeypatch.setattr(se, "_check_pdf", lambda today: (False, "[WARN] PDF not found"))
+
+    send_called = {"n": 0}
+    monkeypatch.setattr(se.email_service, "send_raw",
+                        lambda *a, **k: send_called.__setitem__("n", send_called["n"] + 1) or "resend")
+
+    marked = {"v": False}
+    monkeypatch.setattr(se, "mark_sent_today", lambda: marked.__setitem__("v", True))
+
+    rc = se.main([])
+    assert rc == 0
+    assert send_called["n"] == 1
+    assert marked["v"] is True
