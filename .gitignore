@@ -24,6 +24,7 @@ email_sent.log
 push_log.txt
 *.log
 logs/run_daily_status.json
+logs/email_send_ledger.json
 
 # Generated data outputs — exclude entire data/ directory
 .env
