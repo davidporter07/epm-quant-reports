@@ -194,6 +194,67 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "anon"
 
 
+# ── New rate-limit buckets (warn-only until RATE_LIMIT_ENFORCE=1) ─────────────
+# RATE_LIMIT_ENFORCE=0 (default): over-limit requests proceed + log
+#   [rate_limit][WARN] would-429 bucket=… path=… ip=…
+# RATE_LIMIT_ENFORCE=1: returns 429 + Retry-After.
+# Existing proven limits (forgot-password, reset-password, chat) are
+# unconditionally enforced regardless of this flag.
+# Single uvicorn worker in prod → in-memory store is correct. If --workers is
+# ever added, these limits silently become per-worker; add Redis then.
+_RATE_LIMIT_ENFORCE: bool = os.getenv("RATE_LIMIT_ENFORCE", "0") not in ("", "0", "false")
+
+# (frozenset[methods], frozenset[exact_paths], max_requests, window_s, bucket_name)
+_RL_BUCKETS: list[tuple[frozenset, frozenset, int, int, str]] = [
+    (frozenset({"POST"}),       frozenset({"/api/auth/login"}),                                          15,  300, "auth_login"),
+    (frozenset({"POST"}),       frozenset({"/api/auth/register"}),                                        5, 3600, "auth_register"),
+    (frozenset({"GET", "POST"}),frozenset({"/email/confirm", "/unsubscribe"}),                            30,  600, "email_links"),
+    (frozenset({"GET"}),        frozenset({"/api/ticker-tape", "/api/quotes", "/api/home",
+                                           "/api/markets", "/api/portfolios", "/api/forecasts",
+                                           "/api/commentary", "/api/enrichment",
+                                           "/api/suggest-tickers"}),                                    120,   60, "data_cheap"),
+    (frozenset({"GET"}),        frozenset({"/api/snapshot", "/api/chart",
+                                           "/api/fund-page", "/api/forecast-chart-data"}),               30,   60, "data_expensive"),
+]
+
+# Paths that must never be rate-limited (health, key-gated internal, static).
+_RL_NEVER = frozenset({"/api/health"})
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    """New-bucket rate limiting middleware (RATE_LIMIT_ENFORCE controls enforcement).
+
+    Registered after add_security_and_cache_headers → runs outermost → 429
+    short-circuits skip the security-header middleware (sets its own headers).
+    """
+    method = request.method
+    if method == "OPTIONS":
+        return await call_next(request)
+    path = request.url.path
+    if path in _RL_NEVER or path.startswith(("/api/internal/", "/static/")):
+        return await call_next(request)
+
+    ip = _client_ip(request)
+    for methods, paths, max_req, window, bucket in _RL_BUCKETS:
+        if method in methods and path in paths:
+            if _rate_limited(f"rl:{bucket}:{ip}", max_req, window):
+                if _RATE_LIMIT_ENFORCE:
+                    return JSONResponse(
+                        {"detail": "Too many requests. Please slow down."},
+                        status_code=429,
+                        headers={
+                            "Retry-After": str(window),
+                            "Cache-Control": "no-store",
+                            "X-Content-Type-Options": "nosniff",
+                        },
+                    )
+                print(f"[rate_limit][WARN] would-429 bucket={bucket} path={path} ip={ip}", flush=True)
+            break
+
+    return await call_next(request)
+
+
 engine = TickerSnapshotEngine()
 ticker_page_service = TickerPageService(snapshot_engine=engine)
 market_board_service = MarketBoardService(page_service=ticker_page_service, snapshot_engine=engine)
@@ -2759,10 +2820,22 @@ def research_profile(symbol: str, request: Request) -> JSONResponse:
 
 @app.post("/api/deep/{ticker}")
 async def deep_analysis_start(ticker: str, request: Request) -> JSONResponse:
-    _require_user(request)
+    _user_payload = _require_user(request)
     t = ticker.strip().upper()
     if not _DEEP_TICKER_RE.match(t):
         raise HTTPException(status_code=400, detail="Invalid ticker.")
+
+    # Deep-analysis rate limits (post-auth so per-user keying is available).
+    # 6 enqueues/hour per user + 12 enqueues/hour per IP (GPU cost gate).
+    _deep_user_key = f"rl:deep_enqueue:user:{_user_payload.get('sub', 'anon')}"
+    _deep_ip_key   = f"rl:deep_enqueue:ip:{_client_ip(request)}"
+    _deep_over = (_rate_limited(_deep_user_key, 6, 3600)
+                  or _rate_limited(_deep_ip_key, 12, 3600))
+    if _deep_over:
+        if _RATE_LIMIT_ENFORCE:
+            raise HTTPException(status_code=429, detail="Deep analysis rate limit reached. Try again later.")
+        print(f"[rate_limit][WARN] would-429 bucket=deep_enqueue path=/api/deep/{t}"
+              f" user={_user_payload.get('sub')} ip={_client_ip(request)}", flush=True)
 
     # Optional custom council roster (JSON body {"roster": [...]}). No body =
     # default 8-member council (unchanged behaviour).
