@@ -353,3 +353,129 @@ line to email_sent.log before any re-run to prevent duplicate sends.
 
 ### Env flags
 - SEND_REQUIRE_PDF=0 (default warn-only); set 1 to block on missing/stale PDF
+
+---
+
+## PR F — Pre-scale hardening (IMPLEMENTED 2026-06-11, pending deploy approval)
+
+Six staged commits (5806c8e → b5388db) closing the scale/resilience gaps identified
+in audit. No prompts, model behavior, report/PDF, UI, auth business logic, or
+data-freshness rules were touched.
+
+### What it does
+
+**C1 — users.db WAL + busy_timeout (enforced immediately)**
+`services/auth_service._get_conn()` now mirrors `research_store._connect()`:
+`timeout=10.0`, `journal_mode=WAL`, `busy_timeout=5000`, `foreign_keys=ON`.
+Eliminates `OperationalError("database is locked")` on concurrent auth writes
+(default was busy_timeout=0, DELETE journaling).
+
+`post_run._SERVER_MANAGED` gains `users.db-wal/-shm` and
+`research_cache.db-wal/-shm` so a laptop dev run after WAL migration cannot push
+foreign WAL sidecars next to the server's live DB (corruption vector, would have
+been silent).
+
+**C2 — `_client_ip()` proxy-aware keying (enforced immediately — bug fix)**
+All existing rate limits keyed on `request.client.host` which is `127.0.0.1`
+behind Cloudflare → nginx → uvicorn, making "per-IP" limits effectively global
+(one abuser exhausted everyone's forgot-password budget). New helper:
+CF-Connecting-IP → XFF first hop → client.host fallback. Existing four limit
+sites migrated.
+
+**C3 — New rate-limit buckets behind `RATE_LIMIT_ENFORCE=0` (warn-only first)**
+Middleware + bucket table for: `auth_login` (15/300s), `auth_register` (5/3600s),
+`email_links` (30/600s), `data_cheap` (120/60s), `data_expensive` (30/60s).
+Inline `deep_enqueue`: 6/3600s per user + 12/3600s per IP.
+Never limited: `/api/health`, OPTIONS, `/api/internal/`, `/static/`.
+Existing proven limits are always enforced regardless of the flag.
+
+**C4 — Cache-bust lint + fix 2 violations (enforced immediately)**
+`login.html:8` and `reset-password.html:8` referenced `fonts.css` with no `?v=`
+— static files are served `max-age=604800,immutable` so browsers cached stale
+fonts indefinitely (proven incident class from deep_analysis.js). Fixed:
+`?v=20260611a`. New `tests/test_static_versioning.py` (3 assertions, pure
+filesystem) guards against recurrence.
+
+**C5 — Deploy stamp + health check 10 (info-only)**
+`post_run._write_deploy_stamp()` writes `data/deploy_stamp.json {commit, ts}`
+after the dirty-guard passes; the file rides the existing `data/` scp.
+`/api/health` check 10 exposes `deploy.commit/ts/age_hours` and
+`rate_limit.enforce` (info-only, never touches overall_ok). Addresses the
+wrong-branch incident class (6/05: no way to confirm which commit was actually
+live on the server).
+
+### Rate-limit bucket table
+
+| Bucket | Endpoints | Limit | Window |
+|---|---|---|---|
+| `auth_login` | POST /api/auth/login | 15 | 300s |
+| `auth_register` | POST /api/auth/register | 5 | 3600s |
+| `email_links` | /email/confirm, /unsubscribe | 30 | 600s |
+| `data_cheap` | ticker-tape, quotes, home, markets, portfolios, forecasts, commentary, enrichment, suggest-tickers | 120 | 60s |
+| `data_expensive` | snapshot, chart, fund-page, forecast-chart-data | 30 | 60s |
+| `deep_enqueue` | POST /api/deep/{ticker} (post-auth) | 6/user + 12/IP | 3600s |
+
+### Verification after deploy
+
+```bash
+# 1. Suite green
+python -m pytest tests/ -q
+
+# 2. Health: deploy.present:true, rate_limit.enforce:false, status:ok
+curl -fsS https://epm-market-intelligence.com/api/health | python -m json.tool
+
+# 3. users.db WAL confirmed on server
+ssh -i ~/.ssh/epm_server dporter02@100.101.63.65 \
+  "sqlite3 /opt/epm-market-intelligence/data/users.db 'PRAGMA journal_mode;'"
+# Expected: wal
+
+# 4. deploy.commit matches local HEAD
+git rev-parse --short=12 HEAD
+# Should match health deploy.commit
+
+# 5. Proxy-header verification (REQUIRED before flipping RATE_LIMIT_ENFORCE=1)
+# After C3 deploys (warn-only is harmless), send ~130 rapid requests from laptop:
+#   curl -s https://epm-market-intelligence.com/api/suggest-tickers?q=A (x130)
+# Then on server:
+#   journalctl -u epm.service | grep rate_limit
+# The logged ip= must be the laptop's public IP, NOT 127.0.0.1.
+# If 127.0.0.1: add proxy_set_header X-Forwarded-For to nginx FIRST.
+```
+
+### Flag flip procedure (after clean observation window)
+
+```bash
+# On server — no code change or redeploy needed:
+echo "RATE_LIMIT_ENFORCE=1" >> /opt/epm-market-intelligence/.env
+sudo systemctl restart epm.service
+curl -fsS http://127.0.0.1:8000/api/health | python -m json.tool
+# Expect: rate_limit.enforce:true
+```
+
+### Rollback
+
+**Rate limits misfiring:** unset `RATE_LIMIT_ENFORCE` + restart — instant.
+
+**Code rollback:** `git revert <commit(s)>` + `python post_run.py`
+
+**WAL special case:** code revert is immediately safe (old SQLite code reads WAL
+DBs fine). Full revert to DELETE journaling if needed:
+```bash
+sudo systemctl stop epm.service
+sqlite3 /opt/epm-market-intelligence/data/users.db 'PRAGMA journal_mode=DELETE;'
+sudo systemctl start epm.service
+```
+Keep the `_SERVER_MANAGED` sidecar entries even if WAL is reverted (harmless, protective).
+
+### Follow-ups (deferred, not blocking)
+
+- nginx `limit_req` as a second enforcement layer (does not depend on proxy headers)
+- Deep-analysis queue-depth cap (warn logs will surface abuse patterns first)
+- `OperationalError` → 503 mapping for `users.db` (busy_timeout covers it for now)
+- Multi-worker caveat: if `--workers` is ever added to uvicorn, in-memory rate
+  limits become per-worker silently — add Redis at that point
+
+### Env flags
+
+- `RATE_LIMIT_ENFORCE=0` (default warn-only); set 1 after proxy verification +
+  clean observation window. Existing limits (forgot-password, reset, chat) always enforced.
