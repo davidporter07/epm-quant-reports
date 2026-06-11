@@ -176,6 +176,24 @@ def _rate_limited(key: str, max_requests: int, window_s: int) -> bool:
     return False
 
 
+def _client_ip(request: Request) -> str:
+    """Return the real client IP in a Cloudflare + nginx + uvicorn stack.
+
+    Precedence: CF-Connecting-IP (set by Cloudflare, one authoritative IP) →
+    first hop of X-Forwarded-For (set by nginx) → request.client.host fallback.
+
+    Spoofable only by direct-origin callers that bypass Cloudflare — acceptable
+    for rate-limiting (worst case = key rotation). NEVER use for auth or audit.
+    """
+    cf = request.headers.get("CF-Connecting-IP", "").strip()
+    if cf:
+        return cf
+    xff = request.headers.get("X-Forwarded-For", "").strip()
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "anon"
+
+
 engine = TickerSnapshotEngine()
 ticker_page_service = TickerPageService(snapshot_engine=engine)
 market_board_service = MarketBoardService(page_service=ticker_page_service, snapshot_engine=engine)
@@ -1157,7 +1175,7 @@ async def api_forgot_password(request: Request, body: ForgotPasswordRequest) -> 
 
     # Rate-limit to prevent reset-email bombing / abuse of our outbound mail.
     # Gate on BOTH source IP and the target email so neither axis can be hammered.
-    _ip = request.client.host if request.client else "anon"
+    _ip = _client_ip(request)
     _email_key = (body.email or "").strip().lower()
     if (_rate_limited(f"forgot-ip:{_ip}", max_requests=5, window_s=300)
             or (_email_key and _rate_limited(f"forgot-email:{_email_key}", max_requests=3, window_s=900))):
@@ -1182,7 +1200,7 @@ async def api_forgot_password(request: Request, body: ForgotPasswordRequest) -> 
 
 @app.post("/api/auth/reset-password")
 async def api_reset_password(request: Request, body: ResetPasswordRequest) -> JSONResponse:
-    if _rate_limited(f"reset:{request.client.host}", max_requests=10, window_s=60):
+    if _rate_limited(f"reset:{_client_ip(request)}", max_requests=10, window_s=60):
         raise HTTPException(status_code=429, detail="Too many requests. Try again later.")
     try:
         user_id = consume_reset_token(body.token.strip())
@@ -2634,7 +2652,7 @@ async def api_chat(request: Request, body: ChatRequest) -> JSONResponse:
     payload = _require_user(request)
 
     # Rate-limit per authenticated user (falls back to IP if sub is missing).
-    _rl_key = f"chat:{payload.get('sub') or (request.client.host if request.client else 'anon')}"
+    _rl_key = f"chat:{payload.get('sub') or _client_ip(request)}"
     if _rate_limited(_rl_key, max_requests=20, window_s=60):
         raise HTTPException(status_code=429, detail="Too many requests. Please wait before sending another message.")
 

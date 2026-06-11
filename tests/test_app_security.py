@@ -78,3 +78,91 @@ def test_forgot_password_throttles_outbound_email(client, monkeypatch):
 
     # Email limiter caps at 3 per 900s; IP limiter caps at 5 per 300s.
     assert sent["count"] <= 3, f"rate limit did not fire; {sent['count']} emails sent"
+
+
+# --- PR F commit 2: _client_ip() precedence ---------------------------------
+
+class _FakeClient:
+    def __init__(self, host="127.0.0.1"):
+        self.host = host
+
+
+def _make_request(headers: dict, host: str = "127.0.0.1"):
+    """Build a minimal fake Request-like object for _client_ip tests."""
+    from starlette.datastructures import Headers
+    from starlette.requests import Request as _Req
+    from starlette.testclient import TestClient as _TC
+
+    class _Scope:
+        def __init__(self):
+            raw = [(k.lower().encode(), v.encode()) for k, v in headers.items()]
+            self.scope = {
+                "type": "http",
+                "headers": raw,
+                "method": "GET",
+                "path": "/",
+                "query_string": b"",
+                "root_path": "",
+            }
+            self.scope["client"] = (host, 12345)
+
+    s = _Scope()
+
+    class _MockReq:
+        def __init__(self):
+            from starlette.datastructures import Headers as _H
+            self.headers = _H(scope=s.scope)
+            self.client = _FakeClient(host)
+
+    return _MockReq()
+
+
+def test_client_ip_prefers_cf_connecting_ip():
+    req = _make_request({"CF-Connecting-IP": "1.2.3.4", "X-Forwarded-For": "9.9.9.9"})
+    assert app_module._client_ip(req) == "1.2.3.4"
+
+
+def test_client_ip_falls_back_to_xff_first_hop():
+    req = _make_request({"X-Forwarded-For": "5.6.7.8, 10.0.0.1"})
+    assert app_module._client_ip(req) == "5.6.7.8"
+
+
+def test_client_ip_strips_whitespace_in_xff():
+    req = _make_request({"X-Forwarded-For": "  5.6.7.8 , 10.0.0.1"})
+    assert app_module._client_ip(req) == "5.6.7.8"
+
+
+def test_client_ip_falls_back_to_client_host():
+    req = _make_request({}, host="192.168.1.1")
+    assert app_module._client_ip(req) == "192.168.1.1"
+
+
+def test_forgot_password_different_cf_ips_get_independent_budgets(monkeypatch):
+    """Two distinct CF-Connecting-IP values must NOT share the IP rate-limit bucket."""
+    app_module._RL_STORE.clear()
+    monkeypatch.setattr(app_module, "get_user_by_email", lambda e: None)
+
+    client_a = TestClient(app)
+    client_b = TestClient(app)
+
+    # Exhaust the budget for IP A (5 per 300s).
+    for _ in range(5):
+        client_a.post(
+            "/api/auth/forgot-password",
+            json={"email": "x@example.com"},
+            headers={"CF-Connecting-IP": "11.22.33.44"},
+        )
+
+    # IP B should still have a fresh budget — its 1st request must NOT be throttled.
+    # Use a different email so the email-key bucket from IP A's requests can't throttle it.
+    # We verify by checking that get_user_by_email was invoked (throttle returns early).
+    called = {"n": 0}
+    monkeypatch.setattr(app_module, "get_user_by_email",
+                        lambda e: called.__setitem__("n", called["n"] + 1) or None)
+    r = client_b.post(
+        "/api/auth/forgot-password",
+        json={"email": "ipb-unique@example.com"},
+        headers={"CF-Connecting-IP": "99.88.77.66"},
+    )
+    assert r.status_code == 200
+    assert called["n"] >= 1, "IP B budget was shared with IP A — keying bug still present"
