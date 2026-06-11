@@ -214,6 +214,45 @@ def test_complete_ledger_skips_all_sends(monkeypatch, tmp_path):
     assert send_called["n"] == 0
 
 
+def test_retry_with_repeat_failure_exits_6_no_mark(monkeypatch, tmp_path):
+    """Regression (PR E commit 7): a retry where the pending recipient fails AGAIN
+    must stay exit 6. Prior-run successes in the ledger must not deflate the
+    failure count and let mark_sent_today() declare the day fully sent."""
+    monkeypatch.setattr(se, "already_sent_today", lambda: False)
+    monkeypatch.setattr(se, "is_market_open", lambda: True)
+    monkeypatch.setattr(se.subprocess, "run", _ok_run)
+    monkeypatch.setattr(se, "_check_commentary_fresh", lambda today: None)
+    monkeypatch.setattr(se, "fetch_daily_recipients", _two_recipients)
+
+    marked = {"v": False}
+    monkeypatch.setattr(se, "mark_sent_today", lambda: marked.__setitem__("v", True))
+
+    def _sub_always_fails(msg, addrs, **k):
+        if addrs == ["sub@example.com"]:
+            raise OSError("mailbox unavailable")
+        return "resend"
+
+    monkeypatch.setattr(se.email_service, "send_raw", _sub_always_fails)
+
+    # First attempt: internal ok, subscriber fails
+    assert se.main([]) == se.EXIT_PARTIAL_SEND
+    assert marked["v"] is False
+
+    # Retry (ledger persisted): only the subscriber is pending, fails again
+    assert se.main([]) == se.EXIT_PARTIAL_SEND
+    assert marked["v"] is False
+
+    # Ledger + summary still record the failure (health stays degradable)
+    import services.send_ledger as _sl_mod
+    ledger = json.loads(_sl_mod._LEDGER_PATH.read_text(encoding="utf-8"))
+    assert ledger["recipients"]["sub@example.com"]["ok"] is False
+    summary = json.loads(_sl_mod._SUMMARY_PATH.read_text(encoding="utf-8"))
+    assert summary["failed"] >= 1
+    assert summary["sent"] == 1
+    assert summary["internal_ok"] is True
+    assert "@" not in json.dumps(summary)
+
+
 # ---------------------------------------------------------------------------
 # PR E: internal recipient failure
 # ---------------------------------------------------------------------------

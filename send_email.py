@@ -1325,7 +1325,10 @@ def main(argv=None) -> int:
         _sl.write_summary(_ledger, internal_email=TO)
 
         _total_ok = sum(1 for r in _ledger["recipients"].values() if r.get("ok"))
-        _failed = len(_pending) - _total_ok
+        # Count failures from the LEDGER, not len(_pending) - _total_ok: on a
+        # retry, _total_ok includes prior-run successes, which would deflate the
+        # failure count and let a still-failing recipient mark the day fully sent.
+        _failed = sum(1 for r in _ledger["recipients"].values() if r.get("ok") is not True)
 
         if _total_ok == 0:
             logging.error(" Email send failed for ALL recipients.")
