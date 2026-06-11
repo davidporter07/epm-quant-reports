@@ -334,7 +334,15 @@ def run(cmd: list[str]) -> int:
 
 
 # Files that live on the server and must not be overwritten from local.
-_SERVER_MANAGED = {"jwt_secret.key", "users.db", "earnings_calendar.json", "research_cache.db"}
+# Includes WAL/SHM sidecars: once users.db runs in WAL mode, a laptop dev run
+# creates users.db-wal/-shm in data/; without these entries the next scp would
+# push foreign sidecars next to the server's live DB (corruption vector).
+_SERVER_MANAGED = {
+    "jwt_secret.key",
+    "users.db", "users.db-wal", "users.db-shm",
+    "earnings_calendar.json",
+    "research_cache.db", "research_cache.db-wal", "research_cache.db-shm",
+}
 
 # Directories that the SERVER owns and the laptop must never push up. data/jobs/
 # is the live deep-analysis queue written by the web worker; pushing stale local

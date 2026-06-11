@@ -365,3 +365,35 @@ def test_push_status_file_exception_returns_false(tmp_path, monkeypatch):
     monkeypatch.setattr(pr.subprocess, "run", _raise)
     result = pr.push_status_file(local_status=str(status_file), remote_dest="user@host:/path")
     assert result is False
+
+
+# --- PR F commit 1: WAL sidecar exclusion ------------------------------------
+
+def test_scp_dir_names_excludes_wal_sidecars(tmp_path):
+    """WAL sidecars must never be pushed to the server — they are server-managed."""
+    (tmp_path / "latest_commentary.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "users.db").write_text("x", encoding="utf-8")
+    (tmp_path / "users.db-wal").write_text("x", encoding="utf-8")
+    (tmp_path / "users.db-shm").write_text("x", encoding="utf-8")
+    (tmp_path / "research_cache.db").write_text("x", encoding="utf-8")
+    (tmp_path / "research_cache.db-wal").write_text("x", encoding="utf-8")
+    (tmp_path / "research_cache.db-shm").write_text("x", encoding="utf-8")
+
+    names = set(pr._scp_dir_names(tmp_path))
+    assert "latest_commentary.json" in names
+    for sidecar in (
+        "users.db", "users.db-wal", "users.db-shm",
+        "research_cache.db", "research_cache.db-wal", "research_cache.db-shm",
+    ):
+        assert sidecar not in names, f"{sidecar!r} must be excluded from sync"
+
+
+def test_server_managed_set_contains_wal_sidecars():
+    """Regression: _SERVER_MANAGED must include WAL/SHM sidecars (committed constant)."""
+    required = {
+        "users.db-wal", "users.db-shm",
+        "research_cache.db-wal", "research_cache.db-shm",
+    }
+    assert required <= pr._SERVER_MANAGED, (
+        f"Missing from _SERVER_MANAGED: {required - pr._SERVER_MANAGED}"
+    )
