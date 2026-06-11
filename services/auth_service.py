@@ -23,6 +23,12 @@ import bcrypt
 import jwt
 from dotenv import load_dotenv
 
+from services.validators import (
+    validate_email_format,
+    validate_password,
+    validate_username,
+)
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "users.db"
@@ -182,14 +188,11 @@ def register_user(username: str, password: str, email: str, email_opt_in: bool =
     username = username.strip()
     email = email.strip().lower()
 
-    if not username or len(username) < 2:
-        raise AuthError("Username must be at least 2 characters.")
-    if len(username) > 40:
-        raise AuthError("Username too long (max 40 characters).")
-    if not password or len(password) < 10:
-        raise AuthError("Password must be at least 10 characters.")
-    if not email or "@" not in email or "." not in email.split("@")[-1]:
-        raise AuthError("A valid email address is required.")
+    # Field rules live in services/validators.py (PR G); messages unchanged.
+    for err in (validate_username(username), validate_password(password),
+                validate_email_format(email)):
+        if err:
+            raise AuthError(err)
 
     pw_hash = _hash_password(password)
     try:
@@ -446,8 +449,9 @@ def consume_reset_token(plain_token: str) -> int:
 
 def reset_password(user_id: int, new_password: str) -> None:
     """Update the password hash for a user and invalidate all existing sessions."""
-    if not new_password or len(new_password) < 10:
-        raise AuthError("Password must be at least 10 characters.")
+    _pw_err = validate_password(new_password)
+    if _pw_err:
+        raise AuthError(_pw_err)
     pw_hash = _hash_password(new_password)
     with _get_conn() as conn:
         conn.execute(
@@ -542,10 +546,9 @@ def change_username(user_id: int, new_username: str, password: str) -> dict[str,
     A new JWT must be issued by the caller since username is embedded in the token.
     """
     new_username = new_username.strip()
-    if not new_username or len(new_username) < 2:
-        raise AuthError("Username must be at least 2 characters.")
-    if len(new_username) > 40:
-        raise AuthError("Username too long (max 40 characters).")
+    _un_err = validate_username(new_username)
+    if _un_err:
+        raise AuthError(_un_err)
 
     with _get_conn() as conn:
         row = conn.execute("SELECT pw_hash FROM users WHERE id = ?", (user_id,)).fetchone()
