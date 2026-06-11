@@ -16,6 +16,7 @@ python post_run.py --tickers AAPL,MSFT,...
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -394,6 +395,35 @@ def _scp_dir(local: Path, remote: str, key_args: list[str]) -> int:
         return 1
 
 
+def _write_deploy_stamp() -> None:
+    """Write data/deploy_stamp.json with the current commit SHA + UTC timestamp.
+
+    The file rides the existing data/ scp in sync_to_server() and is read by
+    /api/health check 10 to report which commit is live (6/05 wrong-branch class).
+    Never raises — a stamp failure must not block a deploy.
+    """
+    import datetime as _dt
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short=12", "HEAD"],
+            capture_output=True, text=True, timeout=10,
+            cwd=str(Path(__file__).resolve().parent),
+        )
+        commit = result.stdout.strip() if result.returncode == 0 else "unknown"
+        stamp = {
+            "commit": commit,
+            "ts": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        }
+        stamp_path = Path("data") / "deploy_stamp.json"
+        stamp_path.parent.mkdir(parents=True, exist_ok=True)
+        stamp_path.write_text(
+            json.dumps(stamp, indent=2), encoding="utf-8"
+        )
+        print(f"[SYNC] deploy stamp: commit={commit}")
+    except Exception as exc:
+        print(f"[SYNC] WARNING: deploy stamp failed ({exc}) — continuing")
+
+
 def sync_to_server(*, allow_dirty: bool = False) -> bool:
     """Push outputs + app files to the server, restart the service, and verify
     /api/health. Returns True only if all transfers, the restart, and the health
@@ -434,6 +464,9 @@ def sync_to_server(*, allow_dirty: bool = False) -> bool:
             print(f"[SYNC] {_w}")
     except Exception as _df_sync_exc:
         print(f"[SYNC] (data freshness check failed: {_df_sync_exc})")
+
+    # Write deploy stamp — rides the data/ scp below, never raises.
+    _write_deploy_stamp()
 
     print("\n[SYNC] Pushing output to server...")
     errors = 0

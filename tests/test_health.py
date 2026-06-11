@@ -448,6 +448,86 @@ def test_email_send_fallback_and_pdf_info_only(monkeypatch, tmp_path):
     assert body["checks"]["email_send"]["pdf_ok"] is False
 
 
+# ---------------------------------------------------------------------------
+# deploy stamp check (PR F commit 5)
+# ---------------------------------------------------------------------------
+
+def test_deploy_stamp_absent_is_not_degraded(monkeypatch, tmp_path):
+    """Missing deploy_stamp.json must not degrade health (pre-PR-F deploys)."""
+    monkeypatch.setattr("app.DATA_DIR", tmp_path)
+    client = _client_with_mocks(monkeypatch)
+    body = client.get("/api/health").json()
+    deploy = body["checks"]["deploy"]
+    assert deploy["present"] is False
+    assert "error" not in deploy
+    assert body["status"] in ("ok", "degraded")  # stamp absence never degrades
+    assert not any("deploy" in r for r in body["reasons"])
+
+
+def test_deploy_stamp_present_exposes_commit_and_age(monkeypatch, tmp_path):
+    """A valid deploy_stamp.json exposes commit, ts, and age_hours (info-only)."""
+    from datetime import datetime, timezone, timedelta
+    ts = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    (tmp_path / "deploy_stamp.json").write_text(
+        json.dumps({"commit": "abc123def456", "ts": ts}), encoding="utf-8"
+    )
+    monkeypatch.setattr("app.DATA_DIR", tmp_path)
+    client = _client_with_mocks(monkeypatch)
+    body = client.get("/api/health").json()
+    deploy = body["checks"]["deploy"]
+    assert deploy["present"] is True
+    assert deploy["commit"] == "abc123def456"
+    assert deploy["ts"] == ts
+    assert deploy["age_hours"] is not None
+    assert deploy["age_hours"] >= 1.9  # ~2 hours
+
+
+def test_deploy_stamp_never_degrades_health(monkeypatch, tmp_path):
+    """Even a malformed deploy_stamp.json must not change overall_ok."""
+    (tmp_path / "deploy_stamp.json").write_text("NOT JSON", encoding="utf-8")
+    monkeypatch.setattr("app.DATA_DIR", tmp_path)
+    client = _client_with_mocks(monkeypatch)
+    body = client.get("/api/health").json()
+    # Check present:false + error, but overall status must not be affected by stamp.
+    assert not any("deploy" in r for r in body["reasons"])
+
+
+def test_deploy_stamp_response_has_no_pii(monkeypatch, tmp_path):
+    """Deploy check must not leak email addresses, IPs, or filesystem paths."""
+    from datetime import datetime, timezone
+    (tmp_path / "deploy_stamp.json").write_text(
+        json.dumps({"commit": "abc123", "ts": datetime.now(timezone.utc).isoformat()}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.DATA_DIR", tmp_path)
+    client = _client_with_mocks(monkeypatch)
+    text = client.get("/api/health").text
+    assert "@" not in text
+    assert "192.168" not in text
+    assert str(tmp_path).replace("\\", "/") not in text
+
+
+# ---------------------------------------------------------------------------
+# rate_limit.enforce check (PR F commit 5)
+# ---------------------------------------------------------------------------
+
+def test_health_exposes_rate_limit_enforce_flag(monkeypatch):
+    import app as _app
+    monkeypatch.setattr(_app, "_RATE_LIMIT_ENFORCE", False)
+    client = _client_with_mocks(monkeypatch)
+    body = client.get("/api/health").json()
+    assert "rate_limit" in body["checks"]
+    assert body["checks"]["rate_limit"]["enforce"] is False
+
+
+def test_health_rate_limit_enforce_true(monkeypatch):
+    import app as _app
+    monkeypatch.setattr(_app, "_RATE_LIMIT_ENFORCE", True)
+    client = _client_with_mocks(monkeypatch)
+    body = client.get("/api/health").json()
+    assert body["checks"]["rate_limit"]["enforce"] is True
+
+
 def test_email_send_response_contains_no_email_addresses(monkeypatch, tmp_path):
     """Public health endpoint must never leak subscriber addresses."""
     import datetime as _dt

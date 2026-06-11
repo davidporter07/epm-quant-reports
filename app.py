@@ -1750,6 +1750,42 @@ def health() -> dict:
     except Exception:
         checks["email_send"] = {"present": False, "error": "check_failed"}
 
+    # 10. Deploy stamp — info-only: which commit is live and when it was deployed.
+    # Written by post_run._write_deploy_stamp() and synced via data/. Absent = not
+    # yet deployed via post_run (no degradation). Never touches overall_ok.
+    # Counts/flags only — no IPs, paths, secrets, or emails in the response.
+    try:
+        _ds_path = DATA_DIR / "deploy_stamp.json"
+        if not _ds_path.exists():
+            checks["deploy"] = {"present": False}
+        else:
+            with _ds_path.open(encoding="utf-8") as _dsh:
+                _ds = json.load(_dsh)
+            import datetime as _ddt
+            _ds_ts = _ds.get("ts")
+            _ds_age_hours: float | None = None
+            if _ds_ts:
+                try:
+                    _ds_dt = _ddt.datetime.fromisoformat(_ds_ts)
+                    if _ds_dt.tzinfo is None:
+                        _ds_dt = _ds_dt.replace(tzinfo=_ddt.timezone.utc)
+                    _ds_age_hours = round(
+                        (_ddt.datetime.now(_ddt.timezone.utc) - _ds_dt).total_seconds() / 3600, 1
+                    )
+                except Exception:
+                    pass
+            checks["deploy"] = {
+                "present": True,
+                "commit": _ds.get("commit"),
+                "ts": _ds_ts,
+                "age_hours": _ds_age_hours,
+            }
+    except Exception:
+        checks["deploy"] = {"present": False, "error": "check_failed"}
+
+    # Rate-limit flag (info-only, counts/flags only).
+    checks["rate_limit"] = {"enforce": _RATE_LIMIT_ENFORCE}
+
     return {"status": "ok" if overall_ok else "degraded", "checks": checks, "reasons": reasons}
 
 
