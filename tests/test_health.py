@@ -322,3 +322,140 @@ def test_data_freshness_enforce_off_critical_fail_not_degraded(monkeypatch, tmp_
     assert df["enforce"] is False
     assert "ycharts_scrape" in df["critical_failing"]
     assert not any("data_freshness" in r for r in body["reasons"])
+
+
+# ---------------------------------------------------------------------------
+# email_send check (PR E)
+# ---------------------------------------------------------------------------
+
+def _es_summary(*, date_str, failed=0, internal_ok=True, fetch_ok=True,
+                fallback_used=False, pdf_ok=True, sent=None, total=None) -> str:
+    """Build a minimal email_send_summary.json payload string for tests."""
+    from datetime import datetime, timezone
+    _total = total if total is not None else (1 + failed if sent is None else sent + failed)
+    _sent = sent if sent is not None else (_total - failed)
+    return json.dumps({
+        "date": date_str,
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "attempts": 1,
+        "total": _total,
+        "sent": _sent,
+        "failed": failed,
+        "internal_ok": internal_ok,
+        "fetch_ok": fetch_ok,
+        "fallback_used": fallback_used,
+        "pdf_ok": pdf_ok,
+    })
+
+
+def test_email_send_absent_not_degraded(monkeypatch, tmp_path):
+    """No email_send_summary.json = present:false, health not degraded."""
+    monkeypatch.setattr("app.DATA_DIR", tmp_path)
+    client = _client_with_mocks(monkeypatch)
+    body = client.get("/api/health").json()
+    es = body["checks"]["email_send"]
+    assert es["present"] is False
+    assert not any("email_send" in r for r in body["reasons"])
+
+
+def test_email_send_all_ok_not_degraded(monkeypatch, tmp_path):
+    import datetime as _dt
+    today = _dt.date.today().isoformat()
+    (tmp_path / "email_send_summary.json").write_text(
+        _es_summary(date_str=today, failed=0), encoding="utf-8"
+    )
+    monkeypatch.setattr("app.DATA_DIR", tmp_path)
+    import app as _app
+    monkeypatch.setattr(_app, "mkt_open", True, raising=False)
+    client = _client_with_mocks(monkeypatch)
+    body = client.get("/api/health").json()
+    assert not any("email_send" in r for r in body["reasons"])
+    assert body["checks"]["email_send"]["present"] is True
+
+
+def test_email_send_failed_gt_0_degrades(monkeypatch, tmp_path):
+    import datetime as _dt
+    today = _dt.date.today().isoformat()
+    (tmp_path / "email_send_summary.json").write_text(
+        _es_summary(date_str=today, failed=1), encoding="utf-8"
+    )
+    monkeypatch.setattr("app.DATA_DIR", tmp_path)
+    import app as _app
+    monkeypatch.setattr(_app, "mkt_open", True, raising=False)
+    client = _client_with_mocks(monkeypatch)
+    body = client.get("/api/health").json()
+    assert "email_send:partial_failure" in body["reasons"]
+    assert body["status"] == "degraded"
+
+
+def test_email_send_internal_failed_degrades(monkeypatch, tmp_path):
+    import datetime as _dt
+    today = _dt.date.today().isoformat()
+    (tmp_path / "email_send_summary.json").write_text(
+        _es_summary(date_str=today, internal_ok=False), encoding="utf-8"
+    )
+    monkeypatch.setattr("app.DATA_DIR", tmp_path)
+    import app as _app
+    monkeypatch.setattr(_app, "mkt_open", True, raising=False)
+    client = _client_with_mocks(monkeypatch)
+    body = client.get("/api/health").json()
+    assert "email_send:internal_failed" in body["reasons"]
+    assert body["status"] == "degraded"
+
+
+def test_email_send_fetch_failed_degrades(monkeypatch, tmp_path):
+    import datetime as _dt
+    today = _dt.date.today().isoformat()
+    (tmp_path / "email_send_summary.json").write_text(
+        _es_summary(date_str=today, fetch_ok=False), encoding="utf-8"
+    )
+    monkeypatch.setattr("app.DATA_DIR", tmp_path)
+    import app as _app
+    monkeypatch.setattr(_app, "mkt_open", True, raising=False)
+    client = _client_with_mocks(monkeypatch)
+    body = client.get("/api/health").json()
+    assert "email_send:subscriber_fetch_failed" in body["reasons"]
+    assert body["status"] == "degraded"
+
+
+def test_email_send_yesterday_summary_not_degraded(monkeypatch, tmp_path):
+    """Yesterday's summary (date != today) should not degrade health."""
+    (tmp_path / "email_send_summary.json").write_text(
+        _es_summary(date_str="2026-06-10", failed=2, fetch_ok=False), encoding="utf-8"
+    )
+    monkeypatch.setattr("app.DATA_DIR", tmp_path)
+    import app as _app
+    monkeypatch.setattr(_app, "mkt_open", True, raising=False)
+    client = _client_with_mocks(monkeypatch)
+    body = client.get("/api/health").json()
+    assert not any("email_send" in r for r in body["reasons"])
+
+
+def test_email_send_fallback_and_pdf_info_only(monkeypatch, tmp_path):
+    """fallback_used and pdf_ok=False are info-only — never degrade health."""
+    import datetime as _dt
+    today = _dt.date.today().isoformat()
+    (tmp_path / "email_send_summary.json").write_text(
+        _es_summary(date_str=today, fallback_used=True, pdf_ok=False), encoding="utf-8"
+    )
+    monkeypatch.setattr("app.DATA_DIR", tmp_path)
+    import app as _app
+    monkeypatch.setattr(_app, "mkt_open", True, raising=False)
+    client = _client_with_mocks(monkeypatch)
+    body = client.get("/api/health").json()
+    assert not any("email_send" in r for r in body["reasons"])
+    assert body["checks"]["email_send"]["fallback_used"] is True
+    assert body["checks"]["email_send"]["pdf_ok"] is False
+
+
+def test_email_send_response_contains_no_email_addresses(monkeypatch, tmp_path):
+    """Public health endpoint must never leak subscriber addresses."""
+    import datetime as _dt
+    today = _dt.date.today().isoformat()
+    (tmp_path / "email_send_summary.json").write_text(
+        _es_summary(date_str=today), encoding="utf-8"
+    )
+    monkeypatch.setattr("app.DATA_DIR", tmp_path)
+    client = _client_with_mocks(monkeypatch)
+    text = client.get("/api/health").text
+    assert "@" not in text

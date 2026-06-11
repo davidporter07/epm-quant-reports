@@ -1632,6 +1632,45 @@ def health() -> dict:
     except Exception:
         checks["data_freshness"] = {"present": False, "error": "check_failed"}
 
+    # 9. Email send summary — reads the counts-only report written by the laptop pipeline
+    # (data/email_send_summary.json, synced via data/ SYNC_DIRS). File absent = not
+    # degraded (no run yet today). Degrades only when date == today AND market open.
+    # NEVER exposes email addresses — subscriber PII stays in the laptop-local ledger.
+    try:
+        _es_path = DATA_DIR / "email_send_summary.json"
+        if not _es_path.exists():
+            checks["email_send"] = {"present": False}
+        else:
+            with _es_path.open(encoding="utf-8") as _esh:
+                _es = json.load(_esh)
+            checks["email_send"] = {
+                "present": True,
+                "date": _es.get("date"),
+                "ts": _es.get("ts"),
+                "attempts": _es.get("attempts"),
+                "total": _es.get("total"),
+                "sent": _es.get("sent"),
+                "failed": _es.get("failed"),
+                "internal_ok": _es.get("internal_ok"),
+                "fetch_ok": _es.get("fetch_ok"),
+                "fallback_used": _es.get("fallback_used"),
+                "pdf_ok": _es.get("pdf_ok"),
+            }
+            import datetime as _dt
+            _es_today = _es.get("date") == _dt.date.today().isoformat()
+            if _es_today and mkt_open:
+                if _es.get("failed", 0) > 0:
+                    overall_ok = False
+                    reasons.append("email_send:partial_failure")
+                if _es.get("internal_ok") is False:
+                    overall_ok = False
+                    reasons.append("email_send:internal_failed")
+                if _es.get("fetch_ok") is False:
+                    overall_ok = False
+                    reasons.append("email_send:subscriber_fetch_failed")
+    except Exception:
+        checks["email_send"] = {"present": False, "error": "check_failed"}
+
     return {"status": "ok" if overall_ok else "degraded", "checks": checks, "reasons": reasons}
 
 
