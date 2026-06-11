@@ -356,11 +356,29 @@ line to email_sent.log before any re-run to prevent duplicate sends.
 
 ---
 
-## PR F — Pre-scale hardening (IMPLEMENTED 2026-06-11, pending deploy approval)
+## PR F — Pre-scale hardening (SHIPPED, deployed + VALIDATED 2026-06-11)
 
 Six staged commits (5806c8e → b5388db) closing the scale/resilience gaps identified
-in audit. No prompts, model behavior, report/PDF, UI, auth business logic, or
-data-freshness rules were touched.
+in audit, plus probe-diagnostic commit 5e5c849. No prompts, model behavior,
+report/PDF, UI, auth business logic, or data-freshness rules were touched.
+
+### Validation result (2026-06-11)
+
+- `/api/health`: `status: ok`, `reasons: []`; `deploy.present: true` showing the
+  live commit; `rate_limit.enforce: false`.
+- Server `users.db` `PRAGMA journal_mode` → `wal`.
+- Proxy/real-IP keying CONFIRMED: journalctl shows the real client IP
+  (IPv6), not 127.0.0.1.
+- The original suggest-tickers warn probe was REPLACED by the auth_login probe
+  (see verification step 5 below). data_cheap's 120-per-sliding-60s threshold is
+  unreachable by a sequential curl loop through Cloudflare TLS (~0.4–0.8s/req),
+  so that probe could never fire — confirmed not a code bug by regression test
+  (`test_suggest_tickers_burst_emits_would_429_in_warn_mode`).
+- Corrected auth_login probe (17 junk POSTs) PRODUCED the expected
+  `[rate_limit][WARN] would-429 bucket=auth_login` lines with the real client IP.
+- **`RATE_LIMIT_ENFORCE` remains 0 by design.** Do not flip to 1 until the
+  warn-only observation window has been reviewed (operator decision; flip
+  procedure below).
 
 ### What it does
 
