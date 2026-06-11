@@ -509,3 +509,86 @@ Keep the `_SERVER_MANAGED` sidecar entries even if WAL is reverted (harmless, pr
 
 - `RATE_LIMIT_ENFORCE=0` (default warn-only); set 1 after proxy verification +
   clean observation window. Existing limits (forgot-password, reset, chat) always enforced.
+
+---
+
+## PR G — Validator centralization (IMPLEMENTED 2026-06-11, pending deploy approval)
+
+Five staged commits (2eedfc7 → HEAD) creating `services/validators.py` as the
+single home for scattered validation rules. Behavior-preserving by construction
+(extract rules verbatim → delegate call sites → lock with tests) except the
+explicitly approved D1 env-flag edge cases below.
+
+### What it does
+
+**C1 — `services/validators.py` (2eedfc7).** stdlib-only module, zero callers
+at introduction. Contents (provenance documented per function):
+`normalize_ticker()`, `DEEP_TICKER_RE`/`is_valid_deep_ticker()`,
+`validate_username/password/email_format()` (return error-or-None; callers
+raise), `env_flag()`, `read_json_artifact()`. 64 table-driven tests.
+
+**C2 — ticker delegation (d74d922).** `app.py:_normalize_symbol` (9 internal
+call sites, CRITICAL fan-out per GitNexus — change is body delegation only) and
+`MarketBoardService._normalize_symbol` delegate to `normalize_ticker`; the
+share-class dash→dot rule (BRK-B → BRK.B) proved identical in both and moved
+into the canonical helper. `_DEEP_TICKER_RE` aliases `validators.DEEP_TICKER_RE`.
+Byte-equivalence to both legacy functions proven by table tests.
+openbb_provider keeps its own distinct suffix logic (not a duplicate).
+
+**C3 — auth rule dedup (038b446).** username 2–40 (was in register_user AND
+change_username) and password ≥10 (was in register_user AND reset_password)
+now live once in validators. AuthError messages byte-identical, original check
+order preserved; locked by tests/test_auth_validation_messages.py (11 tests).
+
+**C4 — env_flag + health artifact reads (d1841ef).** Four flag sites share
+`env_flag` (see D1). The 5 inline `json.load` blocks in `/api/health` use
+`read_json_artifact`; per-check semantics exact (commentary malformed still
+degrades; the other four map malformed → `{present:false, error:"check_failed"}`
+without degrading) — locked by 4 new malformed-artifact shape tests.
+
+**C5 — leak-count ratchet + docs.** `tests/test_error_detail_inventory.py`
+freezes app.py's `detail=str(exc)` count at 13 (5 AuthError pass-throughs +
+8 deferred D2 leak sites) — adding a site fails CI.
+
+### D1 — canonical env-flag parsing (operator-facing change)
+
+truthy = {1, true, yes, on}; falsey = {0, false, no, off}; case-insensitive;
+unset/empty/garbage → flag default. **Documented 0/1 values behave identically
+everywhere — zero production impact.** Edge changes (each test-locked):
+
+| Flag value | Old behavior | New behavior |
+|---|---|---|
+| `SEND_REQUIRE_PDF=true` (or yes/on) | silently OFF (`== "1"`) | ON |
+| `DATA_FRESHNESS_ENFORCE=true` | silently OFF | ON |
+| `RATE_LIMIT_ENFORCE=no` / `off` | ON (`not in ("","0","false")`) | OFF |
+| `WATCHDOG_ENABLED=false` / `no` / `off` | running (`== "0"` only) | disabled |
+
+### Deferred decisions (named, not silently changed)
+
+- **D2:** the 8 blanket `except Exception → detail=str(exc)` data endpoints
+  leak internal text; fix needs a frontend audit first. Count is ratcheted.
+- **D3:** profile_color / profile_avatar are stored unvalidated.
+- **D4:** `DEEP_TICKER_RE` rejects dotted tickers (BRK.B cannot be
+  deep-analyzed) — product decision, preserved verbatim.
+- No new /api/health check: validators are pure code with no runtime artifact;
+  every existing health check reads a real artifact.
+
+### Verification after deploy
+
+```bash
+python -m pytest tests/ -q          # full suite
+python post_run.py                  # manual approval only
+curl -fsS https://epm-market-intelligence.com/api/health | python -m json.tool
+# Expect: status ok, deploy.commit == new HEAD, rate_limit.enforce:false,
+# all check shapes unchanged.
+# Spot checks: 1-char-username register -> same 400 message; junk login -> 401;
+# /api/suggest-tickers?q=aa -> 200; unauthenticated POST /api/deep/AAPL -> 401.
+```
+
+### Rollback
+
+Pure code — no flags, no data migrations, no artifacts, no .env changes:
+`git revert <commit(s)>` + `python post_run.py`. C1 has no callers (revert
+trivially safe); C2–C4 are delegations whose reverts restore the inlined logic
+verbatim. D1 deltas are env-edge-cases only; prod .env files use 0/1, so no
+operator action on revert either.
