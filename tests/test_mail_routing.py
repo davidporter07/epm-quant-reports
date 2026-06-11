@@ -203,3 +203,52 @@ def test_watchdog_tick_skips_without_gmail_creds(monkeypatch, capsys):
     assert result is False
     assert sent == []
     assert "GMAIL_APP_PASSWORD" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# send_raw / send_message return provider string (PR E)
+# ---------------------------------------------------------------------------
+
+def test_send_raw_returns_resend_on_success(monkeypatch, mail_env):
+    store = {}
+    _wire_smtp(monkeypatch, store)
+    result = es.send_raw(MIMEText("x"), ["a@b.com"])
+    assert result == "resend"
+
+
+def test_send_raw_returns_gmail_on_explicit_provider(monkeypatch, mail_env):
+    store = {}
+    _wire_smtp(monkeypatch, store)
+    result = es.send_raw(MIMEText("x"), ["a@b.com"], provider="gmail")
+    assert result == "gmail"
+
+
+def test_send_raw_returns_gmail_fallback_on_resend_failure(monkeypatch, mail_env):
+    store = {}
+    _wire_smtp(monkeypatch, store, fail_hosts={"smtp.resend.com"})
+    result = es.send_raw(MIMEText("x"), ["a@b.com"])
+    assert result == "gmail_fallback"
+
+
+def test_send_raw_returns_gmail_when_no_resend_key(monkeypatch):
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    monkeypatch.setenv("GMAIL_APP_PASSWORD", "gmpw")
+    monkeypatch.setenv("GMAIL_USER", GMAIL_USER)
+    store = {}
+    _wire_smtp(monkeypatch, store)
+    result = es.send_raw(MIMEText("x"), ["a@b.com"])
+    assert result == "gmail"
+
+
+def test_send_message_propagates_provider_return(monkeypatch, mail_env):
+    store = {}
+    _wire_smtp(monkeypatch, store)
+    result = es.send_message("to@x.com", "subj", "<b>h</b>", "h")
+    assert result == "resend"
+
+
+def test_send_message_propagates_gmail_fallback(monkeypatch, mail_env):
+    store = {}
+    _wire_smtp(monkeypatch, store, fail_hosts={"smtp.resend.com"})
+    result = es.send_message("to@x.com", "subj", "<b>h</b>", "h")
+    assert result == "gmail_fallback"

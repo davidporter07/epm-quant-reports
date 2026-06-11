@@ -173,11 +173,14 @@ def send_raw(
     to_addrs: list[str] | str,
     from_addr: str | None = None,
     provider: str | None = None,
-) -> None:
+) -> str:
     """Send a pre-built MIME message via the configured SMTP provider.
 
     Used by send_email.py, which builds a rich multipart/related message
     (inline logo + PDF attachment) and just needs the shared credentials.
+
+    Returns the provider that delivered the message: "resend", "gmail", or
+    "gmail_fallback" (Resend tried first, Gmail used on failure).
 
     provider:
       - None (default): env-driven (Resend when RESEND_API_KEY is set). If the
@@ -197,7 +200,7 @@ def send_raw(
         sender = from_addr or gmail["from"]
         _set_from(msg, sender)
         _smtp_send(gmail, sender, to_addrs, msg)
-        return
+        return "gmail"
 
     cfg = _mail_config()
     if not cfg["password"]:
@@ -207,7 +210,7 @@ def send_raw(
     sender = from_addr or cfg["from"]
     try:
         _smtp_send(cfg, sender, to_addrs, msg)
-        return
+        return cfg["provider"]  # "resend" or "gmail" (when Resend key absent)
     except EmailError as exc:
         if cfg["provider"] != "resend":
             raise
@@ -220,6 +223,7 @@ def send_raw(
         try:
             _smtp_send(gmail, gmail["from"], to_addrs, msg)
             print(f"[mail][WARN] Sent via Gmail fallback to {len(to_addrs)} recipient(s).")
+            return "gmail_fallback"
         except EmailError as exc2:
             raise EmailError(
                 f"Resend failed ({exc}); Gmail fallback also failed ({exc2})"
@@ -234,11 +238,13 @@ def send_message(
     headers: dict | None = None,
     from_addr: str | None = None,
     provider: str | None = None,
-) -> None:
+) -> str:
     """Send a simple multipart/alternative email via the configured provider.
 
     Used for password-reset and double-opt-in confirmation (default provider)
     and for internal ops alerts (provider="gmail" — never via Resend).
+
+    Returns the provider that delivered the message (propagated from send_raw).
     """
     if provider == "gmail":
         default_from = _gmail_config()["from"]
@@ -252,7 +258,7 @@ def send_message(
         msg[key] = value
     msg.attach(MIMEText(plain, "plain"))
     msg.attach(MIMEText(html, "html"))
-    send_raw(msg, [to_email], from_addr=msg["From"], provider=provider)
+    return send_raw(msg, [to_email], from_addr=msg["From"], provider=provider)
 
 
 def send_password_reset_email(to_email: str, username: str, reset_url: str) -> None:
