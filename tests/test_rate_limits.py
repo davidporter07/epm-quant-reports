@@ -202,3 +202,39 @@ def test_data_expensive_snapshot_is_limited(enforce_client):
 
     r = enforce_client.get("/api/snapshot?ticker=AAPL", headers={"CF-Connecting-IP": "snapip"})
     assert r.status_code == 429
+
+
+# ---------------------------------------------------------------------------
+# Production probe reproduction (2026-06-11): repeated real GETs to
+# /api/suggest-tickers?q=aa must emit would-429 once the 120/60s window fills.
+# The live probe saw no warn log because a sequential curl loop through
+# Cloudflare TLS runs slower than 120 req per SLIDING 60s window — the limiter
+# correctly never crossed the threshold. This test proves the full
+# middleware → bucket-match → warn-log chain works for this exact endpoint.
+# ---------------------------------------------------------------------------
+
+def test_suggest_tickers_burst_emits_would_429_in_warn_mode(client, monkeypatch, capsys):
+    """121 sequential GET /api/suggest-tickers?q=aa from one IP: all 200, and
+    request 121 (first over-limit) must log [rate_limit][WARN] would-429."""
+    # Stub the handler's data/network internals — the middleware under test
+    # runs before the handler, but the request must complete end-to-end.
+    monkeypatch.setattr(app_module, "_suggestion_index", lambda: ())
+    monkeypatch.setattr(app_module, "_direct_symbol_candidate", lambda q: None)
+    monkeypatch.setattr(app_module, "_remote_yf_suggestions", lambda q, limit: [])
+
+    headers = {"CF-Connecting-IP": "probe-ip-2600"}
+
+    for i in range(120):
+        r = client.get("/api/suggest-tickers?q=aa", headers=headers)
+        assert r.status_code == 200, f"request {i+1} failed: {r.text}"
+    out_under = capsys.readouterr().out
+    assert "would-429" not in out_under, "warn fired before the 120-request threshold"
+
+    r121 = client.get("/api/suggest-tickers?q=aa", headers=headers)
+    assert r121.status_code == 200, "warn mode must not block"
+    out_over = capsys.readouterr().out
+    assert "[rate_limit][WARN]" in out_over
+    assert "would-429" in out_over
+    assert "bucket=data_cheap" in out_over
+    assert "path=/api/suggest-tickers" in out_over
+    assert "ip=probe-ip-2600" in out_over

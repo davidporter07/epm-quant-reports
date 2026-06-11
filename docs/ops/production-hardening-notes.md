@@ -434,10 +434,22 @@ git rev-parse --short=12 HEAD
 # Should match health deploy.commit
 
 # 5. Proxy-header verification (REQUIRED before flipping RATE_LIMIT_ENFORCE=1)
-# After C3 deploys (warn-only is harmless), send ~130 rapid requests from laptop:
-#   curl -s https://epm-market-intelligence.com/api/suggest-tickers?q=A (x130)
+# DO NOT probe with /api/suggest-tickers: data_cheap is 120 req per SLIDING
+# 60s window, and a sequential curl loop through Cloudflare TLS (~0.4-0.8s
+# per request) cannot sustain >2 req/s — the threshold is never crossed and
+# no warn log appears (observed 2026-06-11; limiter was working correctly).
+#
+# Use the auth_login bucket instead (15/300s — trivially reachable, no
+# yfinance cost; junk credentials just return 401):
+#   for i in $(seq 1 17); do
+#     curl -s -o /dev/null -X POST \
+#       https://epm-market-intelligence.com/api/auth/login \
+#       -H 'Content-Type: application/json' \
+#       -d '{"username":"rl-probe","password":"x","remember_me":false}'
+#   done
 # Then on server:
-#   journalctl -u epm.service | grep rate_limit
+#   journalctl -u epm.service --since '10 min ago' | grep rate_limit
+# Expect: [rate_limit][WARN] would-429 bucket=auth_login path=/api/auth/login ip=<laptop public IP>
 # The logged ip= must be the laptop's public IP, NOT 127.0.0.1.
 # If 127.0.0.1: add proxy_set_header X-Forwarded-For to nginx FIRST.
 ```
