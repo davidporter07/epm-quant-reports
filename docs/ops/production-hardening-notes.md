@@ -442,10 +442,24 @@ python -m pytest tests/ -q
 # 2. Health: deploy.present:true, rate_limit.enforce:false, status:ok
 curl -fsS https://epm-market-intelligence.com/api/health | python -m json.tool
 
-# 3. users.db WAL confirmed on server
+# 3. users.db writability/WAL — use the health endpoint, NOT sqlite3 directly.
+# checks.db.users.writable:true is the normal verification:
 ssh -i ~/.ssh/epm_server dporter02@100.101.63.65 \
-  "sqlite3 /opt/epm-market-intelligence/data/users.db 'PRAGMA journal_mode;'"
-# Expected: wal
+  "curl -fsS http://127.0.0.1:8000/api/health" | python -m json.tool
+#
+# !! INCIDENT 2026-06-11: running `sqlite3 users.db 'PRAGMA journal_mode;'`
+# !! as dporter02 created dporter02-owned users.db-wal/-shm sidecars next to
+# !! the epmapp-owned DB (opening a WAL DB — even read-only — creates the
+# !! sidecars as the opening user). The service could no longer write its own
+# !! DB -> health degraded with db_readonly:users; registrations/resets 500'd.
+# !! Fixed via stop -> rm sidecars -> start.
+# RULES:
+#  - NEVER run sqlite3 against the live users.db as dporter02.
+#  - Normal verification = /api/health checks.db.users.writable.
+#  - If DB-level WAL verification is truly needed, run it ONLY as the service
+#    user (sudo -u epmapp sqlite3 ...) or root, in a controlled maintenance
+#    step, and check sidecar ownership afterwards:
+#      ls -l /opt/epm-market-intelligence/data/users.db*   # all epmapp:epmapp
 
 # 4. deploy.commit matches local HEAD
 git rev-parse --short=12 HEAD
@@ -489,10 +503,12 @@ curl -fsS http://127.0.0.1:8000/api/health | python -m json.tool
 **Code rollback:** `git revert <commit(s)>` + `python post_run.py`
 
 **WAL special case:** code revert is immediately safe (old SQLite code reads WAL
-DBs fine). Full revert to DELETE journaling if needed:
+DBs fine). Full revert to DELETE journaling if needed — run the sqlite3 step as
+the SERVICE USER (see incident note in verification step 3; running it as
+dporter02 plants dporter02-owned sidecars that break the service):
 ```bash
 sudo systemctl stop epm.service
-sqlite3 /opt/epm-market-intelligence/data/users.db 'PRAGMA journal_mode=DELETE;'
+sudo -u epmapp sqlite3 /opt/epm-market-intelligence/data/users.db 'PRAGMA journal_mode=DELETE;'
 sudo systemctl start epm.service
 ```
 Keep the `_SERVER_MANAGED` sidecar entries even if WAL is reverted (harmless, protective).
@@ -583,6 +599,12 @@ curl -fsS https://epm-market-intelligence.com/api/health | python -m json.tool
 # all check shapes unchanged.
 # Spot checks: 1-char-username register -> same 400 message; junk login -> 401;
 # /api/suggest-tickers?q=aa -> 200; unauthenticated POST /api/deep/AAPL -> 401.
+#
+# DB verification: use health checks.db.users.writable ONLY. Do NOT run
+# sqlite3 against the live users.db as dporter02 — see the 2026-06-11
+# incident note in the PR F verification section (dporter02-owned WAL
+# sidecars broke service writes). DB-level checks: sudo -u epmapp only,
+# in a controlled maintenance step.
 ```
 
 ### Rollback
