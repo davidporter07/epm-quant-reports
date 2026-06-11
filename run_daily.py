@@ -207,9 +207,19 @@ def main(
                 return 4
 
     # 1. Generate + email. send_email.py owns the freshness GATE that blocks stale
-    #    or non-LLM reports, so a non-zero exit here means we must NOT deploy.
+    #    or non-LLM reports, so a non-zero exit here means we must NOT deploy —
+    #    except exit 6 (EXIT_PARTIAL_SEND): partial sends still deploy so the site
+    #    is live for subscribers who DID receive the email.
     rc = runner([PY, "send_email.py"])
-    if rc != 0:
+    if rc == 6:  # EXIT_PARTIAL_SEND — deploy proceeds, health check carries the degradation
+        msg = (
+            "send_email.py reported PARTIAL send (exit 6) — "
+            "see logs/email_send_ledger.json for failed recipients; deploying anyway."
+        )
+        print(f"[run_daily] [WARN] {msg}")
+        _record_status("send_email_partial", True, msg)
+        _send_alert("send_email_partial", msg)
+    elif rc != 0:
         msg = f"send_email.py exited {rc} — report not deployed. Aborting."
         print(f"[run_daily] {msg}")
         _record_status("send_email", False, msg)
