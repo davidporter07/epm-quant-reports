@@ -18,6 +18,8 @@ from datetime import date, datetime, time as dtime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
+from services.validators import env_flag
+
 try:
     from zoneinfo import ZoneInfo
     _CST = ZoneInfo("America/Chicago")
@@ -156,8 +158,10 @@ def _watchdog_loop(
 
 def start_watchdog() -> None:
     global _watchdog_thread
-    if os.getenv("WATCHDOG_ENABLED", "1") == "0":
-        print("[watchdog] disabled by WATCHDOG_ENABLED=0")
+    # Canonical parsing (D1): "false"/"no"/"off" now also disable (old == "0"
+    # idiom kept the watchdog running on those). Unset/empty/garbage → enabled.
+    if not env_flag("WATCHDOG_ENABLED", default=True):
+        print("[watchdog] disabled by WATCHDOG_ENABLED")
         return
     interval = int(os.getenv("WATCHDOG_INTERVAL_SEC", str(_DEFAULT_INTERVAL)))
     cutoff = _parse_cutoff(os.getenv("WATCHDOG_STALE_CUTOFF", "10:30"))

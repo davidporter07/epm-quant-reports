@@ -43,6 +43,7 @@ TO = os.getenv("INTERNAL_RECIPIENT", "dporter@epmfinancial.com")
 # public HTTPS origin; the route is guarded by INTERNAL_API_KEY. The send falls back
 # to the internal recipient only if this is unreachable or the key is unset.
 from services import runtime_config as _rc
+from services.validators import env_flag
 
 EPM_SERVER_URL = _rc.epm_server_url()
 INTERNAL_RECIPIENTS_URL = _rc.internal_recipients_url()
@@ -98,7 +99,9 @@ def _pdf_report_path() -> str:
 
 def _check_pdf(today: str) -> "tuple[bool, str]":
     """Return (pdf_ok, detail). SEND_REQUIRE_PDF=1 makes a missing/stale PDF block the send."""
-    require = os.getenv("SEND_REQUIRE_PDF", "0").strip() == "1"
+    # Canonical parsing (D1): "true"/"yes"/"on" now also enable (old == "1"
+    # idiom silently ignored them).
+    require = env_flag("SEND_REQUIRE_PDF", default=False)
     try:
         p = Path(_pdf_report_path())
         if not p.exists():

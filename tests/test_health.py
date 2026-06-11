@@ -508,6 +508,49 @@ def test_deploy_stamp_response_has_no_pii(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# malformed artifacts (PR G commit 4 — read_json_artifact migration must keep
+# the exact shapes the old inline json.load + except paths produced)
+# ---------------------------------------------------------------------------
+
+def test_last_run_malformed_is_check_failed_not_degraded(monkeypatch, tmp_path):
+    (tmp_path / "run_daily_status.json").write_text("NOT JSON {", encoding="utf-8")
+    monkeypatch.setattr("app.DATA_DIR", tmp_path)
+    client = _client_with_mocks(monkeypatch)
+    body = client.get("/api/health").json()
+    assert body["checks"]["last_run"] == {"present": False, "error": "check_failed"}
+    assert not any("last_run" in r for r in body["reasons"])
+
+
+def test_data_freshness_malformed_is_check_failed_not_degraded(monkeypatch, tmp_path):
+    (tmp_path / "data_freshness.json").write_text("[1,2,3]", encoding="utf-8")
+    monkeypatch.setattr("app.DATA_DIR", tmp_path)
+    client = _client_with_mocks(monkeypatch)
+    body = client.get("/api/health").json()
+    assert body["checks"]["data_freshness"] == {"present": False, "error": "check_failed"}
+    assert not any("data_freshness" in r for r in body["reasons"])
+
+
+def test_email_send_malformed_is_check_failed_not_degraded(monkeypatch, tmp_path):
+    (tmp_path / "email_send_summary.json").write_text("{broken", encoding="utf-8")
+    monkeypatch.setattr("app.DATA_DIR", tmp_path)
+    client = _client_with_mocks(monkeypatch)
+    body = client.get("/api/health").json()
+    assert body["checks"]["email_send"] == {"present": False, "error": "check_failed"}
+    assert not any("email_send" in r for r in body["reasons"])
+
+
+def test_commentary_malformed_is_check_failed_and_degraded(monkeypatch, tmp_path):
+    """Commentary is the one check where malformed DOES degrade (original
+    semantics: json.load raised -> except -> ok:False + overall degraded)."""
+    (tmp_path / "latest_commentary.json").write_text("NOT JSON", encoding="utf-8")
+    monkeypatch.setattr("app.DATA_DIR", tmp_path)
+    client = _client_with_mocks(monkeypatch)
+    body = client.get("/api/health").json()
+    assert body["checks"]["commentary"] == {"ok": False, "error": "check_failed"}
+    assert body["status"] == "degraded"
+
+
+# ---------------------------------------------------------------------------
 # rate_limit.enforce check (PR F commit 5)
 # ---------------------------------------------------------------------------
 

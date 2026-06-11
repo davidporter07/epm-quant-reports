@@ -28,6 +28,8 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from services.validators import env_flag
+
 _BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = _BASE_DIR / "data"
 
@@ -50,8 +52,10 @@ class CheckResult:
 # ---------------------------------------------------------------------------
 
 def enforce_enabled() -> bool:
-    """True when DATA_FRESHNESS_ENFORCE=1. Read at call-time so tests can monkeypatch."""
-    return os.getenv(_ENFORCE_ENV, "0").strip() == "1"
+    """True when DATA_FRESHNESS_ENFORCE is truthy. Read at call-time so tests can
+    monkeypatch. Canonical parsing (D1): "true"/"yes"/"on" now also enable
+    (old == "1" idiom silently ignored them)."""
+    return env_flag(_ENFORCE_ENV, default=False)
 
 
 def _max_age_days() -> int:

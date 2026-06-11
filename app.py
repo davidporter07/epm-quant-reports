@@ -54,7 +54,12 @@ from services.email_service import (
 from deep_analysis_worker import (cancel_job, enqueue, get_job_status, get_today_cached_job,
                                    invalidate_today_cache, start_worker, stop_worker, worker_status)
 from services.watchdog_service import start_watchdog, stop_watchdog, watchdog_status
-from services.validators import DEEP_TICKER_RE, normalize_ticker
+from services.validators import (
+    DEEP_TICKER_RE,
+    env_flag,
+    normalize_ticker,
+    read_json_artifact,
+)
 from services import runtime_config as _rc
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -203,7 +208,10 @@ def _client_ip(request: Request) -> str:
 # unconditionally enforced regardless of this flag.
 # Single uvicorn worker in prod → in-memory store is correct. If --workers is
 # ever added, these limits silently become per-worker; add Redis then.
-_RATE_LIMIT_ENFORCE: bool = os.getenv("RATE_LIMIT_ENFORCE", "0") not in ("", "0", "false")
+# Canonical parsing (validators.env_flag, decision D1): truthy {1,true,yes,on},
+# falsey {0,false,no,off}; garbage/empty -> default. Edge change from the old
+# `not in ("","0","false")` idiom: "no"/"off" now DISABLE (were silently truthy).
+_RATE_LIMIT_ENFORCE: bool = env_flag("RATE_LIMIT_ENFORCE", default=False)
 
 # (frozenset[methods], frozenset[exact_paths], max_requests, window_s, bucket_name)
 _RL_BUCKETS: list[tuple[frozenset, frozenset, int, int, str]] = [
@@ -1523,10 +1531,12 @@ def health() -> dict:
             except Exception:
                 pass
         cpath = DATA_DIR / "latest_commentary.json"
-        report_date = None
-        if cpath.exists():
-            with cpath.open(encoding="utf-8") as fh:
-                report_date = (json.load(fh) or {}).get("report_date")
+        _c_doc, _c_status = read_json_artifact(cpath)
+        if _c_status == "malformed":
+            # Preserve original semantics: malformed commentary -> the outer
+            # except path (check_failed + degraded), exactly as json.load raising did.
+            raise ValueError("malformed latest_commentary.json")
+        report_date = (_c_doc or {}).get("report_date")
         fresh = (report_date == today_s) if mkt_open else True
         checks["commentary"] = {
             "present": bool(report_date),
@@ -1593,12 +1603,13 @@ def health() -> dict:
     try:
         from datetime import date as _d2
         _status_path = DATA_DIR / "run_daily_status.json"
-        if not _status_path.exists():
+        _sr, _sr_status = read_json_artifact(_status_path)
+        if _sr_status == "missing":
             checks["last_run"] = {"present": False}
             # Info-only — first deploy before any push has happened
+        elif _sr is None:  # malformed — same shape the old except path produced
+            checks["last_run"] = {"present": False, "error": "check_failed"}
         else:
-            with _status_path.open(encoding="utf-8") as _fh:
-                _sr = json.load(_fh)
             _ts_str = _sr.get("ts", "")
             _stage = _sr.get("stage", "")
             _ok_flag = bool(_sr.get("ok", False))
@@ -1685,11 +1696,12 @@ def health() -> dict:
     # the persisted report shows critical failures AND enforce was on AND market open.
     try:
         _df_path = DATA_DIR / "data_freshness.json"
-        if not _df_path.exists():
+        _df_payload, _df_status = read_json_artifact(_df_path)
+        if _df_status == "missing":
             checks["data_freshness"] = {"present": False}
+        elif _df_payload is None:  # malformed — same shape the old except path produced
+            checks["data_freshness"] = {"present": False, "error": "check_failed"}
         else:
-            with _df_path.open(encoding="utf-8") as _dfh:
-                _df_payload = json.load(_dfh)
             _df_enforce = bool(_df_payload.get("enforce", False))
             _df_results = _df_payload.get("results", [])
             _df_critical_failing = [r["name"] for r in _df_results
@@ -1717,11 +1729,12 @@ def health() -> dict:
     # NEVER exposes email addresses — subscriber PII stays in the laptop-local ledger.
     try:
         _es_path = DATA_DIR / "email_send_summary.json"
-        if not _es_path.exists():
+        _es, _es_status = read_json_artifact(_es_path)
+        if _es_status == "missing":
             checks["email_send"] = {"present": False}
+        elif _es is None:  # malformed — same shape the old except path produced
+            checks["email_send"] = {"present": False, "error": "check_failed"}
         else:
-            with _es_path.open(encoding="utf-8") as _esh:
-                _es = json.load(_esh)
             checks["email_send"] = {
                 "present": True,
                 "date": _es.get("date"),
@@ -1756,11 +1769,12 @@ def health() -> dict:
     # Counts/flags only — no IPs, paths, secrets, or emails in the response.
     try:
         _ds_path = DATA_DIR / "deploy_stamp.json"
-        if not _ds_path.exists():
+        _ds, _ds_status = read_json_artifact(_ds_path)
+        if _ds_status == "missing":
             checks["deploy"] = {"present": False}
+        elif _ds is None:  # malformed — same shape the old except path produced
+            checks["deploy"] = {"present": False, "error": "check_failed"}
         else:
-            with _ds_path.open(encoding="utf-8") as _dsh:
-                _ds = json.load(_dsh)
             import datetime as _ddt
             _ds_ts = _ds.get("ts")
             _ds_age_hours: float | None = None
