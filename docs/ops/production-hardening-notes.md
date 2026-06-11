@@ -309,3 +309,47 @@ surfaces pipeline-time verdicts; server never re-runs mtime checks.
 - Gmail fallback for the daily report sends from the personal address —
   deliverability to external subscribers is worse than Resend; acceptable as
   an emergency path only.
+
+
+---
+
+## PR E — Send-path hardening (idempotent sends, partial-failure visibility)
+
+**Commits:** 4643fc2->4008ead (6 commits on main, 2026-06-11)
+
+### What changed
+- send_raw/send_message return provider: "resend", "gmail", "gmail_fallback"
+- NEW services/send_ledger.py: per-recipient ledger (logs/email_send_ledger.json, laptop-local PII) + counts-only summary (data/email_send_summary.json, auto-synced)
+- send_email.py: ledger idempotency, EXIT_PARTIAL_SEND=6, fetch_daily_recipients() returns (list, fetch_ok), _check_pdf() at runtime
+- run_daily.py: exit-6 branch deploys + alerts
+- app.py: check 9 email_send; degrades on partial/internal/fetch failures
+
+### Exit codes
+- 0: Full success; legacy email_sent.log marked
+- 1: Hard failure (all sends failed, PDF blocked, commentary stale)
+- 6: Partial send (some failed or fetch failed); site still deploys
+
+### Retry after partial
+    python send_email.py --send-only
+Sends only to recipients not yet ok in ledger. Exits 0 + marks legacy log on full success.
+
+### Artifacts
+- logs/email_send_ledger.json -- laptop-local, never synced, contains addresses
+- data/email_send_summary.json -- counts/booleans only, syncs to server, NO addresses
+
+### Health: checks.email_send
+- present:false = no run yet, not degraded
+- failed>0 -> email_send:partial_failure (today + market open)
+- internal_ok:false -> email_send:internal_failed
+- fetch_ok:false -> email_send:subscriber_fetch_failed
+- fallback_used, pdf_ok = info-only
+
+### Rollback
+    git revert <commits>  # minimally commit 4+5
+    python post_run.py
+Legacy email_sent.log written on full success so reverted code still works.
+Edge: mid-day rollback after partial (no legacy line) -- manually append a timestamp
+line to email_sent.log before any re-run to prevent duplicate sends.
+
+### Env flags
+- SEND_REQUIRE_PDF=0 (default warn-only); set 1 to block on missing/stale PDF
