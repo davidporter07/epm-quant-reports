@@ -25,21 +25,30 @@ from typing import Any, Optional, Tuple
 # Tickers
 # ---------------------------------------------------------------------------
 
+# Share-class dash form: 1-5 letter base + single-letter class (BRK-B, BF-B).
+_SHARE_CLASS_DASH_RE = re.compile(r"[A-Z]{1,5}-[A-Z]$")
+
+
 def normalize_ticker(raw: Any, *, strip_market_prefix: bool = False) -> str:
     """Canonical web-surface ticker normalization.
 
-    Extracted from app.py:_normalize_symbol (strip/upper/de-space) and the
-    base line of services/market_board_service.MarketBoardService._normalize_symbol
-    (which additionally strips the YCharts "M:" prefix — replace happens BEFORE
+    Extracted verbatim from app.py:_normalize_symbol (strip/upper/de-space +
+    share-class dash→dot: BRK-B → BRK.B) and from
+    services/market_board_service.MarketBoardService._normalize_symbol, which is
+    the same rule plus a YCharts "M:" prefix strip (replace happens BEFORE
     upper-casing, matching the original, so a lowercase "m:" is NOT stripped).
 
-    Share-class suffix handling (BRK-B → BRK.B etc.) intentionally stays at the
-    call sites — market_board and openbb_provider apply DIFFERENT suffix rules.
+    providers/openbb_provider keeps its own _normalize_symbol — its suffix
+    logic is genuinely different (validates dotted form too) and is not a
+    duplicate of this rule.
     """
     value = str(raw or "")
     if strip_market_prefix:
         value = value.replace("M:", "")
-    return value.strip().upper().replace(" ", "")
+    value = value.strip().upper().replace(" ", "")
+    if _SHARE_CLASS_DASH_RE.fullmatch(value):
+        return value.replace("-", ".")
+    return value
 
 
 # Extracted from app.py:2795. Used by the deep-analysis endpoints. NOTE: this

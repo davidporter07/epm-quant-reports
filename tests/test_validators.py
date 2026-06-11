@@ -19,6 +19,10 @@ from services import validators as v
     ("  msft  ", "MSFT"),
     ("brk.b", "BRK.B"),
     ("BRK B", "BRKB"),          # spaces removed (app.py:752 behavior)
+    ("brk-b", "BRK.B"),         # share-class dash→dot (app.py:754-756)
+    ("BF-A", "BF.A"),
+    ("ABCDEF-B", "ABCDEF-B"),   # 6-char base — outside the 1-5 rule, unchanged
+    ("BRK-BB", "BRK-BB"),       # 2-char class — outside the rule, unchanged
     ("", ""),
     (None, ""),
     (123, "123"),
@@ -39,10 +43,33 @@ def test_normalize_ticker_market_prefix(raw, expected):
 
 
 def test_normalize_ticker_matches_legacy_app_behavior():
-    """The helper must be byte-equivalent to the original app.py:752 expression."""
-    for raw in ("aapl", " spy ", "BRK B", "", "m:x", "M:X", "qqq "):
-        legacy = str(raw or "").strip().upper().replace(" ", "")
-        assert v.normalize_ticker(raw) == legacy
+    """The helper must be byte-equivalent to the original app.py:752-756 function."""
+    import re as _re
+
+    def _legacy(raw):
+        symbol = str(raw or "").strip().upper().replace(" ", "")
+        if _re.fullmatch(r"[A-Z]{1,5}-[A-Z]", symbol):
+            return symbol.replace("-", ".")
+        return symbol
+
+    for raw in ("aapl", " spy ", "BRK B", "", "m:x", "M:X", "qqq ",
+                "brk-b", "BF-A", "abcdef-b", "BRK-BB", "x-y-z"):
+        assert v.normalize_ticker(raw) == _legacy(raw), raw
+
+
+def test_normalize_ticker_matches_legacy_market_board_behavior():
+    """strip_market_prefix=True must be byte-equivalent to the original
+    market_board_service._normalize_symbol for string inputs."""
+    import re as _re
+
+    def _legacy(symbol):
+        value = str(symbol).replace("M:", "").strip().upper().replace(" ", "")
+        if _re.fullmatch(r"[A-Z]{1,5}-[A-Z]", value):
+            return value.replace("-", ".")
+        return value
+
+    for raw in ("M:PRWCX", "m:prwcx", "M:VFIAX ", "AAPL", "brk-b", "M:BF-A", ""):
+        assert v.normalize_ticker(raw, strip_market_prefix=True) == _legacy(raw), raw
 
 
 # ---------------------------------------------------------------------------

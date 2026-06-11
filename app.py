@@ -54,6 +54,7 @@ from services.email_service import (
 from deep_analysis_worker import (cancel_job, enqueue, get_job_status, get_today_cached_job,
                                    invalidate_today_cache, start_worker, stop_worker, worker_status)
 from services.watchdog_service import start_watchdog, stop_watchdog, watchdog_status
+from services.validators import DEEP_TICKER_RE, normalize_ticker
 from services import runtime_config as _rc
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -750,10 +751,9 @@ def _candidate_pdf_files() -> Iterable[Path]:
 
 
 def _normalize_symbol(raw: str) -> str:
-    symbol = str(raw or "").strip().upper().replace(" ", "")
-    if re.fullmatch(r"[A-Z]{1,5}-[A-Z]", symbol):
-        return symbol.replace("-", ".")
-    return symbol
+    # Rule extracted to services/validators.py (PR G) — this wrapper keeps the
+    # 9 internal call sites and their behavior untouched.
+    return normalize_ticker(raw)
 
 
 @lru_cache(maxsize=1)
@@ -2792,7 +2792,9 @@ async def api_chat(request: Request, body: ChatRequest) -> JSONResponse:
     return JSONResponse({"ok": True, "reply": reply})
 
 
-_DEEP_TICKER_RE = re.compile(r'^[A-Z]{1,10}$')
+# Canonical pattern lives in services/validators.py (PR G); alias preserved
+# for the two match sites below and any external import.
+_DEEP_TICKER_RE = DEEP_TICKER_RE
 
 
 @app.get("/deep-report")

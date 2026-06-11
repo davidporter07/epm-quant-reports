@@ -12,6 +12,8 @@ from typing import Any, Callable
 import pandas as pd
 import re
 
+from services.validators import normalize_ticker
+
 _SVC_ROOT = Path(__file__).resolve().parent.parent
 _DATA_DIR  = _SVC_ROOT / "data"
 
@@ -980,10 +982,10 @@ class MarketBoardService:
 
     @staticmethod
     def _normalize_symbol(symbol: str) -> str:
-        value = str(symbol).replace("M:", "").strip().upper().replace(" ", "")
-        if re.fullmatch(r"[A-Z]{1,5}-[A-Z]", value):
-            return value.replace("-", ".")
-        return value
+        # Rule extracted to services/validators.py (PR G). Only edge delta:
+        # None now normalizes to "" instead of "NONE" (str(None) artifact) —
+        # no caller passes None; row data is always str.
+        return normalize_ticker(symbol, strip_market_prefix=True)
 
     @staticmethod
     def _safe_symbol_list(symbols: list[str] | tuple[str, ...] | None) -> list[str]:
