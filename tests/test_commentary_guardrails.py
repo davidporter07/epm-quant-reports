@@ -1123,3 +1123,49 @@ def test_unreleased_attribution_catches_employment_data_phrasing():
     }
     gmc._scrub_unreleased_event_attribution(data)
     assert data["session_recap"][0] == "10-year yield fell 2 bp to 4.47%."
+
+
+# --- 2026-06-15: degenerate LLM repetition loop in economics_commentary ------
+_ECON_LOOP_UNIT = (
+    "vs 0.5% prior indicates a robust economy. "
+    "The latest Unemployment Rate at 4.3% vs 4.3% prior remains stable. "
+    "The latest PPI reading at 13.1% YoY vs 9.4% prior shows rising input costs. "
+)
+
+
+def test_degenerate_repetition_collapsed_and_leading_fragment_trimmed():
+    # Reproduces the 6/15 failure: the same 3-sentence block looped ~40 times,
+    # opening mid-clause with "vs 0.5% prior ...".
+    data = {"economics_commentary": (_ECON_LOOP_UNIT * 40).strip()}
+    fixes = gmc._scrub_degenerate_repetition(data)
+    assert fixes == 1
+    out = data["economics_commentary"]
+    # the dangling lowercase opener is dropped
+    assert not out.startswith("vs ")
+    # each surviving sentence appears exactly once
+    assert out.count("remains stable") == 1
+    assert out.count("shows rising input costs") == 1
+    # grounded content is preserved
+    assert "Unemployment Rate at 4.3%" in out
+
+
+def test_degenerate_repetition_sweeps_all_prose_fields():
+    dupe = "Materials led the session as risk appetite returned."
+    data = {"equities_commentary": f"{dupe} {dupe} {dupe}"}
+    assert gmc._scrub_degenerate_repetition(data) == 1
+    assert data["equities_commentary"] == dupe
+
+
+def test_degenerate_repetition_idempotent_and_clean_prose_untouched():
+    clean = ("The S&P 500 rose 0.5% to 7,431 as peace-deal hopes lifted risk appetite. "
+             "Materials led while Communication Services lagged.")
+    data = {"equities_commentary": clean}
+    assert gmc._scrub_degenerate_repetition(data) == 0
+    assert data["equities_commentary"] == clean
+
+
+def test_degenerate_repetition_preserves_legit_short_repeats():
+    # short identical fragments (<=20 chars normalized) are not treated as dupes
+    data = {"pre_market_bullets": ["Yields fell. Yields fell."]}
+    gmc._scrub_degenerate_repetition(data)
+    assert data["pre_market_bullets"][0] == "Yields fell. Yields fell."

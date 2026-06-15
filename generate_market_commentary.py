@@ -4605,6 +4605,43 @@ def _map_all_prose(data: dict, fn) -> int:
     return changed
 
 
+# --- degenerate-repetition guard (Fix: 2026-06-15 economics loop) ------------
+# Regression 2026-06-15 economics_commentary: the LLM ran away into a repetition
+# loop, emitting the same ~3-sentence block ~40 times and opening mid-clause with
+# "vs 0.5% prior indicates a robust economy." No value/narrative scrubber catches
+# this — they validate CONTENT, not runaway GENERATION. This collapses verbatim
+# duplicate sentences (keeping the first occurrence, in order) across every prose
+# field/list/rationale, and trims a leading mid-clause fragment (prose never opens
+# with a lowercase word). Idempotent and length-agnostic.
+_REPEAT_SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _scrub_degenerate_repetition(data: dict) -> int:
+    """Drop verbatim-duplicate sentences within any prose field; trim a leading
+    mid-clause fragment. Guards against LLM runaway-repetition (2026-06-15)."""
+    def _norm(s: str) -> str:
+        return re.sub(r"\s+", " ", s).strip().lower()
+
+    def _dedupe(text: str) -> str:
+        sents = _REPEAT_SENT_SPLIT_RE.split(text)
+        # prose never legitimately opens with a lowercase word — drop a leading
+        # mid-clause fragment (e.g. "vs 0.5% prior indicates ..."), multi-sentence only.
+        while len(sents) > 1 and sents[0][:1].islower():
+            sents = sents[1:]
+        seen: set[str] = set()
+        kept: list[str] = []
+        for s in sents:
+            key = _norm(s)
+            if len(key) > 20:
+                if key in seen:
+                    continue
+                seen.add(key)
+            kept.append(s)
+        return " ".join(kept).strip()
+
+    return _map_all_prose(data, _dedupe)
+
+
 # --- dollar direction + window correction (Fix: recap arrays bypass guards) -
 # _DIR_KW_MAP only matches "dollar index"/"dxy", so bare-"dollar" prose slipped the
 # direction-word corrector, and a multi-day WINDOW claim is invisible to a day-change
@@ -5308,6 +5345,7 @@ def sanitize_commentary(data: dict, snapshot: dict | None = None, source_text: s
         total += _correct_direction_words(data, snapshot)
         total += _correct_dollar_direction(data, snapshot)
         total += _scrub_false_weekly_claims(data, snapshot)
+    total += _scrub_degenerate_repetition(data)
     total += _correct_fed_hike_language(data)
     total += _scrub_fabricated_corporate_actions(data)
     total += _scrub_foreign_macro_lead(data)
