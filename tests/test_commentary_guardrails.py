@@ -1189,3 +1189,28 @@ def test_lowercase_brand_sentence_preserved():
             "Chip names led the tape. xAI's compute demand lifted NVDA. Tech closed green."}
     assert gmc._scrub_degenerate_repetition(data) == 0
     assert "xAI's compute demand lifted NVDA" in data["equities_commentary"]
+
+
+# --- 2026-06-15: scenario catalyst priority (FOMC must anchor over Retail Sales) ---
+def test_catalyst_priority_fomc_beats_retail_sales():
+    assert gmc._catalyst_priority("FOMC Meeting / Rate Decision") < gmc._catalyst_priority("Retail Sales")
+
+
+def test_catalyst_priority_decision_beats_minutes():
+    assert gmc._catalyst_priority("FOMC Meeting / Rate Decision") < gmc._catalyst_priority("Fed FOMC Minutes")
+
+
+def test_catalyst_priority_high_data_beats_nowcast():
+    # a high macro print outranks a medium nowcast (GDPNow) on tie-break
+    assert gmc._catalyst_priority("CPI Inflation Report") < gmc._catalyst_priority("Atlanta Fed GDPNow Estimate")
+    assert gmc._catalyst_priority("Retail Sales") < gmc._catalyst_priority("Atlanta Fed GDPNow Estimate")
+
+
+def test_catalyst_priority_same_date_sort_picks_fomc():
+    # mirrors the 6/17 collision: FOMC + Retail Sales same day -> FOMC selected
+    econ = [
+        {"date": "2026-06-17", "event": "Retail Sales", "importance": "high"},
+        {"date": "2026-06-17", "event": "FOMC Meeting / Rate Decision", "importance": "high"},
+    ]
+    pick = sorted(econ, key=lambda e: (e["date"], gmc._catalyst_priority(e["event"])))[0]
+    assert pick["event"] == "FOMC Meeting / Rate Decision"

@@ -327,6 +327,30 @@ def _event_day_from_dates(event_date: str, today_date: str) -> str:
     return ed.strftime("%A")   # e.g. "Thursday"
 
 
+def _catalyst_priority(event_name: str) -> int:
+    """Rank for scenario-event selection when events share the soonest date: the
+    bigger market mover wins (FOMC decision > CPI/Jobs > PPI/PCE > Retail Sales >
+    jobless claims > everything else). Lower = higher priority.
+
+    2026-06-15: the Warsh FOMC decision and Retail Sales both fell on 6/17; the
+    rate decision must anchor the scenarios, not the retail print.
+    """
+    n = (event_name or "").lower()
+    if "fomc" in n and "minutes" in n:
+        return 1                                   # minutes rank below the decision
+    if "fomc" in n or "rate decision" in n:
+        return 0
+    if "cpi" in n or "non-farm" in n or "payroll" in n or "jobs report" in n:
+        return 1
+    if "ppi" in n or "pce" in n or "personal income" in n:
+        return 2
+    if "retail sales" in n:
+        return 3
+    if "jobless claims" in n:
+        return 4
+    return 6
+
+
 def _prev_level(prev_data: dict | None, name: str) -> float | None:
     """Extract the stored previous level for a named instrument, or None."""
     if not prev_data:
@@ -1742,8 +1766,12 @@ def fetch_economic_calendar() -> list[dict]:
         # Announcement dates (last day of each 2026 FOMC meeting).
         # Source: Federal Reserve published schedule.
         # Update annually when the Fed releases the following year's dates (usually November).
+        # 2026-06-15: June corrected 06-10 -> 06-17 (the Warsh-led meeting concludes Wed 6/17);
+        # the stale 6/10 sat in the past by mid-week so the decision never entered the forward
+        # calendar and the scenario engine missed it. NOTE: fomcCalendars.json 404s — this
+        # hardcoded list is the sole source until the Fed JSON endpoint is fixed.
         _fomc_dates = [
-            "2026-01-28", "2026-03-18", "2026-04-29", "2026-06-10",
+            "2026-01-28", "2026-03-18", "2026-04-29", "2026-06-17",
             "2026-07-29", "2026-09-16", "2026-10-28", "2026-12-09",
         ]
 
@@ -3172,10 +3200,11 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
     # ── Call 5: Scenario framework (the soonest high-importance catalyst) ──
     part5: dict = {}
     _today_date = (payload.get("date") or datetime.today().strftime("%Y-%m-%d"))[:10]
-    _today_events = [
-        e for e in econ
-        if str(e.get("date", ""))[:10] == _today_date and e.get("importance") == "high"
-    ]
+    _today_events = sorted(
+        (e for e in econ
+         if str(e.get("date", ""))[:10] == _today_date and e.get("importance") == "high"),
+        key=lambda e: _catalyst_priority(e.get("event", "")),
+    )
     # Pick the scenario's primary event. Prefer a high-importance event TODAY; otherwise
     # fall back to the soonest UPCOMING high-importance event (else the soonest event).
     # Crucially we no longer mislabel a future event as "today": we compute the event's
@@ -3184,7 +3213,12 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
     if _today_events:
         _primary_event, _event_day_label = _today_events[0], "today"
     else:
-        _future = [e for e in econ if str(e.get("date", ""))[:10] > _today_date]
+        # Sort by (date, catalyst priority) so the soonest date wins, and within the
+        # soonest date the bigger market mover wins (FOMC > Retail Sales on 6/17).
+        _future = sorted(
+            (e for e in econ if str(e.get("date", ""))[:10] > _today_date),
+            key=lambda e: (str(e.get("date", ""))[:10], _catalyst_priority(e.get("event", ""))),
+        )
         _hi_future = [e for e in _future if e.get("importance") == "high"]
         _primary_event = (_hi_future or _future or econ or [None])[0]
         _event_day_label = _event_day_from_dates(

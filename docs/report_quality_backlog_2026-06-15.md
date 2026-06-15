@@ -28,16 +28,23 @@ Weekly grade: EPM ~C / C−; Sevens ~A−.
 
 ## TODO (deferred — gated behind PR H / D2 HOLD; do after a confirmed clean run)
 
-### 1. Catalyst anchoring + selection  (HIGH — recurring)
-- **Bug A — wrong day-of-week.** CPI was Wed 6/10, but EPM's Take/Synthesis called it
-  "Friday's CPI" (6/8) and "Thursday's CPI" (6/9). Derive the catalyst's weekday from
-  the economic calendar, not the LLM. Extend the existing DATE GUARD / `_correct_event_day_slip`.
-- **Bug B — wrong catalyst picked.** 6/15 scenario "Primary event" = Atlanta Fed GDPNow
-  (a nowcast) while the week had Retail Sales (high) and the **first Warsh-led FOMC**.
-  Rule: scenario primary_event = highest-importance dated calendar item (FOMC/CPI/PPI/
-  Retail Sales rank above nowcasts).
-- **Bug C — holiday blindness.** Never flagged Juneteenth (markets closed Fri 6/19),
-  even while citing a "June 19" signing. Add holiday-closure awareness to the calendar feed.
+### 1. Catalyst anchoring + selection  (HIGH — recurring) — PARTIALLY DONE
+- ✅ **Bug B root cause + fix.** The 6/15 GDPNow miss was NOT a selection-logic bug
+  (logic already prefers high-importance future events, date-sorted). Root cause: the
+  **June FOMC date was wrong** in the hardcoded fallback (`06-10` vs the real Warsh
+  meeting `06-17`), and `fomcCalendars.json` 404s — so the 6/17 decision never entered
+  the forward calendar. Fixed the date + added `_catalyst_priority` so a same-date FOMC
+  outranks Retail Sales. Verified live: scenario now selects "FOMC Meeting / Rate
+  Decision | 2026-06-17 | Wednesday". Tests added.
+- ⏳ **Bug A — synthesis-prose weekday.** Scenario TITLE day is now correct
+  (`_event_day_from_dates`), but the Take/Synthesis PROSE can still mislabel a catalyst's
+  weekday ("Friday's CPI" 6/8). There's a retry validator (`_check_event_dating`); a
+  deterministic weekday corrector keyed to the calendar would close it. Not done.
+- ⏳ **Bug C — Juneteenth/holiday blindness.** Still no market-holiday awareness in the
+  calendar. Not done.
+- ⏳ **Residual:** `fomcCalendars.json` 404 — find the correct Fed JSON endpoint so the
+  hardcoded list isn't the sole source; also a stray `2026-07-13` "FOMC press release"
+  entry appears from FRED — verify it's real.
 
 ### 2. Model vs. narrative reconciliation  (HIGH)
 - On 6/12 and 6/15 the MAG7 quant signal was max-defensive (6 bearish/1 bullish) while
