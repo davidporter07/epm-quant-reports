@@ -1169,3 +1169,23 @@ def test_degenerate_repetition_preserves_legit_short_repeats():
     data = {"pre_market_bullets": ["Yields fell. Yields fell."]}
     gmc._scrub_degenerate_repetition(data)
     assert data["pre_market_bullets"][0] == "Yields fell. Yields fell."
+
+
+def test_interior_connector_fragment_dropped():
+    # a mid-paragraph sentence opening with a lowercase connector ("vs ...") is a
+    # loop/truncation artifact and must be removed even when it is not the lead.
+    data = {"economics_commentary":
+            "The economy looks solid. vs 0.5% prior indicates a robust economy. Claims rose to 229k."}
+    assert gmc._scrub_degenerate_repetition(data) == 1
+    out = data["economics_commentary"]
+    assert "vs 0.5%" not in out
+    assert out.startswith("The economy looks solid")
+    assert "Claims rose to 229k" in out
+
+
+def test_lowercase_brand_sentence_preserved():
+    # legit sentences that open with a lowercase brand (xAI) are NOT fragments
+    data = {"equities_commentary":
+            "Chip names led the tape. xAI's compute demand lifted NVDA. Tech closed green."}
+    assert gmc._scrub_degenerate_repetition(data) == 0
+    assert "xAI's compute demand lifted NVDA" in data["equities_commentary"]

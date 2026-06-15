@@ -4611,26 +4611,40 @@ def _map_all_prose(data: dict, fn) -> int:
 # "vs 0.5% prior indicates a robust economy." No value/narrative scrubber catches
 # this — they validate CONTENT, not runaway GENERATION. This collapses verbatim
 # duplicate sentences (keeping the first occurrence, in order) across every prose
-# field/list/rationale, and trims a leading mid-clause fragment (prose never opens
-# with a lowercase word). Idempotent and length-agnostic.
+# field/list/rationale, and trims mid-clause fragments (prose never opens with a
+# lowercase word). Idempotent and length-agnostic.
 _REPEAT_SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+# Lowercase words that, when they OPEN a "sentence", mark it as a mid-clause fragment
+# (a truncation/loop artifact) rather than real prose. Brand names that legitimately
+# start lowercase (xAI, iPhone, iShares, eBay) are NOT in this set, so they survive.
+_FRAGMENT_OPENERS = frozenset({
+    "vs", "versus", "and", "but", "or", "nor", "as", "while", "whereas", "which",
+    "than", "because", "so", "yet", "plus", "with", "of", "to", "in", "on", "at",
+    "for", "from", "by", "into", "onto",
+})
 
 
 def _scrub_degenerate_repetition(data: dict) -> int:
-    """Drop verbatim-duplicate sentences within any prose field; trim a leading
-    mid-clause fragment. Guards against LLM runaway-repetition (2026-06-15)."""
+    """Drop verbatim-duplicate sentences within any prose field and strip mid-clause
+    fragments. Guards against LLM runaway-repetition (2026-06-15)."""
     def _norm(s: str) -> str:
         return re.sub(r"\s+", " ", s).strip().lower()
 
     def _dedupe(text: str) -> str:
-        sents = _REPEAT_SENT_SPLIT_RE.split(text)
-        # prose never legitimately opens with a lowercase word — drop a leading
-        # mid-clause fragment (e.g. "vs 0.5% prior indicates ..."), multi-sentence only.
-        while len(sents) > 1 and sents[0][:1].islower():
-            sents = sents[1:]
         seen: set[str] = set()
         kept: list[str] = []
-        for s in sents:
+        leading = True  # in the run of leading sentences (front-truncation territory)
+        for raw in _REPEAT_SENT_SPLIT_RE.split(text):
+            s = raw.strip()
+            if not s:
+                continue
+            first = s.split(None, 1)[0].strip(",.;:").lower()
+            is_lower_open = s[:1].islower()
+            # Drop: any lowercase-opener in the leading run (front-truncation), and
+            # any interior lowercase-opener whose first word is a connector ("vs ...").
+            if is_lower_open and (leading or first in _FRAGMENT_OPENERS):
+                continue
+            leading = False
             key = _norm(s)
             if len(key) > 20:
                 if key in seen:

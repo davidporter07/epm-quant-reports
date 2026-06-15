@@ -215,7 +215,10 @@ _FRED_ECON_SERIES: dict[str, tuple[str, dict]] = {
     "GDP_Growth":        ("A191RL1Q225SBEA",  {}),
     "Initial_Claims":    ("ICSA",             {}),
     "Consumer_Sentiment":("UMCSENT",          {}),
-    "PPI_YoY":           ("PPIACO",           {"units": "pc1"}),
+    # PPI headline = Final Demand (NSA), the series markets quote. PPIACO (All
+    # Commodities) is energy-dominated and ran ~13% in the 2026 oil spike vs the
+    # ~6.5% Final-Demand headline — the 2026-06-15 report cited the wrong 13.1%.
+    "PPI_YoY":           ("PPIFID",            {"units": "pc1"}),
     "Retail_Sales_MoM":  ("RSXFS",            {"units": "pch"}),
     "Nonfarm_Payrolls":  ("PAYEMS",           {"units": "chg"}),
     "JOLTS":             ("JTSJOL",           {}),   # job openings, level in thousands

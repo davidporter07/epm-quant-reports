@@ -9,13 +9,20 @@ Weekly grade: EPM ~C / C−; Sevens ~A−.
 
 ---
 
-## DONE (hotfix, 2026-06-15)
+## DONE (2026-06-15)
 
 - **Degenerate-repetition guard.** `_scrub_degenerate_repetition()` in
   `generate_market_commentary.py`, wired into `sanitize_commentary()`. Collapses
-  verbatim-duplicate sentences across all prose fields and trims a leading mid-clause
-  fragment. Fixes the 6/15 `economics_commentary` loop (same 3-sentence block ×40,
-  opened with dangling "vs 0.5% prior…"). Tests in `tests/test_commentary_guardrails.py`.
+  verbatim-duplicate sentences across all prose fields, trims a leading mid-clause
+  fragment, AND drops interior sentences that open with a lowercase connector
+  (`vs`/`and`/`but`/…) — fully removing the dangling "vs 0.5% prior…" residue while
+  preserving legit lowercase-brand sentences (xAI, iPhone). Fixes the 6/15
+  `economics_commentary` loop (same 3-sentence block ×40). Commit `fc2e1fa` +
+  follow-up. Tests in `tests/test_commentary_guardrails.py`.
+- **PPI series correction (item 5a).** `data_arbiter._FRED_ECON_SERIES`: `PPI_YoY`
+  switched `PPIACO` (All Commodities, energy-dominated → 13.08% in the oil spike) →
+  `PPIFID` (Final Demand, NSA → 6.46%, the headline markets quote; matches Sevens 6.5%).
+  Verified live against FRED. This is the source the report used on 6/15.
 
 ---
 
@@ -54,12 +61,15 @@ Weekly grade: EPM ~C / C−; Sevens ~A−.
   or caveat. **Keep concrete facts** (e.g., "Ark bought >$500M in SpaceX" — good, retain).
 - De-template the takeaway so five straight days don't read identically.
 
-### 5. Economics data accuracy  (MEDIUM — surfaced by the hotfix)
-- 6/15 printed PPI "13.1% YoY vs 9.4% prior"; the real May print was ~6.5% y/y. Verify
-  the PPI series mapping in `data_arbiter` / `_MACRO_PRINT_SPEC` vs. the headline PPI.
-- The hotfix collapses the loop but a single dangling "vs 0.5% prior…" sentence can
-  still survive mid-paragraph. Optional: trim any mid-paragraph sentence opening with a
-  bare connector ("vs"/"and"/"but") — implement carefully to avoid over-trimming.
+### 5. Economics data accuracy  (PARTIALLY DONE — see DONE section)
+- ✅ FRED PPI series corrected (PPIACO → PPIFID); ✅ dangling-fragment trim shipped.
+- ⏳ **YCharts-side PPI (residual).** When the YCharts scrape populates econ,
+  `run_arbitration` uses YCharts ONLY (FRED isn't fetched). Verify the YCharts metric
+  `us_producer_price_index_yoy` (scrape_ycharts.py) is Final Demand, not All Commodities,
+  so the corrected headline holds regardless of which source wins. Needs a live scrape to
+  check; the 6/15 value came from FRED (yc_econ was not populated that day).
+- ⏳ Minor: `_arbitrate_economics` labels every entry `source: "ycharts"` even when the
+  value came from FRED — cosmetic mislabel, fix when convenient.
 
 ---
 
