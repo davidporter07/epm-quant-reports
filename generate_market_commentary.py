@@ -2068,7 +2068,7 @@ commodities_commentary: 5-6 sentences. WTI direction and level first, then gold.
 
 currencies_commentary: 4-5 sentences. DXY direction and level. Rate differential or trade-flow driver. EUR/USD and JPY if notable. EM implication.
 
-economics_commentary: 4-5 sentences. RECAP LATEST READINGS FIRST: recent_macro_prints is a list of {indicator, actual, prior, as_of} carrying the ACTUAL figures — open by recapping the 1-2 most important entries (prioritise Core PCE, GDP, jobless claims, CPI, payrolls), citing indicator + actual + prior and interpreting the beat/miss vs prior. A fresh JOLTS Job Openings print (a labor-demand gauge) is market-relevant — feature it when present. PHRASING: weekly jobless claims may be called "the latest weekly jobless claims (215k vs 210k prior)"; monthly/quarterly series MUST be referred to as "the latest [indicator] reading" (e.g. "the latest Core PCE reading at 3.3% YoY vs 3.2% prior") — do NOT assert a specific release weekday for them, because the payload gives the observation period, not the publication date. NUMBER SOURCE (non-negotiable): cite macro figures ONLY from recent_macro_prints — NEVER invent or round a number outside that list (the prior report fabricated "211k in line with 211k prior"; the real value was 215k vs 210k). If recent_macro_prints is empty, cite no specific macro figure. Never frame a past reading as an upcoming release. After the recap, give macro-cycle context (soft landing, slowdown, re-acceleration) and the Fed rate-trajectory implication. Do NOT reproduce the example numbers above as literal output.
+economics_commentary: 4-5 sentences. RECAP LATEST READINGS FIRST: recent_macro_prints is a list of {indicator, actual, prior, as_of} carrying the ACTUAL figures — open by recapping the 1-2 most important entries (prioritise Core PCE, GDP, jobless claims, CPI, payrolls), citing indicator + actual + prior and interpreting the beat/miss vs prior. PREVIEW→RECAP LINKAGE: if prior_scenario_event names the catalyst the prior session flagged (e.g. "CPI Inflation Report") and a matching entry now appears in recent_macro_prints, LEAD with that release — the reader was told to watch it, so do not skip it; cite its actual vs prior and the market's read. A fresh JOLTS Job Openings print (a labor-demand gauge) is market-relevant — feature it when present. PHRASING: weekly jobless claims may be called "the latest weekly jobless claims (215k vs 210k prior)"; monthly/quarterly series MUST be referred to as "the latest [indicator] reading" (e.g. "the latest Core PCE reading at 3.3% YoY vs 3.2% prior") — do NOT assert a specific release weekday for them, because the payload gives the observation period, not the publication date. NUMBER SOURCE (non-negotiable): cite macro figures ONLY from recent_macro_prints — NEVER invent or round a number outside that list (the prior report fabricated "211k in line with 211k prior"; the real value was 215k vs 210k). If recent_macro_prints is empty, cite no specific macro figure. Never frame a past reading as an upcoming release. After the recap, give macro-cycle context (soft landing, slowdown, re-acceleration) and the Fed rate-trajectory implication. Do NOT reproduce the example numbers above as literal output.
   DATE GUARD (critical): If todays_economic_events is EMPTY there is NO release scheduled today — do NOT write that any report is "scheduled today", "due this morning", or "at 8:30 AM ET today", and do NOT invent a release that is not in todays_economic_events or week_ahead_econ_events. Refer to any upcoming release by its WEEKDAY (e.g., "Thursday's GDP report"), and anchor the paragraph in the macro cycle rather than a fictitious same-day calendar.
   RELEVANCE GUARD (critical): The recap MUST center on the most market-relevant U.S. macro releases in recent_macro_prints. Do NOT lead with, or feature, a minor or foreign data point (e.g., a foreign government's quarterly spending, an overseas survey) — if it is not in recent_macro_prints it does not belong in the recap at all. Do NOT open economics_commentary with an event that is still UPCOMING today (e.g., a JOLTS or ADP print due later today) framed as if it already printed; upcoming releases belong in watch_today as forward catalysts, not in the recap.
 
@@ -2105,7 +2105,7 @@ Return JSON with EXACTLY these 7 keys:
 
 market_outlook_label: Exactly one of: "Bullish", "Cautious", "Neutral", "Bearish"  near-term 4-6 week equity view.
 
-market_outlook_rationale: Exactly 2 sentences. If prior_day_label is provided and market_outlook_label differs from it, Sentence 1 MUST explain what changed and why the view shifted since yesterday; otherwise Sentence 1 is the primary supporting factor. Sentence 2: key risk that could change the label.
+market_outlook_rationale: Exactly 2 sentences. If prior_day_label is provided and market_outlook_label differs from it, Sentence 1 MUST explain what changed and why the view shifted since the prior session — and if the label reverses prior_day_label by two or more notches (ordering: Bearish < Cautious < Neutral < Bullish), Sentence 1 must explicitly justify the SHARP reversal, not merely restate the new view. If mag7_consensus_forecasts carries a net signal that conflicts with market_outlook_label (e.g., a net-negative/defensive MAG7 consensus under a Bullish label), name and reconcile that tension in one clause rather than ignoring it. Otherwise Sentence 1 is the primary supporting factor. Sentence 2: key risk that could change the label.
 
 tactical_outperforming: Short phrase (3-5 words) — sectors/themes outperforming. Ground in sector_top3 from the payload (e.g., "Technology, Financials, semis").
 
@@ -2124,6 +2124,41 @@ portfolio_spotlight_watch: MUST contain exactly one entry for EACH ticker listed
 
 JSON template:
 {"market_outlook_label":"...","market_outlook_rationale":"...","tactical_outperforming":"...","tactical_underperforming":"...","asset_class_outlooks":{"Equities":{"label":"...","rationale":"..."},"Fixed Income":{"label":"...","rationale":"..."},"Commodities":{"label":"...","rationale":"..."},"US Dollar":{"label":"...","rationale":"..."}},"portfolio_spotlight_winners":[{"ticker":"...","metric_label":"...","commentary":"..."}],"portfolio_spotlight_watch":[{"ticker":"...","metric_label":"...","commentary":"..."}]}"""
+
+# --- stance-stability guard (spec #2): a sharp near-term reversal must be explained ---
+# 2026-06-15 weekly frame: the near-term stance ran BEARISH (6/8, at the low) -> BULLISH
+# (6/15, at the high) — a full reversal that chased the tape. The prompt asks the model to
+# explain a changed label; this ENFORCES it for sharp (>=2-notch) reversals by forcing a
+# retry when the rationale never acknowledges the shift.
+_STANCE_ORDER = {"bearish": 0, "cautious": 1, "neutral": 2, "bullish": 3}
+# Tokens that count as acknowledging a shift in the rationale prose.
+_STANCE_SHIFT_RE = re.compile(
+    r"\b(shift\w*|revers\w*|chang\w*|flip\w*|pivot\w*|turn\w*|swung|swing|"
+    r"previously|prior|from\s+(?:bearish|cautious|neutral|bullish)|"
+    r"upgrad\w*|downgrad\w*|no\s+longer)\b",
+    re.IGNORECASE)
+
+
+def _stance_notch_distance(prev_label, cur_label) -> int:
+    """Absolute notch distance between two near-term stance labels (0 if either is unknown)."""
+    p = _STANCE_ORDER.get(str(prev_label or "").strip().lower())
+    c = _STANCE_ORDER.get(str(cur_label or "").strip().lower())
+    if p is None or c is None:
+        return 0
+    return abs(c - p)
+
+
+def _check_stance_reversal_unexplained(data: dict, prior_label) -> str:
+    """Return a violation string if the stance reverses prior_label by >=2 notches and the
+    rationale never acknowledges the shift; '' otherwise. Drives a Call-2 retry."""
+    cur = data.get("market_outlook_label")
+    if _stance_notch_distance(prior_label, cur) < 2:
+        return ""
+    rationale = str(data.get("market_outlook_rationale") or "")
+    if _STANCE_SHIFT_RE.search(rationale):
+        return ""
+    return f"{prior_label}->{cur} reversal unexplained in rationale"
+
 
 # Call 3: Session recap, watch-today, international section
 SYSTEM_PROMPT_RECAP = WRITING_RULES + """
@@ -2879,6 +2914,7 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
         "recent_headlines":         flat_headlines,   # flat list kept as fallback
         "recent_earnings_actuals":  payload.get("recent_earnings_actuals") or [],
         "recent_macro_prints":      payload.get("recent_macro_prints") or [],
+        "prior_scenario_event":     payload.get("prior_scenario_event"),
         # items #2–#6
         "sector_top3":              _sector_top3,
         "sector_bottom3":           _sector_bottom3,
@@ -3063,8 +3099,9 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
             direction = _check_direction_words(part2, snapshot)
             corp_actions = _check_fabricated_corporate_actions(part2)
             editorial = _check_editorial_contradictions(part2, snapshot)
+            stance_rev = _check_stance_reversal_unexplained(part2, outlook_payload.get("prior_day_label"))
             if (not banned and not leaks and not echo and not move_sig and not superlatives
-                    and not direction and not corp_actions and not editorial):
+                    and not direction and not corp_actions and not editorial and not stance_rev):
                 break
             if banned:
                 print(f"  [RETRY] Attempt {attempt + 1} still contained banned phrases after scrub: {banned}. Retrying...")
@@ -3082,6 +3119,8 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
                 print(f"  [RETRY] Attempt {attempt + 1} made fabricated corporate-action claims: {corp_actions}. Retrying...")
             if editorial:
                 print(f"  [RETRY] Attempt {attempt + 1} had editorial contradictions vs snapshot: {editorial}. Retrying...")
+            if stance_rev:
+                print(f"  [RETRY] Attempt {attempt + 1} sharp stance reversal unexplained: {stance_rev}. Retrying...")
         except Exception as exc:
             print(f"  [WARN] Outlook call failed (attempt {attempt + 1}): {exc}")
             part2 = {}
@@ -6535,6 +6574,8 @@ def main() -> int:
         # item #8: prior-day continuity for outlook call
         "prior_day_label":           _prev.get("market_outlook_label"),
         "prior_day_synthesis":       _prev.get("cross_asset_synthesis"),
+        # spec #3: the catalyst the prior session teased — recap its release if it printed
+        "prior_scenario_event":      _prev.get("scenario_event"),
     }
 
     # Write market data first so snapshot/tables are always fresh.

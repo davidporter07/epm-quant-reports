@@ -1233,3 +1233,31 @@ def test_spotlight_softens_generic_should_buy():
 def test_spotlight_scrub_leaves_optioned_text_alone():
     txt = "One way to express this is via SMH; the thesis breaks if hyperscaler capex falls."
     assert gmc._scrub_spotlight_text(txt) == txt
+
+
+# --- spec #2: stance-stability (a sharp reversal must be explained) ------------
+def test_stance_notch_distance_bearish_to_bullish_is_three():
+    assert gmc._stance_notch_distance("Bearish", "Bullish") == 3
+    assert gmc._stance_notch_distance("Cautious", "Bullish") == 2
+    assert gmc._stance_notch_distance("Neutral", "Bullish") == 1
+    assert gmc._stance_notch_distance("Bullish", "Bullish") == 0
+    assert gmc._stance_notch_distance(None, "Bullish") == 0   # no prior -> no distance
+
+
+def test_sharp_reversal_unexplained_is_flagged():
+    data = {"market_outlook_label": "Bullish",
+            "market_outlook_rationale": "Equities advance as the peace deal lifts risk appetite. Fed policy is the risk."}
+    assert gmc._check_stance_reversal_unexplained(data, "Bearish")
+
+
+def test_sharp_reversal_acknowledged_passes():
+    data = {"market_outlook_label": "Bullish",
+            "market_outlook_rationale": "The view flips from bearish as the peace deal removes the Hormuz risk. Fed policy is the risk."}
+    assert gmc._check_stance_reversal_unexplained(data, "Bearish") == ""
+
+
+def test_small_stance_move_not_flagged():
+    data = {"market_outlook_label": "Neutral",
+            "market_outlook_rationale": "Balanced macro keeps the tape range-bound. A hot print is the risk."}
+    # Cautious -> Neutral is one notch; no explanation required
+    assert gmc._check_stance_reversal_unexplained(data, "Cautious") == ""

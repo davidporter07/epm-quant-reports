@@ -46,19 +46,24 @@ Weekly grade: EPM ~C / C−; Sevens ~A−.
   hardcoded list isn't the sole source; also a stray `2026-07-13` "FOMC press release"
   entry appears from FRED — verify it's real.
 
-### 2. Model vs. narrative reconciliation  (HIGH)
-- On 6/12 and 6/15 the MAG7 quant signal was max-defensive (6 bearish/1 bullish) while
-  the headline stance/Tactical Read was RISK-ON / BULLISH — shipped unreconciled.
-- When MAG7/Tactical disagree with the headline stance, force one synthesized sentence
-  that names and resolves the tension instead of printing both verbatim.
-- **Stance-stability guard:** EPM ran BEARISH (6/8, at the low) → BULLISH (6/15, at the
-  high). Flag/justify any ≥2-notch near-term-stance reversal within N sessions.
+### 2. Model vs. narrative reconciliation  — DONE (deterministic guard tested; prompt at next run)
+- ✅ **Stance-stability guard.** `_stance_notch_distance` + `_check_stance_reversal_unexplained`
+  wired into the Call-2 retry loop: a ≥2-notch near-term reversal vs `prior_day_label`
+  (Bearish<Cautious<Neutral<Bullish) that the rationale never acknowledges forces a retry.
+  Catches the 6/8 BEARISH→6/15 BULLISH whipsaw class. Tests added.
+- ✅ **MAG7 reconciliation (prompt).** `SYSTEM_PROMPT_OUTLOOK` now instructs: when
+  `mag7_consensus_forecasts` conflicts with `market_outlook_label` (defensive MAG7 under a
+  Bullish label), name and reconcile the tension. Effect confirmed at next live run.
 
-### 3. Next-day catalyst recap  (MEDIUM)
-- The report previewed CPI/PPI all week but never analyzed the actual prints the next
-  morning (6/11 shipped the broken stub "The S&P 500's 1.62% decline is.").
-- After a scenario event is previewed, the following report MUST recap the released
-  figure (2–3 grounded sentences) — feed actuals via `load_recent_macro_prints()`.
+### 3. Next-day catalyst recap  — DONE (prompt; confirm at next run)
+- ✅ Threaded `prior_scenario_event` (the catalyst the prior session teased) from the
+  saved commentary into the Call-1 narrative payload, and added a PREVIEW→RECAP LINKAGE
+  rule to `economics_commentary`: if the previewed catalyst now appears in
+  `recent_macro_prints`, LEAD the recap with its actual vs prior + the market's read.
+- The general recap instruction (CPI/PCE/GDP/claims/payrolls from `recent_macro_prints`)
+  already existed; this closes the specific preview→recap gap. Effect confirmed at next run.
+- NOTE: the 6/11 broken stub ("…decline is.") was a generation truncation, not a recap
+  gap — not addressed here; a truncated-final-sentence guard is a possible follow-up.
 
 ### 4. Prescriptive-tone rewrite → optioned / non-advice  — DONE (verify at next live run)
 - ✅ Daily takeaway de-imperatived: "Lean into X; trim Y" → "Relative 1M momentum —
