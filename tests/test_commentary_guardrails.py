@@ -1214,3 +1214,22 @@ def test_catalyst_priority_same_date_sort_picks_fomc():
     ]
     pick = sorted(econ, key=lambda e: (e["date"], gmc._catalyst_priority(e["event"])))[0]
     assert pick["event"] == "FOMC Meeting / Rate Decision"
+
+
+# --- spec #4: prescriptive -> non-advice optioned framing (spotlight) ----------
+def test_spotlight_softens_prescriptive_directive():
+    txt = "Investors should express this view by leaning into ARKK, which captures innovation."
+    out = gmc._scrub_spotlight_text(txt)
+    assert "should express this view by leaning into" not in out
+    assert "One way to express this view is via ARKK" in out
+
+
+def test_spotlight_softens_generic_should_buy():
+    out = gmc._scrub_spotlight_text("Investors should buy SPY here.")
+    assert "should buy" not in out
+    assert out.startswith("One way to express this is via SPY")
+
+
+def test_spotlight_scrub_leaves_optioned_text_alone():
+    txt = "One way to express this is via SMH; the thesis breaks if hyperscaler capex falls."
+    assert gmc._scrub_spotlight_text(txt) == txt

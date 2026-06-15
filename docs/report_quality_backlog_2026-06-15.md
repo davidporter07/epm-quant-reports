@@ -60,13 +60,18 @@ Weekly grade: EPM ~C / C−; Sevens ~A−.
 - After a scenario event is previewed, the following report MUST recap the released
   figure (2–3 grounded sentences) — feed actuals via `load_recent_macro_prints()`.
 
-### 4. Prescriptive-tone rewrite → optioned / non-advice  (MEDIUM)  [scope: spotlight + daily tactical takeaway]
-- Spotlight says "Investors should express this view by leaning into ARKK" — reads as
-  *buy this*, single vehicle, no alternative. Daily takeaway "Lean into X; trim Y" has
-  the same directive tone and barely changes day to day (XNTK/IXJ/FLQM all week).
-- Rewrite both to: "One way to express this is…", **≥2 vehicles**, and a counter-option
-  or caveat. **Keep concrete facts** (e.g., "Ark bought >$500M in SpaceX" — good, retain).
-- De-template the takeaway so five straight days don't read identically.
+### 4. Prescriptive-tone rewrite → optioned / non-advice  — DONE (verify at next live run)
+- ✅ Daily takeaway de-imperatived: "Lean into X; trim Y" → "Relative 1M momentum —
+  leaders X; laggards Y" (descriptive model read, not a buy/sell directive).
+- ✅ Spotlight prompt reframed: Paragraph 4 is now "HOW TO EXPRESS IT (options, not
+  advice)" requiring ≥2 verified_funds, a counter/caveat, and banning imperatives;
+  added a NON-ADVICE FRAMING rule.
+- ✅ Deterministic belt-and-suspenders: `_scrub_spotlight_text` now softens the exact
+  observed imperatives ("Investors should express this view by leaning into …" →
+  "One way to express this view is via …"). Tests added.
+- NOTE: the prompt-side effect (richer optioned prose, ≥2 vehicles) only manifests in a
+  live LLM run — confirm on the next generation. The deterministic softener + takeaway
+  changes are active immediately.
 
 ### 5. Economics data accuracy  (PARTIALLY DONE — see DONE section)
 - ✅ FRED PPI series corrected (PPIACO → PPIFID); ✅ dangling-fragment trim shipped.

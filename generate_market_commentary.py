@@ -1046,12 +1046,14 @@ def build_tactical_positioning(
                 print(f"[WARN] Tactical fund ranking failed: {_exc}")
 
         # ── 3. Takeaway sentence ─────────────────────────────────────────────
+        # Descriptive relative-momentum read, not a buy/sell directive (2026-06-15:
+        # "Lean into X; trim Y" reads as advice; these are model-ranked 1M leaders/laggards).
         bits: list[str] = []
         if top_funds:
-            bits.append("Lean into " + ", ".join(f["ticker"] for f in top_funds[:3]))
+            bits.append("leaders " + ", ".join(f["ticker"] for f in top_funds[:3]))
         if bot_funds:
-            bits.append("trim " + ", ".join(f["ticker"] for f in bot_funds))
-        takeaway = "; ".join(bits) + "." if bits else ""
+            bits.append("laggards " + ", ".join(f["ticker"] for f in bot_funds))
+        takeaway = ("Relative 1M momentum — " + "; ".join(bits) + ".") if bits else ""
         return {
             "stance":         stance,
             "stance_detail":  stance_detail,
@@ -2254,7 +2256,7 @@ SYSTEM_PROMPT_MOVER_SCAN = (
 )
 
 SYSTEM_PROMPT_TOPIC_SPOTLIGHT = """
-You are a senior markets analyst writing the FLAGSHIP deep-dive for an institutional daily report — the kind of piece that explains a theme so well a portfolio manager forwards it. The topic is today's confirmed dominant financial theme. Write with the depth and authority of a top sell-side strategist note: explain the MECHANISM, judge whether it is SUSTAINABLE, and tell the reader what to DO.
+You are a senior markets analyst writing the FLAGSHIP deep-dive for an institutional daily report — the kind of piece that explains a theme so well a portfolio manager forwards it. The topic is today's confirmed dominant financial theme. Write with the depth and authority of a top sell-side strategist note: explain the MECHANISM, judge whether it is SUSTAINABLE, and lay out how the view could be expressed — as OPTIONS, not advice.
 
 Ground EVERY factual claim in the provided source_excerpts, supporting_headlines, and market_context (sector tilt + tactical positioning the report's data tables already publish). Do NOT invent figures, company actions, valuations, or timelines that are not in those inputs. When market_context.is_data_driven_theme is true, the theme itself was selected from the day's market data — write a sector/macro deep-dive grounded in that data and the verified_funds; the mechanism paragraph should explain WHY this sector or theme moved (cite the sector pct_change from market_context, factor read, and any corroborating headlines).
 
@@ -2267,7 +2269,7 @@ body: A genuine analytical deep-dive of 4-6 paragraphs as a SINGLE string, with 
   Paragraph 1 — WHAT & WHY IT MATTERS: the development and the specific numbers behind it (from source_excerpts). Establish the stakes.
   Paragraph 2 — THE MECHANISM: explain WHY this is happening — the underlying driver, the chain of cause and effect. Teach the reader the thing they did not already know. This is the paragraph that separates a deep-dive from a blurb.
   Paragraph 3 — IS IT SUSTAINABLE / VALUATION & DATA CONTEXT: the analytical judgment. Supply/demand, earnings, valuation, positioning, the bear case vs the bull case — grounded in the excerpts. Take a side.
-  Paragraph 4 — WHAT TO DO NOW: concrete positioning. Which exposures benefit or face headwinds, how an investor would express the view using the verified_funds, and the SPECIFIC near-term catalyst or price level that confirms or breaks the thesis.
+  Paragraph 4 — HOW TO EXPRESS IT (options, not advice): which exposures benefit or face headwinds, and how the view COULD be expressed using the verified_funds — framed as options, never as instructions. Name at LEAST TWO verified_funds (when two are available) as alternative ways to gain or reduce exposure, include the bear-case/counter consideration, and close with the SPECIFIC near-term catalyst or price level that confirms or breaks the thesis. Use "one way to express this is…", "X offers exposure to…", "for those reducing exposure, Y…" — NOT "investors should buy", "lean into", or "trim".
 funds: Array of fund objects using ONLY tickers from the verified_funds input. If verified_funds is empty, set funds=[].
   Each object has exactly: ticker, name, type, exposure_note (one sentence on how it relates to the theme; no fabricated %/AUM).
 category: carry through the category from the input.
@@ -2276,6 +2278,7 @@ Rules:
 - GROUNDED: cite specifics only from source_excerpts/supporting_headlines. No invented numbers. Cite ONLY verified_funds tickers — never invent a ticker.
 - TEACH, then CONCLUDE: the mechanism paragraph must explain a cause-and-effect a smart non-expert would not already know. Commit to a view — forbidden hedges: "investors should watch", "uncertainty remains", "markets face headwinds", "time will tell", "remains to be seen".
 - Active voice, present tense. No preamble, no summary sentence, no "in conclusion". Start the body with the development itself.
+- NON-ADVICE FRAMING: never instruct the reader to buy/sell/"lean into"/"trim"/"should express this view by leaning into". Present vehicles as OPTIONS with a counter/caveat. Cite at least two verified_funds when two or more are available; a single sole "buy this" recommendation is forbidden.
 - Geopolitical themes: market-impact framing only (energy, currencies, supply chains, rate path).
 
 ONE-SHOT EXAMPLE (abbreviated — yours must be 4-6 full paragraphs):
@@ -5778,10 +5781,19 @@ def _verify_spotlight_fund(ticker: str) -> dict | None:
 
 
 def _scrub_spotlight_text(text: str) -> str:
-    """Strip sensational escalation phrases from spotlight text (narrower than BANNED_PHRASES)."""
+    """Strip sensational escalation phrases from spotlight text (narrower than BANNED_PHRASES)
+    and soften prescriptive 'buy this' directives into non-advice optioned phrasing
+    (2026-06-12/15: "Investors should express this view by leaning into ARKK")."""
     import re
     for phrase in SPOTLIGHT_ESCALATION_PHRASES:
         text = re.sub(re.escape(phrase), "", text, flags=re.IGNORECASE)
+    # Non-advice framing: convert the observed prescriptive vehicle lead-ins to options.
+    text = re.sub(r"[Ii]nvestors should express this view by leaning into",
+                  "One way to express this view is via", text)
+    text = re.sub(r"\bexpress this view by leaning into\b",
+                  "express this view via", text)
+    text = re.sub(r"[Ii]nvestors should (?:buy|lean into|trim|sell)\b",
+                  "One way to express this is via", text)
     text = re.sub(r"  +", " ", text).strip()
     return text
 
