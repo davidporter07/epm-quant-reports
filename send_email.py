@@ -406,6 +406,25 @@ def _build_premarket_block(c: dict) -> tuple[str, list]:
     except Exception:
         pass
 
+    # Rank within a day so the biggest mover leads when a day has >2 events and we only
+    # show 2: high-importance first, then catalyst weight (FOMC/rate decision ahead of
+    # CPI/jobs/PCE/GDP ahead of retail sales). Without this the 6/17 FOMC decision was
+    # dropped behind same-day medium prints (Retail Sales + Atlanta GDPNow showed instead).
+    def _ev_rank(ev: dict) -> tuple:
+        imp = 0 if str(ev.get('importance', '')).lower() == 'high' else 1
+        name = str(ev.get('event', '')).lower()
+        if 'fomc' in name or 'rate decision' in name:
+            cat = 0
+        elif any(k in name for k in ('cpi', 'payroll', 'non-farm', 'jobs report', 'pce', 'gdp')):
+            cat = 1
+        elif 'retail sales' in name:
+            cat = 3
+        elif 'jobless' in name or 'claims' in name:
+            cat = 4
+        else:
+            cat = 9
+        return (imp, cat)
+
     econ_parts = []
     econ_txt   = []
     _total_shown = 0
@@ -415,7 +434,7 @@ def _build_premarket_block(c: dict) -> tuple[str, list]:
         day_obj  = _week_iso[d_iso]
         day_label = 'Today' if d_iso == today_iso else day_obj.strftime('%a')
         label_style = 'font-weight:700;color:#1e3a8a;' if d_iso == today_iso else 'font-weight:600;color:#374151;'
-        for ev in econ_by_day[d_iso][:2]:
+        for ev in sorted(econ_by_day[d_iso], key=_ev_rank)[:2]:
             if _total_shown >= 6:
                 break
             evname    = html_lib.escape(str(ev.get('event', '')))

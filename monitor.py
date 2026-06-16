@@ -381,6 +381,17 @@ try:
 except Exception as _yc_fresh_exc:
     print(f"  [WARN] Could not verify YCharts freshness: {_yc_fresh_exc}")
 
+# Arbitrate YCharts vs yfinance/FRED data BEFORE features.py. data_arbiter rebuilds
+# features_from_ycharts.csv (the YCharts->feature bridge) from the just-completed
+# scrape; features.py then consumes the CURRENT universe + values. Running it here
+# (rather than late in the pipeline) fixes the one-cycle lag that previously meant a
+# changed fund universe / fresh metrics only reached the report the FOLLOWING day
+# (e.g. the 2026-06-16 run where 10 newly-added funds were missing from features.parquet).
+try:
+    subprocess.run([VENV_PYTHON, "data_arbiter.py"], check=True, timeout=120)
+except Exception as e:
+    print(f"  Data arbitration failed (non-fatal): {e}")
+
 subprocess.run([VENV_PYTHON, "features.py"], check=True)
 
 subprocess.run([VENV_PYTHON, "linear_model.py"], check=True)
@@ -2413,11 +2424,9 @@ with open(_gmc_log_path, "a", encoding="utf-8") as _gmc_lf:
 _gmc_ok = (_gmc_result.returncode == 0)
 if not _gmc_ok:
     print("[WARN] generate_market_commentary.py returned non-zero — narrative unavailable; PDF will be skipped.")
-# Arbitrate YCharts vs yfinance data  enriches bonds_table and economic data
-try:
-    subprocess.run([VENV_PYTHON, "data_arbiter.py"], check=True, timeout=60)
-except Exception as e:
-    print(f"  Data arbitration failed (non-fatal): {e}")
+# NOTE: data_arbiter.py now runs EARLIER (before features.py) so the current fund
+# universe + fresh YCharts/econ data reach features.parquet and the commentary in the
+# SAME cycle. It is intentionally no longer re-run here.
 if not DEV_MODE and _gmc_ok:
     subprocess.run([VENV_PYTHON, "generate_pdf_report.py"], check=True)
 elif not DEV_MODE:

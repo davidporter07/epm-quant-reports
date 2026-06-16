@@ -769,7 +769,7 @@ def test_jolts_surfaces_in_recent_macro_prints(tmp_path, monkeypatch):
 def test_fetch_gold_quote_prefers_spot(monkeypatch):
     seen = {}
 
-    def _fake(ticker, prev_close=None, mode="eod"):
+    def _fake(ticker, prev_close=None, mode="eod", verify_fresh=False):
         seen[ticker] = True
         if ticker == "XAUUSD=X":
             return {"level": 4475.40, "change": -44.0, "pct_change": -0.98}
@@ -783,7 +783,7 @@ def test_fetch_gold_quote_prefers_spot(monkeypatch):
 
 def test_fetch_gold_quote_falls_back_to_futures_when_spot_and_gld_empty(monkeypatch):
     # Futures is now the LAST resort — reached only when both spot and the GLD proxy fail.
-    def _fake(ticker, prev_close=None, mode="eod"):
+    def _fake(ticker, prev_close=None, mode="eod", verify_fresh=False):
         if ticker in ("XAUUSD=X", "GLD"):
             return None                       # spot feed flaked AND GLD proxy unavailable
         return {"level": 4436.70, "change": -52.0, "pct_change": -1.17}  # GC=F futures
@@ -794,7 +794,7 @@ def test_fetch_gold_quote_falls_back_to_futures_when_spot_and_gld_empty(monkeypa
 
 def test_fetch_gold_quote_falls_back_when_spot_level_zero(monkeypatch):
     # A present-but-zero spot level is unusable → falls through (GLD also down here → futures).
-    def _fake(ticker, prev_close=None, mode="eod"):
+    def _fake(ticker, prev_close=None, mode="eod", verify_fresh=False):
         if ticker == "XAUUSD=X":
             return {"level": 0, "change": None, "pct_change": None}   # present but unusable
         if ticker == "GLD":
@@ -1044,7 +1044,7 @@ def test_harvest_dedupes_against_existing_speakers():
 # futures are only the last resort. Each test redirects the ratio cache to a tmp file.
 
 def _gold_quotes(spot=None, gld=None, fut=None):
-    def fake(ticker, prev_close=None, mode="eod"):
+    def fake(ticker, prev_close=None, mode="eod", verify_fresh=False):
         if ticker == gmc.GOLD_SPOT_TICKER:
             return spot
         if ticker == gmc.GOLD_GLD_PROXY_TICKER:

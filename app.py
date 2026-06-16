@@ -318,7 +318,6 @@ SUGGESTION_NAME_MAP: dict[str, str] = {
     "NFLX": "Netflix, Inc.",
     "NKE": "NIKE, Inc.",
     "NVDA": "NVIDIA Corporation",
-    "OMFYX": "Invesco AMT-Free Municipal Income Fund Class Y",
     "ORCL": "Oracle Corporation",
     "PEP": "PepsiCo, Inc.",
     "PG": "The Procter & Gamble Company",
@@ -408,13 +407,23 @@ EXTRA_MAJOR_FUNDS: dict[str, str] = {
     "FCNTX": "Fidelity Contrafund",
     "VWENX": "Vanguard Wellington Fund Admiral Shares",
     "VSMIX": "Invesco Small Cap Value Fund",
-    "LBIIX": "Thrivent Limited Maturity Bond Fund",
     "SUBFX": "Carillon Reams Unconstrained Bond Fund",
     "WCPBX": "Weitz Core Plus Income Fund",
     "RTX": "RTX Corporation",
     "LHX": "L3Harris Technologies, Inc.",
     "NOC": "Northrop Grumman Corporation",
     "GD": "General Dynamics Corporation",
+    # Portfolio funds added 2026-06-15 (2026-06-02 EPM models workbook)
+    "AVLV": "Avantis U.S. Large Cap Value ETF",
+    "BPTIX": "Baron Partners Fund",
+    "DYNF": "iShares U.S. Equity Factor Rotation Active ETF",
+    "EMEQ": "Nomura Focused Emerging Markets Equity ETF",
+    "FLMI": "Franklin Dynamic Municipal Bond ETF",
+    "FWD": "AB Disruptors ETF",
+    "MFSB": "MFS Active Core Plus Bond ETF",
+    "TAXF": "American Century Diversified Municipal Bond ETF",
+    "TDI": "Touchstone Dynamic International ETF",
+    "XMMO": "Invesco S&P MidCap Momentum ETF",
 }
 SUGGESTION_NAME_MAP.update(EXTRA_MAJOR_FUNDS)
 

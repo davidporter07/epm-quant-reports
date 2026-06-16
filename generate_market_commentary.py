@@ -144,13 +144,20 @@ SECTOR_TICKERS: dict[str, str] = {
 # Market data helpers
 # ---------------------------------------------------------------------------
 def _fetch_quote(ticker: str, days_back: int = 7, prev_close: float | None = None,
-                 mode: str = "eod") -> dict | None:
+                 mode: str = "eod", verify_fresh: bool = False) -> dict | None:
     """Return {level, change, pct_change} for a single ticker, or None.
 
     mode="eod"  — use completed daily-bar closes only (authoritative yesterday's close).
                   Never returns intraday data — safe to call at any time of day.
     mode="live" — try fast_info first (live intraday), fall back to daily bars.
                   Use for pre-market futures block only.
+
+    verify_fresh=True (eod path, non-rolling symbols only — indices/ETFs, NOT =F futures):
+        cross-check the most-recent daily-bar close against Yahoo's official
+        fast_info.previous_close. The daily-bar feed can lag the official settle by a full
+        session (e.g. ^GSPC not yet posting Monday's bar at a 9am run), silently printing
+        Friday's close beside live futures. When the official previous_close reveals a newer
+        completed session, roll forward so the snapshot can't show a stale prior close.
     """
     if yf is None:
         return None
@@ -208,6 +215,21 @@ def _fetch_quote(ticker: str, days_back: int = 7, prev_close: float | None = Non
         # arr[-2]->arr[-1] is on a consistent contract basis (no roll artifact). Mirrors
         # the fetch_global_markets fix, extended here to commodities/currencies/metals.
         prev   = float(arr[-2])
+        # Staleness cross-check for non-rolling symbols (indices/ETFs). Yahoo's
+        # fast_info.previous_close is the authoritative most-recent settle and updates
+        # promptly; if it reveals a completed session newer than our latest daily bar,
+        # roll forward (latest <- official close, prev <- our former latest) so a lagging
+        # daily-bar feed can't print a stale prior close next to live futures.
+        if verify_fresh:
+            try:
+                official_prev = float(yf.Ticker(ticker).fast_info.previous_close)
+                if official_prev > 0 and abs(official_prev - latest) / latest > 0.004:
+                    print(f"  [SNAP] {ticker}: daily-bar close {latest:.4f} is stale vs official "
+                          f"previous_close {official_prev:.4f} ({(official_prev-latest)/latest*100:+.2f}%) "
+                          f"— rolling forward to the newer session.")
+                    prev, latest = latest, official_prev
+            except Exception:
+                pass
         change = latest - prev
         pct    = (change / prev) * 100
         return {
@@ -266,7 +288,8 @@ def _save_gld_spot_ratio(spot_level: float, gld_level: float) -> None:
         pass
 
 
-def _fetch_gold_quote(prev_close: float | None = None, mode: str = "eod") -> dict | None:
+def _fetch_gold_quote(prev_close: float | None = None, mode: str = "eod",
+                      verify_fresh: bool = False) -> dict | None:
     """Gold {level, change, pct_change, _source}, reporting SPOT via a three-tier fallback.
 
     1. XAUUSD=X true spot (preferred). On success we ALSO recalibrate the GLD ratio so the
@@ -278,7 +301,7 @@ def _fetch_gold_quote(prev_close: float | None = None, mode: str = "eod") -> dic
     The eod path computes change off each series' own prior bar (arr[-2]), so every source
     yields a self-consistent same-source move — no cross-source prev_close leak."""
     # 1. True spot — and recalibrate the GLD ratio while we have a live spot print.
-    spot = _fetch_quote(GOLD_SPOT_TICKER, prev_close=prev_close, mode=mode)
+    spot = _fetch_quote(GOLD_SPOT_TICKER, prev_close=prev_close, mode=mode, verify_fresh=verify_fresh)
     if spot and spot.get("level"):
         spot["_source"] = GOLD_SPOT_TICKER
         gld_now = _fetch_quote(GOLD_GLD_PROXY_TICKER, mode=mode)
@@ -286,7 +309,7 @@ def _fetch_gold_quote(prev_close: float | None = None, mode: str = "eod") -> dic
             _save_gld_spot_ratio(spot["level"], gld_now["level"])
         return spot
     # 2. GLD-derived spot proxy — closest spot-level number when the direct feed is down.
-    gld = _fetch_quote(GOLD_GLD_PROXY_TICKER, mode=mode)
+    gld = _fetch_quote(GOLD_GLD_PROXY_TICKER, mode=mode, verify_fresh=verify_fresh)
     if gld and gld.get("level"):
         ratio = _load_gld_spot_ratio()
         proxy = {
@@ -395,13 +418,18 @@ def _guard_snapshot_drift(new_snapshot: dict, prev_path: "Path") -> None:
 
 def fetch_market_snapshot(prev_data: dict | None = None) -> dict[str, dict]:
     result: dict[str, dict] = {}
+    # Cross-check daily-bar freshness against the live official close for non-rolling
+    # symbols (indices/ETFs). NOT the =F futures (WTI), whose roll handling relies on the
+    # same-series arr[-2] prev and must not be second-guessed by fast_info.
+    _verify_fresh_names = {"S&P 500", "Nasdaq 100", "U.S. Dollar (DXY)", "10-Yr Yield", "Gold"}
     for name, ticker in MARKET_TICKERS.items():
+        _vf = name in _verify_fresh_names
         # Gold reports spot (XAUUSD=X) with a futures fallback so the snapshot matches the
         # spot convention; everything else uses its mapped ticker directly.
         if name == "Gold":
-            q = _fetch_gold_quote(prev_close=_prev_level(prev_data, name))
+            q = _fetch_gold_quote(prev_close=_prev_level(prev_data, name), verify_fresh=_vf)
         else:
-            q = _fetch_quote(ticker, prev_close=_prev_level(prev_data, name))
+            q = _fetch_quote(ticker, prev_close=_prev_level(prev_data, name), verify_fresh=_vf)
         if q:
             result[name] = q
     return result
@@ -822,7 +850,6 @@ def _safe_float(val: Any, scale: float = 1.0) -> float | None:
 FUND_DESCRIPTIONS: dict[str, str] = {
     "BUFR":  "FolioBeyond Rising Rates ETF — tactical rate-hedged fixed income",
     "CGDV":  "Capital Group Dividend Value ETF — dividend-focused large-cap US value equities",
-    "FLQM":  "Franklin LibertyQ U.S. Mid Cap Equity ETF — mid-cap multi-factor equities",
     "AUSF":  "Global X Adaptive U.S. Factor ETF — multi-factor US equities",
     "SDVD":  "Siren DIVCON Dividend Defender ETF — dividend growth, hedged against dividend cutters",
     "DIVO":  "Amplify CWP Enhanced Dividend Income ETF — dividend income with covered call overlay",
@@ -836,22 +863,28 @@ FUND_DESCRIPTIONS: dict[str, str] = {
     "JFNIX": "John Hancock Fundamental All Cap Core Fund — all-cap US equities, fundamental strategy",
     "IXJ":   "iShares Global Healthcare ETF — global healthcare equities (NOT consumer discretionary)",
     "VSMIX": "Vanguard Strategic Small-Cap Equity Fund — US small-cap equities",
-    "TGVIX": "Thornburg Global Value Fund — global value equities",
     "JAAA":  "Janus Henderson AAA CLO ETF — AAA-rated CLOs, short-duration investment-grade fixed income",
     "WCPBX": "Western Asset Core Plus Bond Fund — core plus multi-sector fixed income",
-    "LBIIX": "Lord Abbett Bond Debenture Fund — multi-sector fixed income",
     "ADVNX": "BlackRock Advantage International Fund — international developed market equities",
     "EVTR":  "Eaton Vance Tax-Managed Diversified Equity Income Fund — tax-managed equity income",
-    "MFIIX": "MainStay Floating Rate Fund — floating rate senior loans",
     "SUBFX": "Semper Short Duration Fund — short-duration fixed income",
     "KORP":  "American Century Diversified Corporate Bond ETF — investment-grade corporate bonds",
-    "OMFYX": "Osterweis Strategic Income Fund — flexible multi-sector fixed income",
-    "MTFGX": "MFS Total Return Fund — balanced equities and bonds",
     "JHPI":  "John Hancock Preferred Income Fund — preferred securities and income",
     "JHMB":  "John Hancock Mortgage-Backed Securities ETF — agency MBS fixed income",
     "JMST":  "JPMorgan Ultra-Short Municipal Income ETF — ultra-short tax-exempt munis",
     "JSI":   "Janus Henderson Securitized Income ETF — securitized credit (ABS, MBS, CLOs)",
     "FDUIX": "Federated Hermes Ultrashort Duration Fund — ultra-short investment-grade bonds",
+    # Added 2026-06-15 to match the 2026-06-02 EPM models workbook universe
+    "AVLV":  "Avantis U.S. Large Cap Value ETF — large-cap US value equities",
+    "BPTIX": "Baron Partners Fund — concentrated US large-cap growth equities (mutual fund)",
+    "DYNF":  "iShares U.S. Equity Factor Rotation Active ETF — multi-factor US large-cap equities",
+    "EMEQ":  "Nomura Focused Emerging Markets Equity ETF — emerging-market equities",
+    "FLMI":  "Franklin Dynamic Municipal Bond ETF — tax-exempt municipal bonds (fixed income, NOT equities)",
+    "FWD":   "AB Disruptors ETF — global growth / disruptive-innovation equities",
+    "MFSB":  "MFS Active Core Plus Bond ETF — core-plus multi-sector fixed income",
+    "TAXF":  "American Century Diversified Municipal Bond ETF — tax-exempt municipal bonds (fixed income)",
+    "TDI":   "Touchstone Dynamic International ETF — international developed-market equities",
+    "XMMO":  "Invesco S&P MidCap Momentum ETF — US mid-cap momentum equities",
     "QQA":   "Invesco QQA Nasdaq 100 ETF — Nasdaq 100 large-cap technology-heavy index",
     "SHLD":  "Global X Defense Tech ETF — defense and aerospace technology equities",
 }
@@ -2828,13 +2861,22 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
     # Bonds: all (small)
     bonds = payload.get("bonds") or {}
 
-    # Economic events: top 5
-    econ = (payload.get("upcoming_economic_events") or [])[:5]
+    # Economic events: keep the soonest few for focus, but NEVER drop an upcoming
+    # HIGH-importance catalyst (e.g. FOMC) that sorts behind same-week medium prints by
+    # date — the [:5] head-slice previously hid the 6/17 FOMC decision from both the
+    # scenario picker and the prompt.
+    _all_econ = payload.get("upcoming_economic_events") or []
+    econ = _all_econ[:5] + [e for e in _all_econ[5:] if e.get("importance") == "high"]
 
     # Split events and earnings into today vs. rest-of-week so prompts can distinguish them.
     today_str  = payload.get("date") or ""
     today_econ = [e for e in econ if str(e.get("date", ""))[:10] == today_str]
-    week_econ  = [e for e in econ if str(e.get("date", ""))[:10] != today_str]
+    # Order the week-ahead list by (date, catalyst priority) so the biggest upcoming mover
+    # leads when several share the soonest date (FOMC ahead of Retail Sales on 6/17).
+    week_econ  = sorted(
+        (e for e in econ if str(e.get("date", ""))[:10] != today_str),
+        key=lambda e: (str(e.get("date", ""))[:10], _catalyst_priority(e.get("event", ""))),
+    )
     earn       = payload.get("earnings_calendar") or []
     today_earn = [e for e in earn if str(e.get("date", ""))[:10] == today_str]
     week_earn  = [e for e in earn if str(e.get("date", ""))[:10] != today_str][:5]
@@ -6385,6 +6427,21 @@ def main() -> int:
 
     print("[CAL] Fetching economic calendar...")
     econ_calendar = fetch_economic_calendar()
+    # Slice the calendar for the prompt + scenario engine: keep the soonest events for
+    # focus, but ALWAYS retain near-term HIGH-importance catalysts (e.g. FOMC) that can
+    # sort behind same-week medium prints by date. A plain head-slice silently dropped the
+    # 2026-06-17 FOMC decision (it sat at index 7) from both the scenario picker and the
+    # LLM prompt, so the report led with Retail Sales instead of the rate decision.
+    _econ_hi_cutoff = (datetime.today() + timedelta(days=10)).strftime("%Y-%m-%d")
+    _soonest_econ = econ_calendar[:8]
+    _soonest_ids = {id(e) for e in _soonest_econ}
+    _hi_near_econ = [
+        e for e in econ_calendar[8:]
+        if e.get("importance") == "high"
+        and id(e) not in _soonest_ids
+        and str(e.get("date", ""))[:10] <= _econ_hi_cutoff
+    ]
+    upcoming_econ = _soonest_econ + _hi_near_econ
 
     print("[FED] Checking Fed speaker schedule...")
     fed_speakers = fetch_fed_speakers()
@@ -6560,7 +6617,7 @@ def main() -> int:
         "portfolio_names_to_watch":  watch,
         "mag7_consensus_forecasts":  mag7_consensus,
         "news_by_section":           llm_buckets,
-        "upcoming_economic_events":  econ_calendar[:8],
+        "upcoming_economic_events":  upcoming_econ,
         # Enrichment additions
         "fear_greed":                fg,
         "wsb_top5":                  (wsb[:5] if isinstance(wsb, list) else []),

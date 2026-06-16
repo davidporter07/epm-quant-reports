@@ -888,7 +888,7 @@ class MarketBoardService:
                     return values
             except Exception:
                 pass
-        return ["BUFR", "CGDV", "FLQM", "AUSF", "DIVO", "IXJ", "JAAA", "EFAA", "PFF", "XNTK", "RLY"]
+        return ["BUFR", "CGDV", "AUSF", "DIVO", "IXJ", "JAAA", "EFAA", "XNTK", "RLY", "XMMO", "AVLV"]
 
     def _load_names_to_watch(self) -> list[str]:
         """Tickers from the daily data-driven 'Names to Watch' so the website watchlist
