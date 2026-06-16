@@ -27,7 +27,31 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
 
-MAG7_DEFAULT = "AAPL,MSFT,AMZN,NVDA,GOOG,META,TSLA"
+_MAG7_FALLBACK = "AAPL,MSFT,AMZN,NVDA,GOOG,META,TSLA"
+
+
+def _default_infer_tickers() -> str:
+    """Inference universe: MAG7 + any publicly-traded MANGOS members.
+
+    Config-driven (config/portfolio_funds.json). MANGOS names self-gate in
+    deep_learning_model.infer_live (skipped until they have enough panel history),
+    so adding them here is safe before they accumulate data. Pending-IPO MANGOS
+    members are excluded by get_mangos_active_tickers(). Falls back to a hardcoded
+    MAG7 string if the config import fails, matching the defensive pattern used
+    elsewhere in the pipeline.
+    """
+    try:
+        from universe_config import get_mag7, get_mangos_active_tickers
+        tickers = list(get_mag7()) + list(get_mangos_active_tickers())
+        seen: set[str] = set()
+        ordered = [t for t in tickers if not (t in seen or seen.add(t))]
+        return ",".join(ordered) if ordered else _MAG7_FALLBACK
+    except Exception as e:
+        print(f" Could not load tickers from config ({e}). Using MAG7 fallback.")
+        return _MAG7_FALLBACK
+
+
+MAG7_DEFAULT = _default_infer_tickers()
 
 SERVER_USER = "dporter02"
 SERVER_HOST = "100.101.63.65"

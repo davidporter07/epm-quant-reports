@@ -330,6 +330,7 @@ SUGGESTION_NAME_MAP: dict[str, str] = {
     "SLV": "iShares Silver Trust",
     "SMH": "VanEck Semiconductor ETF",
     "SOXX": "iShares Semiconductor ETF",
+    "SPCX": "SpaceX",
     "SPY": "SPDR S&P 500 ETF Trust",
     "TLT": "iShares 20+ Year Treasury Bond ETF",
     "TMFC": "Motley Fool 100 Index ETF",

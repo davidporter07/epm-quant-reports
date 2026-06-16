@@ -51,6 +51,34 @@ def get_index_comparison_tickers(path: str | Path = CONFIG_PATH) -> List[str]:
     return _dedupe_preserve_order(cfg.get('index_comparison', []))
 
 
+def get_mangos(path: str | Path = CONFIG_PATH) -> List[dict]:
+    """Raw MANGOS member objects: {name, ticker, status}.
+
+    MANGOS is the AI/space frontier group (SpaceX, Anthropic, OpenAI) tracked like
+    mag7. Members carry a ``status`` ("active" once publicly traded, "pending_ipo"
+    until they list) and a nullable ``ticker`` so pre-IPO names can be scaffolded
+    without a symbol.
+    """
+    cfg = load_portfolio_config(path)
+    members = cfg.get('mangos', [])
+    return [dict(m) for m in members if isinstance(m, dict)]
+
+
+def get_mangos_active_tickers(path: str | Path = CONFIG_PATH) -> List[str]:
+    """Tickers for MANGOS members that are publicly traded (status == "active").
+
+    Pending-IPO members (ticker is null) are excluded, so callers never see a
+    ``None`` ticker. This is the only MANGOS accessor that should feed the scraper,
+    panel build, or model inference.
+    """
+    active = []
+    for m in get_mangos(path):
+        ticker = m.get('ticker')
+        if m.get('status') == 'active' and ticker:
+            active.append(str(ticker))
+    return _dedupe_preserve_order(active)
+
+
 def get_ycharts_snapshot_symbols_extra(path: str | Path = CONFIG_PATH) -> List[str]:
     cfg = load_portfolio_config(path)
     return _dedupe_preserve_order(cfg.get('ycharts_snapshot_symbols_extra', []))

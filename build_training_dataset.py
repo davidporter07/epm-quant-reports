@@ -314,7 +314,7 @@ def main() -> None:
         "--universe",
         type=str,
         default="",
-        choices=["", "mag7", "sp500"],
+        choices=["", "mag7", "mangos", "sp500"],
         help="Optional universe shortcut. Overrides --tickers when set.",
     )
     p.add_argument("--years", type=int, default=6, help="History length in years")
@@ -326,6 +326,15 @@ def main() -> None:
 
     if args.universe == "mag7":
         tickers = MAG7_DEFAULT
+    elif args.universe == "mangos":
+        # MAG7 + publicly-traded MANGOS members, so SPCX (and future IPO names)
+        # accumulate history in the panel alongside the existing universe.
+        try:
+            from universe_config import get_mag7, get_mangos_active_tickers
+            tickers = list(get_mag7()) + list(get_mangos_active_tickers())
+        except Exception as e:
+            print(f" Could not load MANGOS tickers from config ({e}). Falling back to MAG7.")
+            tickers = MAG7_DEFAULT
     elif args.universe == "sp500":
         try:
             tickers = get_sp500_tickers()

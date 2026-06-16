@@ -42,7 +42,8 @@
     "MFSB",
     "TAXF",
     "TDI",
-    "XMMO"
+    "XMMO",
+    "SPCX"
   ],
   "ycharts_snapshot_symbols_extra": [
     "^SPX",
@@ -62,5 +63,11 @@
     "^SPX",
     "^STOXX50E",
     "^N225"
+  ],
+  "_mangos_note": "AI/space frontier group, tracked like mag7. Onboarding a pending_ipo name on IPO day: (1) set its ticker and flip status to 'active' here, (2) add the ticker to portfolio_ycharts_symbols above, (3) add the ticker->name to SUGGESTION_NAME_MAP in app.py. Data + modeling then flow automatically.",
+  "mangos": [
+    { "name": "SpaceX", "ticker": "SPCX", "status": "active" },
+    { "name": "Anthropic", "ticker": null, "status": "pending_ipo" },
+    { "name": "OpenAI", "ticker": null, "status": "pending_ipo" }
   ]
 }
