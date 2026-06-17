@@ -1,0 +1,25 @@
+#!/bin/sh
+# Auto-reindex GitNexus after each commit (see CLAUDE.md "Keeping the Index Fresh").
+# This is the ACTIVE hook: core.hooksPath is set to .githooks, so files under
+# .git/hooks/ are bypassed. Tracked in the repo so it can't silently vanish.
+#
+# Detached so the commit returns immediately; logs to .gitnexus/reindex.log so a
+# failure is visible instead of silently swallowed. (The previous laptop-only hook
+# ran `npx gitnexus analyze --quiet 2>/dev/null &` — `--quiet` is not a real flag,
+# so it errored on every commit, and the error was thrown away.)
+ROOT="$(git rev-parse --show-toplevel)" || exit 0
+LOG="$ROOT/.gitnexus/reindex.log"
+HEAD="$(git rev-parse --short HEAD)"
+
+# Plain `analyze` deletes existing embeddings — preserve them if the index has any.
+EMB=""
+if grep -q '"embeddings"[^0-9]*[1-9]' "$ROOT/.gitnexus/meta.json" 2>/dev/null; then
+  EMB="--embeddings"
+fi
+
+# nohup + detach so the reindex survives the parent shell exiting.
+nohup sh -c "cd \"$ROOT\" && { \
+  echo \"--- reindex $(date) commit=$HEAD emb='$EMB' ---\"; \
+  npx gitnexus analyze $EMB; \
+  echo \"--- exit rc=\$? $(date) ---\"; \
+} >\"$LOG\" 2>&1" >/dev/null 2>&1 &
