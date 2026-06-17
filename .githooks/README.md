@@ -32,7 +32,8 @@ its errors away (`2>/dev/null`), which is how it stayed broken unnoticed.
 Embeddings are preserved automatically (the hook adds `--embeddings` only when
 `.gitnexus/meta.json` shows a non-zero count).
 
-Runs with `--no-stats` so it does **not** rewrite the volatile symbol/relationship
-counts in `AGENTS.md` / `CLAUDE.md` on every commit (that churn dirtied both files
-each run). The graph index still updates fully; only the cosmetic count line is left
-untouched. Drop `--no-stats` if you want those counts kept live.
+Runs with `--skip-agents-md` so it does **not** touch `AGENTS.md` / `CLAUDE.md` on
+every commit (the gitnexus section there carries a volatile symbol/relationship
+count that otherwise dirtied both files each run — and `--no-stats` does *not*
+suppress it in this version, only `--skip-agents-md` does). The graph index still
+updates fully. Drop `--skip-agents-md` if you want that section kept live.
