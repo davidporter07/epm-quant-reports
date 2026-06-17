@@ -1261,3 +1261,87 @@ def test_small_stance_move_not_flagged():
             "market_outlook_rationale": "Balanced macro keeps the tape range-bound. A hot print is the risk."}
     # Cautious -> Neutral is one notch; no explanation required
     assert gmc._check_stance_reversal_unexplained(data, "Cautious") == ""
+
+
+# --- 2026-06-17: growth-multiple causal-inversion guard (#3) ----------------
+# Falling oil / falling yields RELIEVE growth multiples; they cannot compress them.
+_TAILWIND_SNAP = {"WTI Crude": {"pct_change": -5.82}, "10-Yr Yield": {"bp_change": -4.0}}
+
+
+def test_growth_multiple_inversion_flagged_on_tailwind_day():
+    data = {"cross_asset_synthesis": (
+        "Equities fell because the US-Iran peace deal removed the Hormuz disruption premium, "
+        "causing WTI Crude to plunge 5.82% to $76.05 and compressing tech multiples.")}
+    assert gmc._check_growth_multiple_inversion(data, _TAILWIND_SNAP)
+
+
+def test_growth_multiple_inversion_not_flagged_on_oil_yield_up_day():
+    # On an oil/yield-UP day, multiple compression is the CORRECT direction — must pass.
+    up_snap = {"WTI Crude": {"pct_change": 2.1}, "10-Yr Yield": {"bp_change": 6.0}}
+    data = {"cross_asset_synthesis": "Rising yields and surging oil compressed tech multiples sharply."}
+    assert gmc._check_growth_multiple_inversion(data, up_snap) == []
+
+
+def test_growth_multiple_relief_phrasing_is_clean():
+    # The correct causal direction (relief, not compression) must not trip the guard.
+    data = {"fixed_income_commentary": (
+        "At a 10-year yield near 4.43%, the curve's flattening supports growth-name multiples "
+        "by reducing discount rates.")}
+    assert gmc._check_growth_multiple_inversion(data, _TAILWIND_SNAP) == []
+
+
+# --- 2026-06-17: asset-class stance↔rationale coherence guard (#4) -----------
+
+def test_aco_bearish_label_bullish_opener_is_flagged():
+    part2 = {"asset_class_outlooks": {
+        "Equities": {"label": "Bearish",
+                     "rationale": "Forward earnings growth remains robust. Concentration risk amplifies volatility."}}}
+    assert gmc._check_asset_class_stance_coherence(part2)
+
+
+def test_aco_bullish_label_bearish_opener_is_flagged():
+    part2 = {"asset_class_outlooks": {
+        "Fixed Income": {"label": "Bullish",
+                         "rationale": "Decelerating demand and margin pressure weigh on the complex."}}}
+    assert gmc._check_asset_class_stance_coherence(part2)
+
+
+def test_aco_coherent_rows_pass():
+    part2 = {"asset_class_outlooks": {
+        "Equities": {"label": "Bullish",
+                     "rationale": "Forward earnings growth remains robust as AI capex accelerates."},
+        "Fixed Income": {"label": "Bearish",
+                         "rationale": "Decelerating demand and sticky inflation pressure duration."}}}
+    assert gmc._check_asset_class_stance_coherence(part2) is None
+
+
+def test_aco_neutral_label_not_enforced():
+    part2 = {"asset_class_outlooks": {
+        "US Dollar": {"label": "Neutral",
+                      "rationale": "Robust rate differentials keep the dollar range-bound."}}}
+    assert gmc._check_asset_class_stance_coherence(part2) is None
+
+
+# --- 2026-06-17: off-universe currency scrub (#5) ----------------------------
+
+def test_offuniverse_currency_clause_trimmed():
+    data = {"currencies_commentary": (
+        "The dollar's decline reflects easing inflation concerns and lower Treasury yields, "
+        "with the ringgit opening higher against the US dollar on Fed hold expectations.")}
+    assert gmc._scrub_offuniverse_currency(data) == 1
+    assert "ringgit" not in data["currencies_commentary"]
+    assert "easing inflation concerns" in data["currencies_commentary"]
+
+
+def test_offuniverse_currency_clean_prose_left_alone():
+    data = {"currencies_commentary": "The dollar fell 0.2% as EUR/USD rose and the yen firmed."}
+    assert gmc._scrub_offuniverse_currency(data) == 0
+
+
+def test_offuniverse_currency_scrub_is_idempotent():
+    data = {"currencies_commentary": (
+        "The dollar slipped, with the peso sliding 1% on local risk and the rupee softer too.")}
+    gmc._scrub_offuniverse_currency(data)
+    once = data["currencies_commentary"]
+    gmc._scrub_offuniverse_currency(data)
+    assert data["currencies_commentary"] == once

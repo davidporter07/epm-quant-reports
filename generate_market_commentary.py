@@ -2044,6 +2044,8 @@ WINDOW & SUPERLATIVE FIDELITY: any claim about a multi-day window or a superlati
 Do NOT cite foreign central banks (BoE, ECB, BoJ, PBoC, RBA, BoC, SNB) or foreign sovereign yields (Gilts, Bunds, JGBs) as drivers of US asset moves unless a US-asset headline in the payload explicitly names that institution. Foreign monetary policy may move foreign assets in the international section; for US equities, US bonds, and US dollar commentary, drivers must come from the US payload.
 COMMITTED VOICE: take a side. The reader pays to know what YOU think, not which way it could go. Forbidden: "investors should watch", "remains to be seen", "wait-and-see", "could go either way", "markets face headwinds", "cautious optimism", "the outlook is mixed", "uncertainty persists". State the directional view, then the conditions that would invalidate it.
 CAUSAL LINKAGE: every commentary section must name a cause and effect, not just describe a level. Wrong: "the 10-year yield fell 6 bp to 4.50%." Right: "the 10-year yield fell 6 bp to 4.50% as falling oil prices eased the inflation impulse, providing relief to growth-name multiples." Connect at least one named driver and one downstream effect.
+GROWTH-MULTIPLE DIRECTION (critical): Falling oil prices and falling Treasury yields are TAILWINDS for growth/tech equity multiples — they relieve discount-rate and inflation pressure, they do not compress it. NEVER attribute a technology or growth-equity selloff, or "compressed/compressing multiples", to lower oil or lower yields. If tech fell on a day when oil and/or yields also fell, the tech driver is its OWN story (AI-capex sustainability doubts, stretched valuations, a single-name disappointment, a broken deal) — name that driver, and treat the lower oil/yields as a partial OFFSET, not the cause. The only correct direction: oil/yields DOWN → multiples RELIEVED; oil/yields UP → multiples PRESSURED.
+RELEVANCE — NO TANGENTIAL COLOR (critical): Every causal clause must explain the session's actual price move or a near-term catalyst the reader is positioning for. Do NOT decorate a market line with color that does not move the tape: a public figure's reaction or endorsement (a politician's, central banker's, or clergy member's statement of thanks/approval), or a single company's distant forward-quarter revenue/earnings ESTIMATE, do not belong in a pre-market bullet or commentary sentence unless that specific item is what moved the price. If a detail is real but does not bear on the move or an imminent catalyst, omit it — restraint beats embellishment.
 FORWARD HOOK: each commentary section's closing sentence must name a specific price level, threshold, or catalyst the reader is watching next — never generic ("traders will be watching" is banned).
 Return ONLY valid JSON  no markdown fences, no explanation."""
 
@@ -2099,7 +2101,7 @@ fixed_income_commentary: 5-6 sentences on TREASURY MARKET dynamics, the yield cu
 
 commodities_commentary: 5-6 sentences. WTI direction and level first, then gold. Specific fundamental driver for each. Key price level nearby. Connect to macro thesis.
 
-currencies_commentary: 4-5 sentences. DXY direction and level. Rate differential or trade-flow driver. EUR/USD and JPY if notable. EM implication.
+currencies_commentary: 4-5 sentences. DXY direction and level. Rate differential or trade-flow driver. EUR/USD and JPY if notable. EM implication. SCOPE: name only currencies in the report's currency table — the US dollar (DXY), euro, sterling, yen, Canadian dollar, Australian dollar, Brazilian real, and Bitcoin. Do NOT introduce off-universe currencies (ringgit, peso, rupee, lira, won, rand, etc.) pulled from a headline; the EM implication should be expressed through the dollar or the in-table pairs.
 
 economics_commentary: 4-5 sentences. RECAP LATEST READINGS FIRST: recent_macro_prints is a list of {indicator, actual, prior, as_of} carrying the ACTUAL figures — open by recapping the 1-2 most important entries (prioritise Core PCE, GDP, jobless claims, CPI, payrolls), citing indicator + actual + prior and interpreting the beat/miss vs prior. PREVIEW→RECAP LINKAGE: if prior_scenario_event names the catalyst the prior session flagged (e.g. "CPI Inflation Report") and a matching entry now appears in recent_macro_prints, LEAD with that release — the reader was told to watch it, so do not skip it; cite its actual vs prior and the market's read. A fresh JOLTS Job Openings print (a labor-demand gauge) is market-relevant — feature it when present. PHRASING: weekly jobless claims may be called "the latest weekly jobless claims (215k vs 210k prior)"; monthly/quarterly series MUST be referred to as "the latest [indicator] reading" (e.g. "the latest Core PCE reading at 3.3% YoY vs 3.2% prior") — do NOT assert a specific release weekday for them, because the payload gives the observation period, not the publication date. NUMBER SOURCE (non-negotiable): cite macro figures ONLY from recent_macro_prints — NEVER invent or round a number outside that list (the prior report fabricated "211k in line with 211k prior"; the real value was 215k vs 210k). If recent_macro_prints is empty, cite no specific macro figure. Never frame a past reading as an upcoming release. After the recap, give macro-cycle context (soft landing, slowdown, re-acceleration) and the Fed rate-trajectory implication. Do NOT reproduce the example numbers above as literal output.
   DATE GUARD (critical): If todays_economic_events is EMPTY there is NO release scheduled today — do NOT write that any report is "scheduled today", "due this morning", or "at 8:30 AM ET today", and do NOT invent a release that is not in todays_economic_events or week_ahead_econ_events. Refer to any upcoming release by its WEEKDAY (e.g., "Thursday's GDP report"), and anchor the paragraph in the macro cycle rather than a fictitious same-day calendar.
@@ -2144,8 +2146,9 @@ tactical_outperforming: Short phrase (3-5 words) — sectors/themes outperformin
 
 tactical_underperforming: Short phrase (3-5 words) — sectors/themes lagging. Ground in sector_bottom3 from the payload (e.g., "Energy, Real Estate, utilities").
 
-asset_class_outlooks: Object with keys "Equities", "Fixed Income", "Commodities", "US Dollar". Each: {"label": one of Bullish/Cautious/Neutral/Negative, "rationale": "1-2 sentences"}.
+asset_class_outlooks: Object with keys "Equities", "Fixed Income", "Commodities", "US Dollar". Each: {"label": one of Bullish/Cautious/Neutral/Bearish, "rationale": "1-2 sentences"}.
 CRITICAL: asset_class_outlooks rationales are LONG-TERM FUNDAMENTAL views (3-6 month horizon) — they MUST be substantively different from market_outlook_rationale (which is the 4-6 week tactical view). The Equities rationale specifically MUST focus on FUNDAMENTAL drivers (earnings trajectory, multiple expansion/compression, capex cycle, structural themes like AI infrastructure) — NOT on today's index move, today's sector tilt, or today's specific news. Do not echo market_outlook_rationale; if the Equities rationale begins with "The S&P 500's [pct]% advance" or mentions today's price move, you have failed this rule. Start the Equities rationale with the fundamental driver (e.g., "Forward earnings growth of...", "AI capex commitments of...", "Multiple expansion supported by...").
+STANCE COHERENCE (critical): the rationale's leading driver MUST point the same direction as the label. A Bearish or Cautious Equities label must OPEN with a bearish fundamental driver (decelerating earnings, multiple compression, capex retrenchment, concentration risk) — it must NOT open "Forward earnings growth remains robust/strong" or any bullish premise under a bearish label. A Bullish label must open with a bullish driver. The same rule applies to Fixed Income, Commodities, and US Dollar: never lead with a driver whose polarity contradicts the label you assigned.
 
 portfolio_spotlight_winners: Array of up to 3 objects for tickers with positive return_1m: {"ticker":"...","metric_label":"...","commentary":"2 sentences on what drives outperformance and whether it persists."}. IMPORTANT: each entry in portfolio_top_performers includes a "description" field — use it to understand what the fund actually is. Write commentary grounded in that actual strategy. Do NOT invent sector attributions.
 ONE-SHOT EXAMPLE for portfolio_spotlight_winners:
@@ -3005,6 +3008,7 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
                 continue
             numeric = _check_numeric_consistency(part1, snapshot)
             causal = _check_causal_logic(part1, snapshot)
+            gm_inv = _check_growth_multiple_inversion(part1, snapshot)
             direction = _check_direction_words(part1, snapshot)
             corp_actions = _check_fabricated_corporate_actions(part1)
             # When there are NO economic releases dated today, the narrative must not
@@ -3014,7 +3018,7 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
             move_sig = _check_move_significance(part1, snapshot)
             superlatives = _check_unsourced_superlatives(part1, flat_headlines)
             editorial = _check_editorial_contradictions(part1, snapshot)
-            if (not banned and not leaks and not numeric and not causal and not dating
+            if (not banned and not leaks and not numeric and not causal and not gm_inv and not dating
                     and not move_sig and not superlatives and not direction and not corp_actions
                     and not editorial):
                 break
@@ -3026,6 +3030,8 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
                 print(f"  [RETRY] Attempt {attempt + 1} had numeric consistency violations: {numeric}. Retrying...")
             if causal:
                 print(f"  [RETRY] Attempt {attempt + 1} had causal logic inversions: {causal}. Retrying...")
+            if gm_inv:
+                print(f"  [RETRY] Attempt {attempt + 1} blamed multiple compression on falling oil/yields: {gm_inv}. Retrying...")
             if dating:
                 print(f"  [RETRY] Attempt {attempt + 1} dated a non-today event as today: {dating}. Retrying...")
             if move_sig:
@@ -3142,8 +3148,11 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
             corp_actions = _check_fabricated_corporate_actions(part2)
             editorial = _check_editorial_contradictions(part2, snapshot)
             stance_rev = _check_stance_reversal_unexplained(part2, outlook_payload.get("prior_day_label"))
+            aco_coh = _check_asset_class_stance_coherence(part2)
+            gm_inv2 = _check_growth_multiple_inversion(part2, snapshot)
             if (not banned and not leaks and not echo and not move_sig and not superlatives
-                    and not direction and not corp_actions and not editorial and not stance_rev):
+                    and not direction and not corp_actions and not editorial and not stance_rev
+                    and not aco_coh and not gm_inv2):
                 break
             if banned:
                 print(f"  [RETRY] Attempt {attempt + 1} still contained banned phrases after scrub: {banned}. Retrying...")
@@ -3163,6 +3172,10 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
                 print(f"  [RETRY] Attempt {attempt + 1} had editorial contradictions vs snapshot: {editorial}. Retrying...")
             if stance_rev:
                 print(f"  [RETRY] Attempt {attempt + 1} sharp stance reversal unexplained: {stance_rev}. Retrying...")
+            if aco_coh:
+                print(f"  [RETRY] Attempt {attempt + 1} asset-class label/rationale polarity clash: {aco_coh}. Retrying...")
+            if gm_inv2:
+                print(f"  [RETRY] Attempt {attempt + 1} blamed multiple compression on falling oil/yields: {gm_inv2}. Retrying...")
         except Exception as exc:
             print(f"  [WARN] Outlook call failed (attempt {attempt + 1}): {exc}")
             part2 = {}
@@ -3267,7 +3280,8 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
             leaks = find_leaked_placeholders(part4)
             dating = _check_event_dating(part4, today_has_econ=bool(today_econ))
             yld_err = _check_synthesis_yield_direction(part4, snapshot)
-            if not banned and not leaks and not dating and not yld_err:
+            gm_inv4 = _check_growth_multiple_inversion(part4, snapshot)
+            if not banned and not leaks and not dating and not yld_err and not gm_inv4:
                 break
             if banned:
                 print(f"  [RETRY] Attempt {attempt + 1} synthesis still had banned phrases: {banned}. Retrying...")
@@ -3277,6 +3291,8 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
                 print(f"  [RETRY] Attempt {attempt + 1} synthesis dated a non-today event as today: {dating}. Retrying...")
             if yld_err:
                 print(f"  [RETRY] Attempt {attempt + 1} 10Y direction wrong: {yld_err}. Retrying...")
+            if gm_inv4:
+                print(f"  [RETRY] Attempt {attempt + 1} synthesis blamed multiple compression on falling oil/yields: {gm_inv4}. Retrying...")
         except Exception as exc:
             print(f"  [WARN] Synthesis call failed (attempt {attempt + 1}): {exc}")
             part4 = {}
@@ -3640,6 +3656,103 @@ def _check_equities_rationale_echo(part2: dict) -> str | None:
         if jaccard >= 0.80:
             return f"Equities rationale {jaccard:.0%} token overlap with market_outlook_rationale"
     return None
+
+
+# --- asset-class stance↔rationale coherence guard -----------------------------
+# Regression 2026-06-17: asset_class_outlooks["Equities"] was labeled "Bearish" but its
+# rationale OPENED "Forward earnings growth remains robust." — a bullish premise under a
+# bearish label. The prompt forces a fundamental-driver opener (which tends to read bullish),
+# so label and leading driver can drift apart. Flag a clear polarity clash so the Call-2 retry
+# re-rolls. Fires only on UNAMBIGUOUS clashes (bearish/cautious label + overtly bullish opener,
+# or bullish label + overtly bearish opener); neutral labels and hedged openers pass.
+_ACO_BULLISH_DRIVER_RE = re.compile(
+    r"\b(robust|strong(?:er|ly)?|resilient|solid|healthy|accelerat\w+|expand\w+|"
+    r"improv\w+|upbeat|durable|booming|surg\w+|tailwind\w*|record(?:-?high)?)\b",
+    re.IGNORECASE)
+_ACO_BEARISH_DRIVER_RE = re.compile(
+    r"\b(deceler\w+|slow(?:ing|down|er)?|weak\w+|contract\w+|compress\w+|retrench\w+|"
+    r"deteriorat\w+|stretched|overvalued|headwind\w*|downgrad\w+|recession\w*|"
+    r"margin\s+pressure|earnings\s+cut\w*|fragile)\b",
+    re.IGNORECASE)
+
+
+def _check_asset_class_stance_coherence(part2: dict) -> str | None:
+    """Flag asset_class_outlooks rows whose rationale OPENS with a driver whose polarity
+    contradicts the row's label. Returns the first violation (or None when clean)."""
+    aco = part2.get("asset_class_outlooks")
+    if not isinstance(aco, dict):
+        return None
+    for name, row in aco.items():
+        if not isinstance(row, dict):
+            continue
+        label = str(row.get("label") or "").strip().lower()
+        rationale = str(row.get("rationale") or "").strip()
+        if not label or not rationale:
+            continue
+        opener = re.split(r"(?<=[.!?])\s+", rationale)[0]
+        bull = bool(_ACO_BULLISH_DRIVER_RE.search(opener))
+        bear = bool(_ACO_BEARISH_DRIVER_RE.search(opener))
+        if bull == bear:
+            continue  # neither, or both → ambiguous; do not enforce
+        if label in ("bearish", "cautious", "negative") and bull:
+            return (f"asset_class_outlooks[{name}]: {label} label opens with a bullish driver "
+                    f"— \"{opener.strip()[:90]}\"")
+        if label == "bullish" and bear:
+            return (f"asset_class_outlooks[{name}]: bullish label opens with a bearish driver "
+                    f"— \"{opener.strip()[:90]}\"")
+    return None
+
+
+# --- growth-multiple causal-inversion guard -----------------------------------
+# Regression 2026-06-17: cross_asset_synthesis + equities_commentary blamed the tech selloff on
+# FALLING oil / FALLING yields — "the peace deal removed the Hormuz premium, causing WTI to
+# plunge ... and compressing tech multiples." Backwards: lower oil and lower yields RELIEVE
+# growth multiples (lower discount rate, lower inflation impulse), they do not compress them.
+# Only the inverted direction is wrong — "RISING yields compress multiples" is correct — so the
+# guard is gated on the snapshot actually showing the tailwind (oil and/or 10Y DOWN). Left to the
+# retry loop + prompt (no scrub): the inversion is usually embedded in an otherwise-factual
+# sentence, and surgically rewriting causality is unsafe (same philosophy as the oil-causality
+# editorial guard). Regeneration with the sharpened GROWTH-MULTIPLE DIRECTION rule is the fix.
+_GM_COMPRESS_RE = re.compile(
+    r"\b(?:compress\w*|pressur\w+|weigh\w+\s+on|weighed\s+on|drag\w+\s+(?:on|down)|"
+    r"crush\w*|squeez\w*|depress\w+)\b[^.;]{0,40}\b(?:tech\w*|growth|equity|multiple)s?\b"
+    r"|\b(?:tech\w*|growth|equity)\s+multiples?\b[^.;]{0,40}\b(?:compress\w*|pressur\w+|"
+    r"weigh\w+|drag\w+|crush\w*|squeez\w*|depress\w+)\b",
+    re.IGNORECASE)
+_GM_DOWN_DRIVER_RE = re.compile(
+    r"\b(?:oil|crude|wti|brent|yields?|treasur\w+|rates?)\b[^.;]{0,40}"
+    r"\b(?:fell|fall\w*|declin\w+|slid\w*|drop\w+|lower|plunge\w*|plummet\w*|sank|tumbl\w+|eas\w+|retreat\w*)\b"
+    r"|\b(?:falling|lower|declining|easing|tumbling|plunging|sliding)\s+(?:oil|crude|wti|brent|yields?|rates?|treasur\w+)\b"
+    r"|\bremov\w+\s+(?:the\s+)?[^.;]{0,30}\bpremium\b"
+    r"|\b(?:peace\s+deal|truce|ceasefire|de-?escalat\w+)\b",
+    re.IGNORECASE)
+
+
+def _check_growth_multiple_inversion(data: dict, snapshot: dict) -> list[str]:
+    """Flag sentences that blame growth/tech multiple compression on falling oil/yields.
+    Snapshot-gated: only fires when oil and/or the 10Y actually fell (the tailwind days)."""
+    snap = snapshot or {}
+    wti = (snap.get("WTI Crude") or {}).get("pct_change")
+    y10 = snap.get("10-Yr Yield") or {}
+    bp = y10.get("bp_change")
+    if bp is None:
+        bp = y10.get("change")
+    tailwind = (wti is not None and wti < -0.3) or (bp is not None and bp <= 0)
+    if not tailwind:
+        return []  # on an oil/yield-UP day, multiple compression is legitimate
+    violations: list[str] = []
+    for field in ("equities_commentary", "cross_asset_synthesis",
+                  "market_outlook_rationale", "fixed_income_commentary"):
+        text = data.get(field)
+        if not isinstance(text, str) or not text:
+            continue
+        for sent in re.split(r"(?<=[.!?])\s+", text):
+            if _GM_COMPRESS_RE.search(sent) and _GM_DOWN_DRIVER_RE.search(sent):
+                violations.append(
+                    f"{field}: falling oil/yields wrongly compressing growth multiples "
+                    f"— \"{sent.strip()[:90]}\"")
+                break
+    return violations[:4]
 
 
 def _check_synthesis_yield_direction(part4: dict, snapshot: dict) -> str | None:
@@ -5059,6 +5172,49 @@ def _scrub_safe_haven_inversion(data: dict) -> int:
     return fixes
 
 
+# --- off-universe currency scrub ----------------------------------------------
+# Regression 2026-06-17: currencies_commentary appended "with the ringgit opening higher
+# against the US dollar on Fed hold expectations" — the Malaysian ringgit is not in the report's
+# currency universe (USD/DXY, EUR, GBP, JPY, CAD, AUD, BRL, BTC), just headline-scrape noise
+# pulled into a US-centric FX section. Trim the clause naming a peripheral off-universe currency
+# (keep the factual head). Scoped to currencies_commentary only — international_section may
+# legitimately discuss foreign FX. The list excludes yuan/renminbi/franc/krona (majors-adjacent,
+# can be genuinely relevant) to avoid over-stripping.
+_OFFUNIVERSE_CCY_RE = re.compile(
+    r"\b(ringgit|peso|pesos|rupee|rupees|rupiah|lira|liras|won|rand|zloty|baht|forint|"
+    r"shekel|shekels|koruna|dong|naira|hryvnia|ruble|rubles|rouble|roubles)\b",
+    re.IGNORECASE)
+_CCY_CLAUSE_BOUNDARY_RE = re.compile(
+    r"\s+(?:with|as|while|and|,|;)\s+", re.IGNORECASE)
+
+
+def _scrub_offuniverse_currency(data: dict) -> int:
+    """Trim clauses naming an off-universe currency from currencies_commentary."""
+    def _clean(sent: str):
+        if not _OFFUNIVERSE_CCY_RE.search(sent):
+            return sent
+        best = None
+        for m in _CCY_CLAUSE_BOUNDARY_RE.finditer(sent):
+            head, tail = sent[:m.start()], sent[m.start():]
+            if (_OFFUNIVERSE_CCY_RE.search(tail) and not _OFFUNIVERSE_CCY_RE.search(head)
+                    and len(head.strip()) > 20):
+                best = m.start()
+        if best is not None:
+            h = sent[:best].rstrip(" ,;:")
+            return (h + ".") if h and h[-1] not in ".!?" else h
+        return None  # whole sentence is the off-universe aside → drop it
+
+    text = data.get("currencies_commentary")
+    if not isinstance(text, str) or not text:
+        return 0
+    kept = [cs for sent in re.split(r"(?<=[.!?])\s+", text) if (cs := _clean(sent))]
+    nv = " ".join(kept).strip()
+    if nv != text:
+        data["currencies_commentary"] = nv
+        return 1
+    return 0
+
+
 # --- "Tomorrow's <event>" slip when the scenario event is actually today ------
 # The scenarios block carries the canonical event timing (scenario_event_day). When that is
 # "today" but the synthesis prose calls the same event "tomorrow's", the reader sees a
@@ -5482,6 +5638,7 @@ def sanitize_commentary(data: dict, snapshot: dict | None = None, source_text: s
     total += _scrub_fabricated_corporate_actions(data)
     total += _scrub_foreign_macro_lead(data)
     total += _scrub_safe_haven_inversion(data)
+    total += _scrub_offuniverse_currency(data)
     total += _correct_event_day_slip(data)
     total += _scrub_unreleased_econ_prints(data)
     total += _scrub_unreleased_event_attribution(data)
