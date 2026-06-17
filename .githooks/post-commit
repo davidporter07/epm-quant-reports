@@ -20,6 +20,6 @@ fi
 # nohup + detach so the reindex survives the parent shell exiting.
 nohup sh -c "cd \"$ROOT\" && { \
   echo \"--- reindex $(date) commit=$HEAD emb='$EMB' ---\"; \
-  npx gitnexus analyze $EMB; \
+  npx gitnexus analyze --no-stats $EMB; \
   echo \"--- exit rc=\$? $(date) ---\"; \
 } >\"$LOG\" 2>&1" >/dev/null 2>&1 &
