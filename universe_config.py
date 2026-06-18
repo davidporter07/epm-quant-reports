@@ -79,6 +79,23 @@ def get_mangos_active_tickers(path: str | Path = CONFIG_PATH) -> List[str]:
     return _dedupe_preserve_order(active)
 
 
+def get_tracking_only_tickers(path: str | Path = CONFIG_PATH) -> List[str]:
+    """Tickers tracked for data collection / forecasting but NOT portfolio holdings.
+
+    These are the MAG7 and any publicly-traded MANGOS members. They live in
+    ``portfolio_ycharts_symbols`` (so they flow through the feature panel, charts,
+    and forecasting) but must be EXCLUDED from every portfolio-fund display
+    surface (website portfolio cards, report/email Portfolio Spotlight, PDF fund
+    tables). The portfolio display is exactly the model funds from the EPM models
+    workbook; tracking-only names are layered on top for the quant pages only.
+
+    Use this — not ``get_mag7()`` alone — wherever the code subtracts a set from
+    ``get_portfolio_tickers()`` to derive the displayed fund list. New MANGOS
+    names auto-exclude on IPO once their ticker flips to "active".
+    """
+    return _dedupe_preserve_order(list(get_mag7(path)) + list(get_mangos_active_tickers(path)))
+
+
 def get_ycharts_snapshot_symbols_extra(path: str | Path = CONFIG_PATH) -> List[str]:
     cfg = load_portfolio_config(path)
     return _dedupe_preserve_order(cfg.get('ycharts_snapshot_symbols_extra', []))

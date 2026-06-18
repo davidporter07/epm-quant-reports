@@ -38,7 +38,7 @@ except ImportError:
     yf = None
 
 from features import load_ycharts_features
-from universe_config import get_mag7, get_portfolio_tickers
+from universe_config import get_mag7, get_portfolio_tickers, get_tracking_only_tickers
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -97,6 +97,9 @@ WARN       = "#92400e"
 
 MAG7             = get_mag7()
 PORTFOLIO_TICKERS = get_portfolio_tickers()
+# MAG7 + publicly-traded MANGOS (e.g. SPCX): tracked/forecasted but never shown
+# as portfolio funds. Subtract this from PORTFOLIO_TICKERS for fund displays.
+TRACKING_ONLY    = get_tracking_only_tickers()
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1906,7 +1909,7 @@ def _fill_missing_maxdd(funds: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_metrics_table_html(df: pd.DataFrame) -> str:
-    fund_tickers = [t for t in PORTFOLIO_TICKERS if t not in set(MAG7)]
+    fund_tickers = [t for t in PORTFOLIO_TICKERS if t not in set(TRACKING_ONLY)]
     funds = df[df["Ticker"].isin(fund_tickers)].copy()
     if funds.empty:
         return '<p class="commentary-unavailable">Portfolio metrics unavailable.</p>'

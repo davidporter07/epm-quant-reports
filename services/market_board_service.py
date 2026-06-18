@@ -83,11 +83,17 @@ except Exception:
         return "mixed"
 
 try:
-    from universe_config import get_index_comparison_tickers, get_mag7, get_portfolio_tickers
+    from universe_config import (
+        get_index_comparison_tickers,
+        get_mag7,
+        get_portfolio_tickers,
+        get_tracking_only_tickers,
+    )
 except Exception:
     get_index_comparison_tickers = None  # type: ignore
     get_mag7 = None  # type: ignore
     get_portfolio_tickers = None  # type: ignore
+    get_tracking_only_tickers = None  # type: ignore
 
 DEFAULT_HOME_MARKET_STRIP = ["^SPX", "^NDX", "^DJI", "^STOXX50E", "000001.SS", "^N225", "^KS11"]
 DEFAULT_INDEX_SYMBOLS = ["^SPX", "^NDX", "^DJI", "^STOXX50E", "000001.SS", "^N225", "^KS11"]
@@ -229,13 +235,15 @@ class MarketBoardService:
         mag7_symbols = self._safe_symbol_list(self._load_mag7())
         portfolio_symbols = self._safe_symbol_list(self._load_portfolio_symbols())
 
-        mag7_set = {s.upper() for s in mag7_symbols}
+        # Exclude tracking-only names (MAG7 + active MANGOS like SPCX) from the
+        # watchlist — they are forecasted on the quant pages, not portfolio funds.
+        exclude_set = {s.upper() for s in self._safe_symbol_list(self._load_tracking_only())}
         # Mirror the report's data-driven "Names to Watch" (refreshed daily by the
         # pipeline); fall back to the static portfolio slice if the commentary is
         # unavailable. Cards still refresh intraday via build_symbol_cards + the
         # 600s cache TTL, so membership updates daily and prices update intraday.
-        watch_dynamic = [s for s in self._load_names_to_watch() if s.upper() not in mag7_set]
-        watch_fallback = [s for s in portfolio_symbols if s.upper() not in mag7_set]
+        watch_dynamic = [s for s in self._load_names_to_watch() if s.upper() not in exclude_set]
+        watch_fallback = [s for s in portfolio_symbols if s.upper() not in exclude_set]
         watchlist_symbols: list[str] = []
         seen_watchlist: set[str] = set()
         for symbol in watch_dynamic + watch_fallback:
@@ -361,8 +369,8 @@ class MarketBoardService:
         if cached is not None:
             return cached
 
-        mag7_set = {s.upper() for s in self._safe_symbol_list(self._load_mag7())}
-        portfolio_symbols = [s for s in self._safe_symbol_list(self._load_portfolio_symbols()) if s.upper() not in mag7_set]
+        exclude_set = {s.upper() for s in self._safe_symbol_list(self._load_tracking_only())}
+        portfolio_symbols = [s for s in self._safe_symbol_list(self._load_portfolio_symbols()) if s.upper() not in exclude_set]
         portfolio_cards = self.build_symbol_cards(portfolio_symbols, period="6m")
         live_cards = [card for card in portfolio_cards if not card.get("error")]
         leaders, laggards = self._rank_cards_by_return(live_cards, metric="day_change_pct", directional=True)
@@ -919,6 +927,17 @@ class MarketBoardService:
             except Exception:
                 pass
         return ["AAPL", "MSFT", "AMZN", "NVDA", "GOOG", "META", "TSLA"]
+
+    def _load_tracking_only(self) -> list[str]:
+        """MAG7 + publicly-traded MANGOS (e.g. SPCX). These are tracked/forecasted
+        but must never surface as portfolio funds, so they are subtracted from the
+        portfolio display universe. Falls back to MAG7 if the config import fails."""
+        if callable(get_tracking_only_tickers):
+            try:
+                return list(get_tracking_only_tickers())
+            except Exception:
+                pass
+        return self._load_mag7()
 
     def _load_index_symbols(self) -> list[str]:
         # Keep the monitored headline index strip aligned across Home and Markets.

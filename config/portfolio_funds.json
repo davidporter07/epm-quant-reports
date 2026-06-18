@@ -64,7 +64,7 @@
     "^STOXX50E",
     "^N225"
   ],
-  "_mangos_note": "AI/space frontier group, tracked like mag7. Onboarding a pending_ipo name on IPO day: (1) set its ticker and flip status to 'active' here, (2) add the ticker to portfolio_ycharts_symbols above, (3) add the ticker->name to SUGGESTION_NAME_MAP in app.py. Data + modeling then flow automatically.",
+  "_mangos_note": "AI/space frontier group, tracked like mag7: in portfolio_ycharts_symbols for data collection + forecasting, but EXCLUDED from every portfolio-fund display (website portfolio cards, Names to Watch, report/email/PDF fund lists) via universe_config.get_tracking_only_tickers(). The displayed portfolio is exactly the EPM models workbook funds. Onboarding a pending_ipo name on IPO day: (1) set its ticker and flip status to 'active' here, (2) add the ticker to portfolio_ycharts_symbols above, (3) add the ticker->name to SUGGESTION_NAME_MAP in app.py. Data + modeling flow automatically; display exclusion is automatic once status is 'active'.",
   "mangos": [
     { "name": "SpaceX", "ticker": "SPCX", "status": "active" },
     { "name": "Anthropic", "ticker": null, "status": "pending_ipo" },

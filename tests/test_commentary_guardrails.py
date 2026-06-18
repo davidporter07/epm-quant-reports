@@ -284,7 +284,8 @@ def test_spotlight_uses_enriched_1m_return(monkeypatch):
     # patch the module it imports from.
     import universe_config as uc
     monkeypatch.setattr(uc, "get_portfolio_tickers", lambda: ["XNTK", "IXJ"])
-    monkeypatch.setattr(uc, "get_mag7", lambda: [])
+    # Spotlight subtracts tracking-only names (MAG7 + active MANGOS); none here.
+    monkeypatch.setattr(uc, "get_tracking_only_tickers", lambda: [])
     df = pd.DataFrame([
         {"Ticker": "XNTK", "1M Return": 0.2482, "1M Return_enrich": 0.1988},
         {"Ticker": "IXJ",  "1M Return": -0.0177, "1M Return_enrich": 0.0058},

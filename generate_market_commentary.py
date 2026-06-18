@@ -910,13 +910,13 @@ def _fresh_1m_col(columns) -> str | None:
 
 def build_portfolio_spotlight(df: pd.DataFrame) -> tuple[list, list]:
     try:
-        from universe_config import get_portfolio_tickers, get_mag7
+        from universe_config import get_portfolio_tickers, get_tracking_only_tickers
     except Exception:
         return [], []
 
-    mag7     = set(get_mag7())
+    tracking_only = set(get_tracking_only_tickers())  # MAG7 + active MANGOS (e.g. SPCX)
     all_port = get_portfolio_tickers()
-    funds    = df[df["Ticker"].isin([t for t in all_port if t not in mag7])].copy()
+    funds    = df[df["Ticker"].isin([t for t in all_port if t not in tracking_only])].copy()
 
     ret_col = _fresh_1m_col(funds.columns)
     if funds.empty or ret_col is None:
@@ -1015,9 +1015,9 @@ def build_tactical_positioning(
         _ret_col = _fresh_1m_col(df.columns) if (df is not None and not df.empty) else None
         if _ret_col:
             try:
-                from universe_config import get_portfolio_tickers, get_mag7
-                _mag7 = set(get_mag7())
-                _port = [t for t in get_portfolio_tickers() if t not in _mag7]
+                from universe_config import get_portfolio_tickers, get_tracking_only_tickers
+                _tracking_only = set(get_tracking_only_tickers())  # MAG7 + active MANGOS
+                _port = [t for t in get_portfolio_tickers() if t not in _tracking_only]
                 funds = df[df["Ticker"].isin(_port)].copy()
                 funds["_1m_num"] = _pd.to_numeric(funds[_ret_col], errors="coerce")
                 funds = funds.dropna(subset=["_1m_num"])
