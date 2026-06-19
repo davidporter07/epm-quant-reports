@@ -705,6 +705,81 @@ def test_correct_event_day_slip_skips_genuine_future_event():
     assert "Tomorrow's Nonfarm Payrolls" in data["cross_asset_synthesis"]
 
 
+# --- 2026-06-18 #6: wrong WEEKDAY name on a today event ("Friday's Philly Fed") -------
+def test_event_day_slip_corrects_wrong_weekday_name():
+    data = {
+        "scenario_event": "Philly Fed",
+        "scenario_event_day": "today",
+        "report_date": "2026-06-18",   # a Thursday
+        "cross_asset_synthesis": "Friday's Philly Fed survey is the next macro test.",
+    }
+    n = gmc._correct_event_day_slip(data)
+    assert n >= 1
+    assert "Today's Philly Fed" in data["cross_asset_synthesis"]  # capitalized at sentence start
+    assert "Friday's Philly Fed" not in data["cross_asset_synthesis"]
+
+
+def test_event_day_slip_keeps_weekday_when_it_matches_today():
+    # 6/19 is a Friday — "Friday's Philly Fed" on a Friday is correct, leave it alone.
+    data = {
+        "scenario_event": "Philly Fed",
+        "scenario_event_day": "today",
+        "report_date": "2026-06-19",   # a Friday
+        "cross_asset_synthesis": "Friday's Philly Fed survey is the next macro test.",
+    }
+    assert gmc._correct_event_day_slip(data) == 0
+    assert "Friday's Philly Fed" in data["cross_asset_synthesis"]
+
+
+def test_event_day_slip_weekday_is_forward_only():
+    # A different weekday AFTER the event (event precedes it) must not be rewritten.
+    data = {
+        "scenario_event": "Philly Fed",
+        "scenario_event_day": "today",
+        "report_date": "2026-06-18",   # Thursday
+        "cross_asset_synthesis": "Today's Philly Fed follows Wednesday's CPI revision.",
+    }
+    assert gmc._correct_event_day_slip(data) == 0
+    assert "Wednesday's CPI" in data["cross_asset_synthesis"]
+
+
+# --- 2026-06-18 #6: US market-holiday awareness (NYSE calendar, not federal) ----------
+def test_is_us_market_holiday_juneteenth():
+    assert gmc._is_us_market_holiday("2026-06-19") is True       # Juneteenth — NYSE closed
+
+
+def test_is_us_market_holiday_open_days():
+    assert gmc._is_us_market_holiday("2026-06-18") is False      # ordinary Thursday
+    assert gmc._is_us_market_holiday("2026-10-12") is False      # Columbus Day — NYSE OPEN
+    assert gmc._is_us_market_holiday("") is False
+    assert gmc._is_us_market_holiday("not-a-date") is False
+
+
+# --- 2026-06-18 #6: email what-to-watch lead == scenario "Primary event" -------------
+# Two same-day HIGH events. Raw feed order put Philly Fed first (→ watch_today[0], the email's
+# first what-to-watch item) while catalyst priority ranks Initial Jobless Claims first
+# (→ scenario_event, the "Primary event" header), so the two surfaces named different primary
+# events on one page. Both the today_econ lead and the scenario picker sort by _catalyst_priority,
+# so they must now agree on the same catalyst regardless of feed order.
+def test_today_econ_lead_matches_scenario_primary_event():
+    today = "2026-06-18"
+    econ = [
+        {"event": "Philadelphia Fed Manufacturing Index", "date": today, "importance": "high"},
+        {"event": "Initial Jobless Claims", "date": today, "importance": "high"},
+    ]
+    today_econ = sorted(
+        (e for e in econ if str(e.get("date", ""))[:10] == today),
+        key=lambda e: gmc._catalyst_priority(e.get("event", "")),
+    )
+    today_events = sorted(  # mirrors the scenario picker's _today_events selection
+        (e for e in econ if str(e.get("date", ""))[:10] == today and e.get("importance") == "high"),
+        key=lambda e: gmc._catalyst_priority(e.get("event", "")),
+    )
+    assert today_econ[0]["event"] == today_events[0]["event"] == "Initial Jobless Claims"
+    # And the priority itself must rank a known catalyst above an unmatched (default) one.
+    assert gmc._catalyst_priority("Initial Jobless Claims") < gmc._catalyst_priority("Philadelphia Fed Manufacturing Index")
+
+
 # --- economics_commentary must not assert values for not-yet-released events -------
 def test_scrub_unreleased_econ_prints_drops_future_event_readings(tmp_path, monkeypatch):
     monkeypatch.setattr(gmc, "DATA_DIR", tmp_path)  # no calendar -> upcoming = scenario event only
@@ -1289,6 +1364,128 @@ def test_growth_multiple_relief_phrasing_is_clean():
         "At a 10-year yield near 4.43%, the curve's flattening supports growth-name multiples "
         "by reducing discount rates.")}
     assert gmc._check_growth_multiple_inversion(data, _TAILWIND_SNAP) == []
+
+
+# --- 2026-06-18: de-escalation/premium-removal compression is ALWAYS inverted ---
+# Regression: on a day oil/yields ROSE, "the removal of the Hormuz disruption premium
+# compressed tech multiples" slipped through because the snapshot gate (built for the
+# falling-oil/yield family) suppressed the whole check. Removing an inflation premium is
+# disinflationary — it relieves multiples — so this family must fire regardless of the tick.
+_UP_SNAP = {"WTI Crude": {"pct_change": 0.97}, "10-Yr Yield": {"bp_change": 6.0}}
+
+
+def test_deescalation_compression_flagged_even_on_oil_yield_up_day():
+    data = {"market_outlook_rationale": (
+        "The removal of the Hormuz disruption premium compressed tech multiples and lifted the dollar.")}
+    assert gmc._check_growth_multiple_inversion(data, _UP_SNAP)
+
+
+def test_peace_deal_as_cause_of_compression_flagged():
+    data = {"equities_commentary": (
+        "The peace deal removed the inflation premium and compressed growth multiples.")}
+    assert gmc._check_growth_multiple_inversion(data, _UP_SNAP)
+
+
+def test_compression_despite_peace_deal_is_concessive_and_clean():
+    # "compressing multiples DESPITE the peace deal" — the deal is the foil, not the cause.
+    data = {"cross_asset_synthesis": (
+        "A hawkish Fed compressed growth-name multiples despite the peace deal that reopened Hormuz.")}
+    assert gmc._check_growth_multiple_inversion(data, _UP_SNAP) == []
+
+
+# --- 2026-06-18: sector daily change must anchor to the last COMPLETED session ---
+def test_completed_daily_change_drops_partial_today_bar():
+    import pandas as pd
+    from datetime import date
+    idx = pd.to_datetime(["2026-06-16", "2026-06-17", "2026-06-18"])
+    closes = pd.Series([100.0, 98.79, 99.60], index=idx)  # 6/18 = partial intraday bounce
+    pct, last = gmc._completed_daily_change(closes, date(2026, 6, 18))
+    assert pct == -1.21 and last == 98.79  # 6/17 vs 6/16, partial 6/18 dropped
+
+
+def test_completed_daily_change_keeps_prior_session_when_no_today_bar():
+    import pandas as pd
+    from datetime import date
+    idx = pd.to_datetime(["2026-06-16", "2026-06-17"])
+    closes = pd.Series([100.0, 98.79], index=idx)
+    pct, last = gmc._completed_daily_change(closes, date(2026, 6, 18))
+    assert pct == -1.21 and last == 98.79
+
+
+# --- 2026-06-18: gold snapshot↔commodities-table cross-wire reconciliation (#4) ---
+# The two tables fetch gold independently; an intermittent XAUUSD=X 404 can split them
+# across tiers (futures vs spot) with opposite signs. _reconcile_gold forces both onto
+# the better-tier quote so they can never disagree.
+
+def test_gold_tier_rank_orders_spot_proxy_futures():
+    assert gmc._gold_tier_rank({"_source": gmc.GOLD_SPOT_TICKER}) == 0
+    assert gmc._gold_tier_rank({"_source": "GLD*0.091"}) == 1
+    assert gmc._gold_tier_rank({"_source": gmc.GOLD_FUTURES_TICKER}) == 2
+    assert gmc._gold_tier_rank({}) == 3
+    assert gmc._gold_tier_rank(None) == 3
+
+
+def test_reconcile_gold_prefers_spot_over_futures_and_mirrors_both():
+    # 6/18 replay: snapshot fell to COMEX futures (+1.06%, contango), table got spot (-2.27%).
+    snapshot = {"Gold": {"level": 4300.17, "pct_change": 1.06, "_source": gmc.GOLD_FUTURES_TICKER}}
+    cmdty    = {"Gold": {"level": 4255.17, "pct_change": -2.27, "_source": gmc.GOLD_SPOT_TICKER}}
+    canon = gmc._reconcile_gold(snapshot, cmdty)
+    assert canon["_source"] == gmc.GOLD_SPOT_TICKER
+    assert canon["pct_change"] == -2.27
+    # Both tables now carry the identical (spot) quote — no level or sign divergence.
+    assert snapshot["Gold"]["level"] == cmdty["Gold"]["level"] == 4255.17
+    assert snapshot["Gold"]["pct_change"] == cmdty["Gold"]["pct_change"] == -2.27
+
+
+def test_reconcile_gold_keeps_spot_when_snapshot_already_better():
+    snapshot = {"Gold": {"level": 4255.0, "pct_change": -2.27, "_source": gmc.GOLD_SPOT_TICKER}}
+    cmdty    = {"Gold": {"level": 4300.0, "pct_change": 1.06, "_source": gmc.GOLD_FUTURES_TICKER}}
+    canon = gmc._reconcile_gold(snapshot, cmdty)
+    assert canon["_source"] == gmc.GOLD_SPOT_TICKER
+    assert snapshot["Gold"] == cmdty["Gold"]
+
+
+def test_reconcile_gold_noop_when_gold_missing():
+    assert gmc._reconcile_gold({}, {"Gold": {"level": 1.0, "_source": "GLD*0.09"}}) is None
+    assert gmc._reconcile_gold({"Gold": {"level": 1.0}}, {}) is None
+
+
+# --- #3 belt-and-suspenders: same-day tactical stance vs 4-6wk outlook label ---
+
+def test_tactical_riskon_vs_bearish_label_gets_reconciliation_note():
+    data = {"market_outlook_label": "Bearish",
+            "tactical_positioning": {"stance": "Risk-on, pro-cyclical",
+                                     "stance_detail": "Leading: Tech +2.5%."}}
+    assert gmc._reconcile_tactical_stance_with_outlook(data) == 1
+    detail = data["tactical_positioning"]["stance_detail"]
+    assert "single-session" in detail and "Bearish" in detail and "4-6 week" in detail
+
+
+def test_tactical_riskoff_vs_bullish_label_gets_reconciliation_note():
+    data = {"market_outlook_label": "Bullish",
+            "tactical_positioning": {"stance": "Risk-off, defensive bid", "stance_detail": "Leading: Utilities."}}
+    assert gmc._reconcile_tactical_stance_with_outlook(data) == 1
+    assert "single-session" in data["tactical_positioning"]["stance_detail"]
+
+
+def test_tactical_stance_aligned_with_label_is_left_alone():
+    data = {"market_outlook_label": "Bearish",
+            "tactical_positioning": {"stance": "Risk-off, defensive bid", "stance_detail": "Leading: Staples."}}
+    assert gmc._reconcile_tactical_stance_with_outlook(data) == 0
+    assert data["tactical_positioning"]["stance_detail"] == "Leading: Staples."
+
+
+def test_tactical_reconciliation_is_idempotent():
+    data = {"market_outlook_label": "Bearish",
+            "tactical_positioning": {"stance": "Risk-on, pro-cyclical", "stance_detail": "Leading: Tech."}}
+    assert gmc._reconcile_tactical_stance_with_outlook(data) == 1
+    assert gmc._reconcile_tactical_stance_with_outlook(data) == 0  # second pass adds nothing
+
+
+def test_tactical_reconciliation_noop_without_label_or_stance():
+    assert gmc._reconcile_tactical_stance_with_outlook({"tactical_positioning": {"stance": "Risk-on"}}) == 0
+    assert gmc._reconcile_tactical_stance_with_outlook({"market_outlook_label": "Bearish"}) == 0
+    assert gmc._reconcile_tactical_stance_with_outlook({}) == 0
 
 
 # --- 2026-06-17: asset-class stance↔rationale coherence guard (#4) -----------

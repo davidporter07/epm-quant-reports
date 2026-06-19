@@ -331,6 +331,66 @@ def _fetch_gold_quote(prev_close: float | None = None, mode: str = "eod",
     return fut
 
 
+def _gold_tier_rank(q: dict | None) -> int:
+    """Rank a gold quote by source tier: spot (0) < GLD proxy (1) < COMEX futures (2).
+    A higher tier carries a contango basis / staleness risk, so the lower-ranked quote
+    is the one to trust when the snapshot and commodities table disagree. Unknown or
+    missing source sorts last."""
+    src = str((q or {}).get("_source") or "")
+    if src == GOLD_FUTURES_TICKER:
+        return 2
+    if src.startswith("GLD*"):
+        return 1
+    if src == GOLD_SPOT_TICKER:
+        return 0
+    return 3
+
+
+def _reconcile_gold(snapshot: dict, commodities_tbl: dict) -> dict | None:
+    """Force the snapshot and commodities table to share ONE gold quote.
+
+    Both tables fetch gold independently through the three-tier spot/proxy/futures
+    fallback, with different prev_close baselines. When the intermittent XAUUSD=X spot
+    feed 404s for one call but not the other, the two land on different tiers and diverge
+    in BOTH level and sign — 2026-06-18: snapshot $4,300 +1.06% (it fell to COMEX futures,
+    contango-inflated) vs commodities table $4,255 -2.27% (spot, the correct read), truth
+    ≈ -2%. Pick the better-tier quote (spot > GLD proxy > futures) and mirror it into both
+    so the snapshot, prose, and commodities table can never disagree. Returns the canonical
+    quote, or None when gold is absent from either table."""
+    gs = snapshot.get("Gold") if isinstance(snapshot, dict) else None
+    gt = commodities_tbl.get("Gold") if isinstance(commodities_tbl, dict) else None
+    if not (isinstance(gs, dict) and isinstance(gt, dict)):
+        return None
+    canonical = gs if _gold_tier_rank(gs) <= _gold_tier_rank(gt) else gt
+    snapshot["Gold"]        = dict(canonical)
+    commodities_tbl["Gold"] = dict(canonical)
+    return canonical
+
+
+def _is_us_market_holiday(date_str: str) -> bool:
+    """True when date_str (YYYY-MM-DD) is a US EQUITY-MARKET holiday (NYSE/Nasdaq closed).
+
+    Uses the `holidays` library's NYSE financial calendar — NOT the federal calendar, which
+    over-filters (the NYSE is OPEN on Columbus/Veterans Day). Non-failing: returns False if
+    the library is unavailable or the date can't be parsed.
+
+    2026-06-18: the report looked ahead to "Friday's Philly Fed" when Fri 6/19 was Juneteenth
+    (market closed) and Philly Fed had already printed Thursday. Calendar feeds happily list a
+    release on a closed day, so we drop holiday-dated events before they reach the scenario
+    picker / what-to-watch."""
+    try:
+        from datetime import date as _date
+        import holidays as _holidays
+        d = _date.fromisoformat(str(date_str)[:10])
+        try:
+            cal = _holidays.financial_holidays("NYSE")
+        except Exception:
+            cal = _holidays.US()   # fallback: federal calendar (over-filters Columbus/Veterans)
+        return d in cal
+    except Exception:
+        return False
+
+
 def _event_day_from_dates(event_date: str, today_date: str) -> str:
     """Human day label for an event relative to today: 'today', 'tomorrow', or weekday.
 
@@ -773,6 +833,35 @@ def fetch_technical_levels(current_overrides: dict | None = None) -> dict[str, d
     return result
 
 
+def _completed_daily_change(closes, today) -> tuple[float, float] | None:
+    """(pct_change, last_level) from the last two COMPLETED daily closes.
+
+    Anchors to the last finished session, matching the page-1 snapshot ("prices
+    taken at previous day market close"). The pipeline runs at 9am CST = 10am ET,
+    AFTER the 9:30 ET open, so a daily yfinance pull can carry a live, partial
+    current-day bar. Treating that partial bar as the "last close" computes
+    TODAY's intraday move (often a bounce) instead of yesterday's completed
+    session — the session the recap narrates. That mismatch caused the 2026-06-18
+    defect: 8/11 sectors green ("Technology +2.46%") on a day recapped as
+    S&P -1.21%. Drop any bar dated >= today so the change is always prior-session.
+    Returns None when fewer than two completed closes are available.
+    """
+    try:
+        if hasattr(closes, "squeeze"):
+            closes = closes.squeeze()
+        if len(closes) and hasattr(closes.index[-1], "date") and closes.index[-1].date() >= today:
+            closes = closes.iloc[:-1]
+        arr = closes.to_numpy()
+    except Exception:
+        return None
+    if len(arr) < 2:
+        return None
+    last = float(arr[-1])
+    prev = float(arr[-2])
+    pct = round((last - prev) / prev * 100, 2) if prev else 0.0
+    return pct, round(last, 2)
+
+
 def fetch_sector_performance() -> list[dict]:
     """Return daily % change for all 11 SPDR sector ETFs, sorted best to worst.
 
@@ -787,6 +876,7 @@ def fetch_sector_performance() -> list[dict]:
         start = end - timedelta(days=7)
         data  = yf.download(tickers, start=start, end=end,
                             progress=False, auto_adjust=True, group_by="ticker")
+        _today = datetime.today().date()
         results: list[dict] = []
         for name, ticker in SECTOR_TICKERS.items():
             try:
@@ -794,16 +884,12 @@ def fetch_sector_performance() -> list[dict]:
                     closes = data["Close"].dropna()
                 else:
                     closes = data[ticker]["Close"].dropna()
-                if hasattr(closes, "squeeze"):
-                    closes = closes.squeeze()
-                arr = closes.to_numpy()
-                if len(arr) < 2:
+                chg = _completed_daily_change(closes, _today)
+                if chg is None:
                     continue
-                last = float(arr[-1])
-                prev = float(arr[-2])
-                pct  = round((last - prev) / prev * 100, 2) if prev else 0.0
+                pct, last = chg
                 results.append({"name": name, "ticker": ticker,
-                                 "pct_change": pct, "level": round(last, 2)})
+                                 "pct_change": pct, "level": last})
             except Exception:
                 continue
         results.sort(key=lambda x: x["pct_change"], reverse=True)
@@ -2351,6 +2437,7 @@ Rules:
 - Active voice, present tense. No preamble, no summary sentence, no "in conclusion". Start the body with the development itself.
 - NON-ADVICE FRAMING: never instruct the reader to buy/sell/"lean into"/"trim"/"should express this view by leaning into". Present vehicles as OPTIONS with a counter/caveat. Cite at least two verified_funds when two or more are available; a single sole "buy this" recommendation is forbidden.
 - Geopolitical themes: market-impact framing only (energy, currencies, supply chains, rate path).
+- EARNINGS-DRIVEN MOVES: if `earnings_grounding` is present in the input, the spotlight subject moved on its OWN earnings/guidance release. Attribute the move to the company-specific results (revenue, guidance/outlook, bookings, margins, segment weakness) named in earnings_grounding — NOT to the day's macro or geopolitical theme. A single company's earnings-day move is NOT caused by a war, ceasefire, deal, or rate decision; do not write that it was, even if those themes dominate the wire. Lead Paragraph 1 with the earnings/guidance fact.
 
 ONE-SHOT EXAMPLE (abbreviated — yours must be 4-6 full paragraphs):
 {"title":"The Memory Shortage Powering the Next Leg of the AI Trade","body":"Large-cap memory makers have become the market's best performers, with Micron, SanDisk and Western Digital up roughly 115%, 145% and 87% over two months as the entire tech sector re-rates higher on their backs.\\n\\nThe driver is physical, not sentiment: AI processors can execute trillions of operations per second, but performance was capped by how fast memory could feed them data — the 'memory wall.' Stacking high-bandwidth memory directly atop the processor shattered that ceiling, and in doing so multiplied the number of memory chips a single AI server needs from eight to roughly ninety-six.\\n\\nThat demand shock is durable on a multi-year horizon. Micron's 2026 capacity is already sold out, new clean-room supply is years away, and trailing free cash flow is inflecting from under $2B to an expected $10B — which is why valuations have stayed near 10x forward earnings despite triple-digit rallies; earnings are outrunning the share price.\\n\\nThe cleanest expression is direct memory exposure, which most tech ETFs are structurally underweight. The thesis breaks only if hyperscalers cut data-center capex — the order book to watch into next quarter.","funds":[{"ticker":"SMH","name":"VanEck Semiconductor ETF","type":"ETF","exposure_note":"Holds the large-cap memory names driving the move, though weighted toward logic chipmakers."}],"category":"sector_catalyst"}
@@ -2869,11 +2956,30 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
     # date — the [:5] head-slice previously hid the 6/17 FOMC decision from both the
     # scenario picker and the prompt.
     _all_econ = payload.get("upcoming_economic_events") or []
+    # Drop FUTURE events dated on a US market holiday (NYSE/Nasdaq closed) — they cannot be
+    # that session's catalyst, and surfacing one invites a "Friday's <event>" framing on a
+    # closed day (2026-06-18: Juneteenth 6/19). Today's events are kept regardless so a
+    # holiday-day run still reports correctly.
+    _today_str0 = (payload.get("date") or "")[:10]
+    _all_econ = [
+        e for e in _all_econ
+        if str(e.get("date", ""))[:10] <= _today_str0
+        or not _is_us_market_holiday(str(e.get("date", "")))
+    ]
     econ = _all_econ[:5] + [e for e in _all_econ[5:] if e.get("importance") == "high"]
 
     # Split events and earnings into today vs. rest-of-week so prompts can distinguish them.
     today_str  = payload.get("date") or ""
-    today_econ = [e for e in econ if str(e.get("date", ""))[:10] == today_str]
+    # Order today's events by catalyst priority — the SAME key the scenario picker uses for
+    # _today_events — so the highest-priority today event leads. This keeps the email's first
+    # what-to-watch item (watch_today[0], built from today_econ[0]) and the scenario "Primary
+    # event" (scenario_event) pointing at the SAME catalyst. 2026-06-18: raw feed order put
+    # Philly Fed first (→ watch item) while priority ranked Initial Jobless Claims first
+    # (→ Primary event), so the two surfaces named different primary events on one page.
+    today_econ = sorted(
+        (e for e in econ if str(e.get("date", ""))[:10] == today_str),
+        key=lambda e: _catalyst_priority(e.get("event", "")),
+    )
     # Order the week-ahead list by (date, catalyst priority) so the biggest upcoming mover
     # leads when several share the soonest date (FOMC ahead of Retail Sales on 6/17).
     week_econ  = sorted(
@@ -3719,18 +3825,38 @@ _GM_COMPRESS_RE = re.compile(
     r"|\b(?:tech\w*|growth|equity)\s+multiples?\b[^.;]{0,40}\b(?:compress\w*|pressur\w+|"
     r"weigh\w+|drag\w+|crush\w*|squeez\w*|depress\w+)\b",
     re.IGNORECASE)
-_GM_DOWN_DRIVER_RE = re.compile(
+# Two distinct inverted-driver families:
+#  (a) falling oil / falling yields — gated on the snapshot, because the MIRROR
+#      claim ("RISING yields compress multiples") is correct. Only enforce the
+#      inversion on days the tailwind actually happened (oil and/or 10Y DOWN).
+#  (b) de-escalation / inflation-premium REMOVAL (peace deal, ceasefire, "removal
+#      of the Hormuz premium") — UNGATED, because removing an inflation impulse is
+#      disinflationary: it lowers the discount rate and RELIEVES growth multiples
+#      regardless of that day's tick. Blaming multiple COMPRESSION on it is always
+#      backwards. Regression 2026-06-18: "the removal of the Hormuz disruption
+#      premium compressed tech multiples" slipped through because oil/yields rose
+#      that day, so the (a)-style snapshot gate suppressed the whole check.
+_GM_OILYIELD_DOWN_RE = re.compile(
     r"\b(?:oil|crude|wti|brent|yields?|treasur\w+|rates?)\b[^.;]{0,40}"
     r"\b(?:fell|fall\w*|declin\w+|slid\w*|drop\w+|lower|plunge\w*|plummet\w*|sank|tumbl\w+|eas\w+|retreat\w*)\b"
-    r"|\b(?:falling|lower|declining|easing|tumbling|plunging|sliding)\s+(?:oil|crude|wti|brent|yields?|rates?|treasur\w+)\b"
-    r"|\bremov\w+\s+(?:the\s+)?[^.;]{0,30}\bpremium\b"
+    r"|\b(?:falling|lower|declining|easing|tumbling|plunging|sliding)\s+(?:oil|crude|wti|brent|yields?|rates?|treasur\w+)\b",
+    re.IGNORECASE)
+_GM_DEESCALATION_RE = re.compile(
+    r"\bremov\w+\s+(?:the\s+)?[^.;]{0,30}\bpremium\b"
     r"|\b(?:peace\s+deal|truce|ceasefire|de-?escalat\w+)\b",
+    re.IGNORECASE)
+# Concessive framings flip the de-escalation from CAUSE to CONTRAST — e.g.
+# "compressing multiples DESPITE the peace deal" is correct (the hawkish Fed is
+# the cause; the deal is the foil). Don't flag those.
+_GM_CONCESSIVE_RE = re.compile(
+    r"\b(?:despite|even\s+(?:as|after|with|though)|notwithstanding|regardless\s+of|in\s+spite\s+of)\b",
     re.IGNORECASE)
 
 
 def _check_growth_multiple_inversion(data: dict, snapshot: dict) -> list[str]:
-    """Flag sentences that blame growth/tech multiple compression on falling oil/yields.
-    Snapshot-gated: only fires when oil and/or the 10Y actually fell (the tailwind days)."""
+    """Flag sentences that wrongly blame growth/tech multiple compression on a
+    DISINFLATIONARY force. Two families: falling oil/yields (snapshot-gated) and
+    de-escalation / inflation-premium removal (ungated — always inverted)."""
     snap = snapshot or {}
     wti = (snap.get("WTI Crude") or {}).get("pct_change")
     y10 = snap.get("10-Yr Yield") or {}
@@ -3738,8 +3864,6 @@ def _check_growth_multiple_inversion(data: dict, snapshot: dict) -> list[str]:
     if bp is None:
         bp = y10.get("change")
     tailwind = (wti is not None and wti < -0.3) or (bp is not None and bp <= 0)
-    if not tailwind:
-        return []  # on an oil/yield-UP day, multiple compression is legitimate
     violations: list[str] = []
     for field in ("equities_commentary", "cross_asset_synthesis",
                   "market_outlook_rationale", "fixed_income_commentary"):
@@ -3747,10 +3871,21 @@ def _check_growth_multiple_inversion(data: dict, snapshot: dict) -> list[str]:
         if not isinstance(text, str) or not text:
             continue
         for sent in re.split(r"(?<=[.!?])\s+", text):
-            if _GM_COMPRESS_RE.search(sent) and _GM_DOWN_DRIVER_RE.search(sent):
+            if not _GM_COMPRESS_RE.search(sent):
+                continue
+            # (a) falling oil/yields — only wrong on a day they actually fell.
+            if tailwind and _GM_OILYIELD_DOWN_RE.search(sent):
                 violations.append(
                     f"{field}: falling oil/yields wrongly compressing growth multiples "
                     f"— \"{sent.strip()[:90]}\"")
+                break
+            # (b) de-escalation / premium removal — always inverted, unless the
+            #     phrase sits behind a concessive ("despite the deal").
+            deesc = _GM_DEESCALATION_RE.search(sent)
+            if deesc and not _GM_CONCESSIVE_RE.search(sent[:deesc.start()]):
+                violations.append(
+                    f"{field}: de-escalation/premium-removal wrongly compressing growth "
+                    f"multiples (disinflation relieves them) — \"{sent.strip()[:90]}\"")
                 break
     return violations[:4]
 
@@ -5215,13 +5350,20 @@ def _scrub_offuniverse_currency(data: dict) -> int:
     return 0
 
 
-# --- "Tomorrow's <event>" slip when the scenario event is actually today ------
+# --- "Tomorrow's <event>" / "Friday's <event>" slip when the event is actually today ----
 # The scenarios block carries the canonical event timing (scenario_event_day). When that is
 # "today" but the synthesis prose calls the same event "tomorrow's", the reader sees a
 # temporal contradiction side-by-side (2026-06-04: "Tomorrow's Initial Jobless Claims" in
 # Today's Take while the Scenarios header, econ calendar, and What-to-Watch all said today).
-# Only the unambiguous today-case is corrected; a genuinely future event is left alone, and a
-# "tomorrow" referring to a different (truly later) event is never touched (proximity gated).
+# 2026-06-18 extension: the prose also attached the WRONG WEEKDAY NAME — "Friday's Philly Fed"
+# when Philly Fed printed today/Thursday (and Fri 6/19 was Juneteenth, market closed). We
+# rewrite a weekday possessive near a TODAY event to "today's" — but ONLY when that weekday
+# isn't today's actual weekday, so a legitimately-correct "Friday's <event>" on a Friday is
+# left alone. Only the unambiguous today-case is corrected; a genuinely future event is left
+# alone, and a reference to a different (truly later) event is never touched (proximity gated).
+_WEEKDAY_NAMES = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+
+
 def _correct_event_day_slip(data: dict) -> int:
     event = str(data.get("scenario_event") or "").strip()
     day = str(data.get("scenario_event_day") or "").strip().lower()
@@ -5229,29 +5371,100 @@ def _correct_event_day_slip(data: dict) -> int:
         return 0
     ev_rx = re.compile(re.escape(event), re.IGNORECASE)
     tom_rx = re.compile(r"\btomorrow(?:'s|’s)?\b", re.IGNORECASE)
+    # Weekday-name possessive corrector — gated on a confirmed "today" event (not the empty
+    # case, since an unknown day can't disprove a weekday name) and on knowing today's weekday.
+    wd_rx = None
+    if day == "today":
+        _today_wd = ""
+        try:
+            from datetime import date as _date
+            _rd = str(data.get("report_date") or data.get("narrative_source_date") or "")[:10]
+            if _rd:
+                _today_wd = _date.fromisoformat(_rd).strftime("%A").lower()
+        except Exception:
+            _today_wd = ""
+        _wrong = [w for w in _WEEKDAY_NAMES if w != _today_wd]
+        if _wrong:
+            wd_rx = re.compile(r"\b(" + "|".join(_wrong) + r")(?:'s|’s)\b", re.IGNORECASE)
 
     def _fix(text: str) -> str:
-        if not ev_rx.search(text) or not tom_rx.search(text):
+        if not ev_rx.search(text):
             return text
         spans = [m.span() for m in ev_rx.finditer(text)]
 
         def _near_event(pos: int) -> bool:
             return any(s - 50 <= pos <= e + 50 for s, e in spans)
 
-        out, last = [], 0
-        for m in tom_rx.finditer(text):
-            if not _near_event(m.start()):
-                continue
-            tok = m.group(0)
-            base, suffix = tok[:8], tok[8:]          # "Tomorrow" + "" | "'s" | "’s"
-            repl = ("Today" if base[0].isupper() else "today") + suffix
-            out.append(text[last:m.start()])
-            out.append(repl)
-            last = m.end()
-        out.append(text[last:])
-        return "".join(out)
+        def _event_just_after(end: int) -> bool:
+            # An event mention starts within ~25 chars AFTER this token — i.e. the token is a
+            # day-label modifying the event ("Friday's Philly Fed"), not a stray nearby weekday.
+            return any(end <= s <= end + 25 for s, e in spans)
+
+        def _replace(rx, target: str, forward_only: bool = False) -> None:
+            """Rewrite the day word in tokens matched by `rx` to `target`, preserving the
+            possessive suffix ('s / ’s) and lead capitalization. `forward_only` restricts the
+            match to a day-label that DIRECTLY precedes the event (avoids rewriting a different
+            day legitimately mentioned nearby)."""
+            nonlocal text
+            out, last = [], 0
+            for m in rx.finditer(text):
+                ok = _event_just_after(m.end()) if forward_only else _near_event(m.start())
+                if not ok:
+                    continue
+                tok = m.group(0)
+                mposs = re.search(r"(['’]s)$", tok)        # trailing possessive, if any
+                suffix = mposs.group(1) if mposs else ""
+                repl = (target.capitalize() if tok[0].isupper() else target) + suffix
+                out.append(text[last:m.start()])
+                out.append(repl)
+                last = m.end()
+            out.append(text[last:])
+            text = "".join(out)
+
+        _replace(tom_rx, "today")                          # tomorrow → today (proximity)
+        if wd_rx is not None:
+            _replace(wd_rx, "today", forward_only=True)    # "Friday's <event>" → "today's <event>"
+        return text
 
     return _map_all_prose(data, _fix)
+
+
+# --- #3 belt-and-suspenders: same-day tactical stance vs multi-week outlook ----
+# The deterministic Quant Tactical Read (tactical_positioning.stance) is a SAME-DAY
+# sector-tilt read; market_outlook_label is the LLM's 4-6 week equity view. They can
+# legitimately diverge — a one-session bounce inside a bearish regime — but a bald
+# "Risk-on, pro-cyclical" badge sitting beside a "Bearish" stamp reads as a
+# self-contradiction (2026-06-18: "Quant Tactical Read: RISK-ON ... Tech leading +2.5%"
+# under a BEARISH stance stamped everywhere else). Item #2 (sector-data integrity) fixes
+# the usual root cause — stale/partial sector bars flipping the stance — but when a genuine
+# one-day move still points opposite the multi-week call, append a one-clause reconciliation
+# to stance_detail framing it as a single session within the multi-week view, rather than
+# forcing the two horizons to agree. Same philosophy as the trailing-1M-vs-today factor_read
+# reconciliation already in build_tactical_positioning.
+def _reconcile_tactical_stance_with_outlook(data: dict) -> int:
+    tp = data.get("tactical_positioning")
+    if not isinstance(tp, dict):
+        return 0
+    stance = str(tp.get("stance") or "").strip()
+    label_raw = str(data.get("market_outlook_label") or "").strip()
+    if not stance or not label_raw:
+        return 0
+    low = stance.lower()
+    label = label_raw.lower()
+    tactical_riskon  = low.startswith(("risk-on", "pro-cyclical"))
+    tactical_riskoff = low.startswith(("risk-off", "defensive"))
+    label_bear = label in ("bearish", "cautious")
+    label_bull = label == "bullish"
+    conflict = (tactical_riskon and label_bear) or (tactical_riskoff and label_bull)
+    if not conflict:
+        return 0
+    note = (f" Note: this is a single-session sector tilt; the {label_raw} call is the "
+            f"4-6 week view.")
+    detail = str(tp.get("stance_detail") or "").rstrip()
+    if note.strip() in detail:
+        return 0
+    tp["stance_detail"] = (detail + note) if detail else note.strip()
+    return 1
 
 
 # --- ungrounded Fed-official attribution scrub --------------------------------
@@ -5640,6 +5853,7 @@ def sanitize_commentary(data: dict, snapshot: dict | None = None, source_text: s
     total += _scrub_safe_haven_inversion(data)
     total += _scrub_offuniverse_currency(data)
     total += _correct_event_day_slip(data)
+    total += _reconcile_tactical_stance_with_outlook(data)
     total += _scrub_unreleased_econ_prints(data)
     total += _scrub_unreleased_event_attribution(data)
     total += _strip_unanchored_scenario_thresholds(data.get("scenarios"), data.get("scenario_consensus"))
@@ -6300,6 +6514,12 @@ def generate_topic_spotlight(
     _selected = market_movers.select_spotlight_candidate(
         [c for c in (_mover_cand, _theme_cand) if c]) or _theme_cand
 
+    # Earnings grounding for a single-name mover: if the mover reported its own
+    # earnings today (or within the recent-actuals window), the move is an EARNINGS
+    # reaction — not the day's macro/geopolitical theme. Without this, a dominant
+    # wire theme hijacks the attribution (2026-06-18: Accenture's -17% earnings/
+    # guidance drop was written up as caused by the "Iran war").
+    earnings_grounding: dict | None = None
     if _selected and _selected.get("kind") == "mover":
         print(f"  [SPOTLIGHT] Mover wins slot: {_selected['mover_ticker']} "
               f"{_selected['mover_pct'] * 100:+.1f}% (share {_selected['headline_share']:.2f}).")
@@ -6309,6 +6529,28 @@ def generate_topic_spotlight(
         category       = _selected["category"]
         scan_funds     = list(_selected["candidate_funds"])
         matching       = [h for h in headline_corpus if _topic_matches_text(topic_keywords, h["text"])]
+
+        _mv = str(_selected.get("mover_ticker") or "").upper().strip()
+        _today_str = str(payload.get("date", ""))[:10]
+        _earn_today = [e for e in (payload.get("earnings_calendar") or [])
+                       if str(e.get("ticker", "")).upper().strip() == _mv
+                       and str(e.get("date", ""))[:10] == _today_str]
+        _earn_recent = [e for e in (payload.get("recent_earnings_actuals") or [])
+                        if str(e.get("ticker", "")).upper().strip() == _mv]
+        if _earn_today or _earn_recent:
+            _rec = (_earn_recent or _earn_today)[0]
+            earnings_grounding = {
+                "ticker": _mv,
+                "note": (f"{_mv} reported its own earnings "
+                         f"{'today' if _earn_today else 'recently'} — this move is an "
+                         f"earnings/guidance reaction, NOT the day's macro or geopolitical theme. "
+                         f"Attribute it to the company's results, revenue/guidance, bookings, or "
+                         f"segment performance."),
+                "eps_actual":       _rec.get("eps_actual"),
+                "eps_estimate":     _rec.get("eps_estimate"),
+                "eps_surprise_pct": _rec.get("eps_surprise_pct"),
+            }
+            print(f"  [SPOTLIGHT] {_mv} reports earnings — grounding attribution in earnings, not theme.")
 
     # ── Fund grounding: crawl topic articles + verify tickers ─────────────────
     candidate_tickers = list(scan_funds)
@@ -6378,6 +6620,10 @@ def generate_topic_spotlight(
         ],
         "date": payload.get("date", ""),
     }
+    # When the mover reported earnings, force attribution to the company's results
+    # rather than the day's dominant wire theme (see earnings_grounding above).
+    if earnings_grounding:
+        writer_payload["earnings_grounding"] = earnings_grounding
     # Seed the writer with the actual closing directions so it is less likely to
     # invent a move that contradicts the tape on the first pass.
     if market_dirs:
@@ -6518,6 +6764,16 @@ def main() -> int:
 
     currencies_tbl   = fetch_currencies_table(prev_data=_prev.get("currencies_table"))
     print(f"  [OK] Currencies: {len(currencies_tbl)} pairs")
+
+    # Gold: the snapshot and commodities table fetch gold independently through the
+    # three-tier spot/proxy/futures fallback, so an intermittent XAUUSD=X 404 on one call
+    # can split them across tiers (divergent level AND sign — 2026-06-18 cross-wire). Force
+    # both onto the better-tier quote so the snapshot, prose, and table can never disagree.
+    _gold_canon = _reconcile_gold(snapshot, commodities_tbl)
+    if _gold_canon:
+        print(f"  [OK] Gold reconciled across snapshot & commodities table: "
+              f"${_gold_canon.get('level')} ({_gold_canon.get('pct_change')}%) "
+              f"src={_gold_canon.get('_source')}")
 
     bonds_tbl        = fetch_bonds_table()
     print(f"  [OK] Bonds: {len(bonds_tbl)} instruments")
