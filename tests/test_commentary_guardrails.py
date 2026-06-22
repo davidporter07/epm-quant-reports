@@ -1625,3 +1625,59 @@ def test_plain_risk_on_rally_is_clean():
     # Correct usage: risk-on + equities up. Must never flag.
     data = {"equities_commentary": "Risk-on flows lifted the S&P 500 as cyclicals led."}
     assert gmc._check_risk_polarity_inversion(data, _RISKON_SNAP) == []
+
+
+# --- 2026-06-22: global central-bank event harvester (#1 macro feed) ---------
+# The econ calendar is US-only; foreign CB decisions reach the LLM only via the news
+# wire. EPM missed the BOJ 25bp hike on 6/18 and 6/22.
+
+def test_boj_hike_harvested_from_news_dict():
+    buckets = {"economy": [
+        "Bank of Japan raises rates 25 bp to highest since 1995 in hawkish surprise",
+        "Some unrelated equity headline about chips"]}
+    rows = gmc._harvest_global_macro_from_news(buckets)
+    assert any(r["institution"] == "BOJ" for r in rows)
+
+
+def test_ecb_hold_harvested_from_flat_list():
+    rows = gmc._harvest_global_macro_from_news([
+        "ECB holds rates steady, signals data-dependent path ahead"])
+    assert any(r["institution"] == "ECB" for r in rows)
+
+
+def test_central_bank_mention_without_action_not_harvested():
+    # A speaker mention with no policy action must NOT register as an event.
+    rows = gmc._harvest_global_macro_from_news([
+        "ECB's Lagarde to attend a panel discussion in Frankfurt next week"])
+    assert rows == []
+
+
+def test_non_central_bank_headline_ignored():
+    rows = gmc._harvest_global_macro_from_news([
+        "Apple unveils new product lineup; analysts raise price targets"])
+    # "raise" is an action token but no CB institution → must not register.
+    assert rows == []
+
+
+def test_global_macro_harvest_dedupes_by_institution():
+    rows = gmc._harvest_global_macro_from_news([
+        "Bank of Japan hikes to 31-year high",
+        "BOJ raises rates again in surprise move",
+        "ECB cuts 25 bp"])
+    insts = [r["institution"] for r in rows]
+    assert insts.count("BOJ") == 1 and "ECB" in insts
+
+
+def test_speculative_rate_chatter_not_harvested():
+    # The exact 6/22 live false-positive: speculative India/RBI commentary, no decision.
+    rows = gmc._harvest_global_macro_from_news([
+        "Falling crude oil prices might boost growth beyond central bank forecasts, "
+        "potentially easing rate hike needs for the RBI"])
+    assert rows == []
+
+
+def test_future_tense_cb_announcement_not_harvested():
+    # "to hike next week" / "will raise" are not DECISIONS.
+    rows = gmc._harvest_global_macro_from_news([
+        "ECB expected to hike next week; BOJ may raise rates if inflation persists"])
+    assert rows == []

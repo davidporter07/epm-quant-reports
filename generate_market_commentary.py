@@ -2299,6 +2299,7 @@ watch_today: Array of exactly 3 strings — actionable items for TODAY's session
   [2] Technical level or market structure: one specific price level or spread to monitor.
 
 international_section: 3-4 sentences covering non-US market impact on US outlook. Use global_markets and international_macro data. Include at least one of: EU/ECB, Japan/BOJ, China/Asia. Connect explicitly to how it affects US equities, rates, or commodities.
+  CENTRAL-BANK PRIORITY: if international_macro.global_central_bank_events is non-empty, you MUST lead this section with the most material action listed there — name the institution, state the action exactly as the headline reports it (e.g. "the BOJ raised its policy rate 25 bp to a 31-year high"), and give the read-through to US Treasury yields, the dollar, or equities. Do NOT invent or assume any central-bank action that is not in that list, and do NOT overstate one that is.
 
 Tickers in recent_earnings_actuals have ALREADY released earnings this week — never write "later this week" or "upcoming earnings" for them in watch_today or session_recap.
 
@@ -5677,6 +5678,79 @@ def _harvest_fed_speakers_from_news(headlines, existing_speakers=None) -> list[d
     return rows
 
 
+# --- global central-bank event harvester --------------------------------------
+# The economic calendar is US-only by design (fetch_economic_calendar._SKIP_KEYWORDS
+# explicitly drops "bank of japan", "key ecb", "swiss national bank", etc.), so a
+# foreign central-bank DECISION never reaches the LLM through the calendar. Sevens
+# leads its macro recap with these (2026-06-18/22: a BOJ 25bp hike to a 31-year high;
+# EPM missed it both days). There is no unified free feed of global CB decisions, but
+# they surface in the same news wire we already crawl ("BOJ raises rates to highest
+# since 1995", "ECB holds, signals..."). Mirror the Fed-speaker harvest: scan the
+# corpus for an institution token co-occurring with a policy-action token, dedupe by
+# institution, and hand the LLM a structured list it must lead the international
+# section with (and must not invent beyond).
+# US-material majors only. RBI/RBNZ/Banxico are deliberately excluded: their decisions
+# carry little US read-through and India/RBI is the dominant foreign-domestic NOISE in
+# this wire (the existing _us_relevance_score already de-prioritizes it) — surfacing RBI
+# commentary as a "must-lead" macro event would be worse than the status quo.
+_GLOBAL_CB = {
+    "BOJ":  ("bank of japan", "boj"),
+    "ECB":  ("european central bank", "ecb"),
+    "BoE":  ("bank of england", "boe"),
+    "PBoC": ("people's bank of china", "people’s bank of china", "pboc"),
+    "RBA":  ("reserve bank of australia", "rba"),
+    "BoC":  ("bank of canada",),
+    "SNB":  ("swiss national bank", "snb"),
+}
+# A DECISIVE policy action — an actual decision, not speculation or a preview. Bare
+# nouns ("rate hike needs", "rate-cut bets") and conditionals ("might ease", "to hike
+# next week", "will raise") are deliberately NOT matched: only past/present-decisive
+# verbs, a basis-point move WITH a direction, or a milestone ("highest since / N-year
+# high") count. This is what kept the 2026-06-22 RBI commentary ("potentially easing
+# rate hike needs") out — speculative, no decisive verb.
+_CB_DECISIVE_RE = re.compile(
+    r"\b(?:hiked|hikes|raised|raises|cut|cuts|lowered|lowers|trimmed|slashed|"
+    r"held|holds|kept|stood\s+pat|left\s+(?:rates?|policy)[^.;]{0,20}unchanged|"
+    r"raised?\s+its?\s+benchmark|deliver\w+\s+(?:a\s+)?\d+\s*bps?)\b"
+    r"|\b\d+\s*bps?\b[^.;]{0,15}\b(?:hike|cut|increase|reduction|rise|move|decision)\b"
+    r"|\b(?:hike|cut|increase|reduction)\s+of\s+\d+\s*bps?\b"
+    r"|\bhighest\s+since\b|\b\d+-year\s+high\b",
+    re.IGNORECASE)
+
+
+def _harvest_global_macro_from_news(news_buckets) -> list[dict]:
+    """Extract foreign central-bank DECISIONS from the news corpus.
+
+    Accepts the merged bucket dict (cat -> list[str]) or a flat list of headline
+    strings. Returns up to 5 rows shaped {"institution","headline"} deduped by
+    institution (first material mention wins). Requires a US-material major AND a
+    DECISIVE action token in the same headline — speculative/preview chatter and
+    low-relevance foreign-domestic CBs (RBI etc.) are screened out by construction."""
+    if isinstance(news_buckets, dict):
+        headlines = [h for items in news_buckets.values() for h in (items or [])]
+    else:
+        headlines = list(news_buckets or [])
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for raw in headlines:
+        text = str(raw or "").strip()
+        if not text or len(text) < 8:
+            continue
+        if not _CB_DECISIVE_RE.search(text):
+            continue
+        low = text.lower()
+        for inst, tokens in _GLOBAL_CB.items():
+            if inst in seen:
+                continue
+            if any(tok in low for tok in tokens):
+                rows.append({"institution": inst, "headline": text[:200]})
+                seen.add(inst)
+                break
+        if len(rows) >= 5:
+            break
+    return rows
+
+
 def _scrub_ungrounded_fed_attribution(data: dict, source_text: str) -> int:
     src = (source_text or "").lower()
     grounded = {n.lower() for n in _FED_SURNAMES if n.lower() in src}
@@ -7069,6 +7143,18 @@ def main() -> int:
     LLM_PER_BUCKET = 6
     llm_buckets = {cat: items[:LLM_PER_BUCKET] for cat, items in merged_buckets.items()}
 
+    # Foreign central-bank ACTIONS harvested from the news wire — the econ calendar is
+    # US-only, so this is the only path a BOJ/ECB/BoE decision reaches the LLM. Sevens
+    # leads its macro recap with these; EPM missed the BOJ hike on 6/18 and 6/22.
+    try:
+        _global_cb = _harvest_global_macro_from_news(merged_buckets)
+        if _global_cb:
+            print(f"[MACRO] +{len(_global_cb)} global central-bank event(s) harvested from news: "
+                  f"{', '.join(r['institution'] for r in _global_cb)}")
+    except Exception as _me:
+        print(f"[WARN] Global macro news-harvest skipped: {_me}")
+        _global_cb = []
+
     # Build international macro context block for LLM
     international_macro = {
         "eur_usd":    fred.get("eur_per_usd", {}) if isinstance(fred, dict) else {},
@@ -7080,6 +7166,8 @@ def main() -> int:
         # OECD Composite Leading Indicators — monthly economic momentum by country
         # value >100 = above long-run trend (expansionary); trend = improving/deteriorating
         "oecd_cli":   oecd_cli,
+        # Foreign central-bank decisions from the news wire (may be empty)
+        "global_central_bank_events": _global_cb,
     }
 
     # Derive authoritative DXY direction so the LLM writes consistent currency commentary.
