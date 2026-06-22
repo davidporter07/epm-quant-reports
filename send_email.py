@@ -1337,9 +1337,17 @@ def main(argv=None) -> int:
 
         logging.info(f" Sending to {len(_pending)} pending recipient(s)...")
         for rec in _pending:
+            # Route the INTERNAL recipient via Gmail, not Resend. On 2026-06-22 a Resend
+            # send to the internal address was accepted (SMTP 250) but never delivered —
+            # a silent drop the ledger cannot see. Gmail (legacy sender) is the proven
+            # path for the internal ops copy; subscribers keep the Resend domain sender
+            # (outward-facing product mail). Mirrors the internal-alerts routing. Only
+            # forced when Gmail creds exist, so it can never regress to a hard failure.
+            _is_internal = rec["email"].strip().lower() == TO.strip().lower()
+            _provider_pref = "gmail" if (_is_internal and email_service.gmail_configured()) else None
             try:
                 msg = build_email(to_addr=rec["email"], unsubscribe_url=rec.get("unsubscribe_url"))
-                _provider = email_service.send_raw(msg, [rec["email"]])
+                _provider = email_service.send_raw(msg, [rec["email"]], provider=_provider_pref)
                 _ledger = _sl.record_result(_ledger, rec["email"], ok=True, provider=_provider, error=None)
             except Exception as send_exc:
                 _err = str(send_exc)

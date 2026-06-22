@@ -373,3 +373,47 @@ def test_pdf_missing_default_warn_sends_anyway(monkeypatch):
     assert rc == 0
     assert send_called["n"] == 1
     assert marked["v"] is True
+
+
+# ---------------------------------------------------------------------------
+# 2026-06-22: internal recipient routes via Gmail (Resend silent-drop fix)
+# ---------------------------------------------------------------------------
+
+def test_internal_recipient_routes_via_gmail_subscriber_via_default(monkeypatch):
+    monkeypatch.setattr(se, "already_sent_today", lambda: False)
+    monkeypatch.setattr(se, "is_market_open", lambda: True)
+    monkeypatch.setattr(se.subprocess, "run", _ok_run)
+    monkeypatch.setattr(se, "_check_commentary_fresh", lambda today: None)
+    monkeypatch.setattr(se, "fetch_daily_recipients", lambda: _two_recipients())
+    monkeypatch.setattr(se.email_service, "gmail_configured", lambda: True)
+
+    seen = {}
+
+    def _capture(msg, to_addrs, *a, **k):
+        seen[to_addrs[0].strip().lower()] = k.get("provider")
+        return k.get("provider") or "resend"
+
+    monkeypatch.setattr(se.email_service, "send_raw", _capture)
+    assert se.main([]) == 0
+    assert seen[se.TO.strip().lower()] == "gmail"        # internal → Gmail
+    assert seen["sub@example.com"] is None               # subscriber → default (Resend)
+
+
+def test_internal_via_default_when_gmail_unconfigured(monkeypatch):
+    # If Gmail creds are absent the internal send must NOT be forced to gmail (no hard
+    # failure) — it falls back to the default provider path.
+    monkeypatch.setattr(se, "already_sent_today", lambda: False)
+    monkeypatch.setattr(se, "is_market_open", lambda: True)
+    monkeypatch.setattr(se.subprocess, "run", _ok_run)
+    monkeypatch.setattr(se, "_check_commentary_fresh", lambda today: None)
+    monkeypatch.setattr(se.email_service, "gmail_configured", lambda: False)
+
+    seen = {}
+
+    def _capture(msg, to_addrs, *a, **k):
+        seen[to_addrs[0].strip().lower()] = k.get("provider")
+        return "resend"
+
+    monkeypatch.setattr(se.email_service, "send_raw", _capture)
+    assert se.main([]) == 0
+    assert seen[se.TO.strip().lower()] is None           # not forced to gmail
