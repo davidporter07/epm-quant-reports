@@ -1468,6 +1468,137 @@ def fetch_world_news() -> list[dict]:
     return result
 
 
+# --- global central-bank decision feeds (official RSS) ------------------------
+# Authoritative, free, no-key source for foreign CB DECISIONS — the timely layer the
+# news wire and the US-only econ calendar both miss (EPM missed the BOJ hike on 6/18 &
+# 6/22). Mirrors the Fed calendar.json approach: pull each bank's official press/news
+# RSS, keep only recent DECISION-titled entries, and hand the LLM structured events.
+# SNB/PBoC are intentionally left to the news-wire harvester
+# (_harvest_global_macro_from_news) — no stable English decision RSS — so this set is
+# the high-US-impact majors with feeds verified reachable (2026-06-22).
+_CB_RSS_FEEDS = (
+    ("ECB", "https://www.ecb.europa.eu/rss/press.html"),
+    ("BoE", "https://www.bankofengland.co.uk/rss/news"),
+    ("BoC", "https://www.bankofcanada.ca/feed/"),
+    ("BOJ", "https://www.boj.or.jp/en/rss/whatsnew.xml"),
+    ("RBA", "https://www.rba.gov.au/rss/rss-cb-media-releases.xml"),
+)
+# A title denoting an actual POLICY DECISION/announcement — not a speech, data release,
+# or MINUTES (minutes lag and are lower-impact, so they are deliberately NOT matched).
+_CB_DECISION_TITLE_RE = re.compile(
+    r"monetary\s+policy\s+(?:decision|statement|assessment)"
+    r"|statement\s+on\s+monetary\s+policy"
+    r"|interest\s+rate\s+announcement"
+    r"|\bbank\s+rate\b|\bcash\s+rate\b"
+    r"|policy\s+rate\s+(?:decision|announcement)"
+    r"|rate\s+(?:decision|announcement)",
+    re.IGNORECASE)
+# Minutes are NOT a fresh decision — screen them even if a title also matches above.
+_CB_MINUTES_RE = re.compile(r"\bminutes\b", re.IGNORECASE)
+
+
+def _parse_rss_items(xml_text) -> list[dict]:
+    """Namespace-agnostic RSS/RDF/Atom item extractor. Returns [{title,link,summary,date}]
+    with date a datetime or None. Handles RSS 2.0 (pubDate), RSS 1.0/RDF (dc:date) and
+    Atom (published/updated) by matching each tag's LOCAL name, so one walk covers all
+    three formats the central-bank feeds use."""
+    import xml.etree.ElementTree as ET
+    from email.utils import parsedate_to_datetime
+    from datetime import datetime as _dt
+    try:
+        root = ET.fromstring(xml_text.encode("utf-8") if isinstance(xml_text, str) else xml_text)
+    except Exception:
+        return []
+
+    def _local(tag: str) -> str:
+        return str(tag).rsplit("}", 1)[-1].lower()
+
+    def _parse_date(s: str):
+        s = (s or "").strip()
+        if not s:
+            return None
+        try:
+            return parsedate_to_datetime(s)                       # RFC822 (RSS 2.0)
+        except Exception:
+            pass
+        try:
+            return _dt.fromisoformat(s.replace("Z", "+00:00"))   # ISO (dc:date / Atom)
+        except Exception:
+            return None
+
+    items: list[dict] = []
+    for el in root.iter():
+        if _local(el.tag) not in ("item", "entry"):
+            continue
+        row = {"title": "", "link": "", "summary": "", "date": None}
+        for child in el:
+            ln = _local(child.tag)
+            txt = (child.text or "").strip()
+            if ln == "title" and not row["title"]:
+                row["title"] = txt
+            elif ln == "link":
+                row["link"] = txt or child.get("href", "") or row["link"]
+            elif ln in ("description", "summary", "content") and not row["summary"]:
+                row["summary"] = re.sub(r"<[^>]+>", "", txt)[:300]
+            elif ln in ("pubdate", "date", "published", "updated") and row["date"] is None:
+                row["date"] = _parse_date(txt)
+        if row["title"]:
+            items.append(row)
+    return items
+
+
+def fetch_global_cb_decisions(recency_days: int = 5, now=None) -> list[dict]:
+    """Foreign central-bank DECISIONS from official RSS, filtered to the last
+    `recency_days`. Returns up to 6 rows {institution, headline, date, summary, url},
+    newest first, one per institution. Per-feed try/except — a dead feed never breaks
+    the run; total failure returns []. `now` is injectable for testing."""
+    from datetime import datetime, timezone, timedelta
+    _now = now or datetime.now(timezone.utc)
+    cutoff = _now - timedelta(days=recency_days)
+    rows: list[dict] = []
+    for inst, url in _CB_RSS_FEEDS:
+        try:
+            resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+            if resp.status_code != 200 or not resp.text:
+                continue
+            for it in _parse_rss_items(resp.text):
+                title = it["title"]
+                if not _CB_DECISION_TITLE_RE.search(title) or _CB_MINUTES_RE.search(title):
+                    continue
+                dt = it["date"]
+                # Require a real date in the PAST window. Several feeds (e.g. BoC) list
+                # FUTURE scheduled announcements in advance — surfacing one as a decision
+                # would be a temporal-grounding error ("the BoC announced..." before it
+                # has). Undated entries are dropped: we can't confirm they are fresh.
+                if dt is None:
+                    continue
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                if dt < cutoff or dt > _now:
+                    continue
+                rows.append({
+                    "institution": inst,
+                    "headline": title[:200],
+                    "date": (dt.date().isoformat() if dt else ""),
+                    "summary": it["summary"][:300],
+                    "url": it["link"],
+                    "_dt": dt,
+                })
+        except Exception as exc:
+            print(f"[WARN] CB RSS fetch failed ({inst}): {exc}")
+    _floor = datetime.min.replace(tzinfo=timezone.utc)
+    rows.sort(key=lambda r: (r.get("_dt") or _floor), reverse=True)
+    seen: set[str] = set()
+    out: list[dict] = []
+    for r in rows:
+        if r["institution"] in seen:
+            continue
+        seen.add(r["institution"])
+        r.pop("_dt", None)
+        out.append(r)
+    return out[:6]
+
+
 def _fetch_fed_speakers_json(today_str: str) -> list[dict]:
     """Today's Fed speaker events from the Fed's structured calendar JSON feed.
 
@@ -7216,16 +7347,22 @@ def main() -> int:
     LLM_PER_BUCKET = 6
     llm_buckets = {cat: items[:LLM_PER_BUCKET] for cat, items in merged_buckets.items()}
 
-    # Foreign central-bank ACTIONS harvested from the news wire — the econ calendar is
-    # US-only, so this is the only path a BOJ/ECB/BoE decision reaches the LLM. Sevens
-    # leads its macro recap with these; EPM missed the BOJ hike on 6/18 and 6/22.
+    # Foreign central-bank decisions — the econ calendar is US-only, so this is the only
+    # path a BOJ/ECB/BoE decision reaches the LLM. Sevens leads its macro recap with
+    # these; EPM missed the BOJ hike on 6/18 and 6/22. PRIMARY = official RSS decision
+    # feeds (authoritative, timely); FALLBACK = the news wire for banks without a feed
+    # (SNB/PBoC) or when a feed is down. RSS wins on overlap.
     try:
-        _global_cb = _harvest_global_macro_from_news(merged_buckets)
+        _global_cb = fetch_global_cb_decisions()
+        _have = {r["institution"] for r in _global_cb}
+        _wire = _harvest_global_macro_from_news(merged_buckets)
+        _global_cb = _global_cb + [w for w in _wire if w.get("institution") not in _have]
         if _global_cb:
-            print(f"[MACRO] +{len(_global_cb)} global central-bank event(s) harvested from news: "
+            print(f"[MACRO] {len(_global_cb)} central-bank event(s) "
+                  f"({len(_have)} RSS + {len(_global_cb) - len(_have)} wire): "
                   f"{', '.join(r['institution'] for r in _global_cb)}")
     except Exception as _me:
-        print(f"[WARN] Global macro news-harvest skipped: {_me}")
+        print(f"[WARN] Global macro feed skipped: {_me}")
         _global_cb = []
 
     # Build international macro context block for LLM

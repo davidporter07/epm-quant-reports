@@ -1725,3 +1725,64 @@ def test_desk_read_models_concur_riskon():
 def test_desk_read_empty_on_thin_inputs():
     assert gmc._build_quant_desk_read({"stance": "Risk-on"}, {}) == ""
     assert gmc._build_quant_desk_read({}, _MAG7_DEFENSIVE) == ""
+
+
+# --- 2026-06-22: official central-bank decision RSS feed (#1 dedicated source) ---
+class _FakeRSSResp:
+    def __init__(self, text, status=200):
+        self.text = text
+        self.status_code = status
+
+
+def test_cb_decision_title_regex_matches_decisions_not_speeches():
+    R = gmc._CB_DECISION_TITLE_RE
+    assert R.search("Monetary policy decisions")
+    assert R.search("Statement on Monetary Policy")
+    assert R.search("Interest Rate Announcement")
+    assert R.search("Bank Rate maintained at 4.00%")
+    assert not R.search("Christine Lagarde: Hearing of the Committee on Economic Affairs")
+    assert not R.search("ECB publishes consolidated banking data")
+
+
+def test_parse_rss_items_handles_rdf_dc_date():
+    rdf = ('<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" '
+           'xmlns="http://purl.org/rss/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/">'
+           '<item rdf:about="http://x"><title>Interest Rate Announcement</title>'
+           '<link>http://x</link><dc:date>2026-06-04T10:00:00-04:00</dc:date></item></rdf:RDF>')
+    items = gmc._parse_rss_items(rdf)
+    assert items and items[0]["title"] == "Interest Rate Announcement"
+    assert items[0]["date"] is not None
+
+
+def test_fetch_global_cb_decisions_filters_recency_minutes_and_dedupes(monkeypatch):
+    from datetime import datetime, timezone
+    now = datetime(2026, 6, 22, tzinfo=timezone.utc)
+    rss = ('<?xml version="1.0"?><rss version="2.0"><channel>'
+           '<item><title>Bank Rate maintained at 4.00% - June 2026</title><link>http://x/1</link>'
+           '<pubDate>Thu, 18 Jun 2026 12:00:00 +0100</pubDate>'
+           '<description>The MPC voted to maintain Bank Rate.</description></item>'
+           '<item><title>Minutes of the Monetary Policy Committee meeting</title><link>http://x/2</link>'
+           '<pubDate>Wed, 17 Jun 2026 09:00:00 +0100</pubDate></item>'
+           '<item><title>Governor speech on financial stability</title><link>http://x/3</link>'
+           '<pubDate>Thu, 18 Jun 2026 10:00:00 +0100</pubDate></item>'
+           '<item><title>Bank Rate decision</title><link>http://x/4</link>'
+           '<pubDate>Thu, 01 Jan 2026 12:00:00 +0000</pubDate></item>'
+           '<item><title>Interest Rate Announcement</title><link>http://x/5</link>'
+           '<pubDate>Wed, 09 Dec 2026 09:45:00 +0000</pubDate></item>'
+           '</channel></rss>')
+    monkeypatch.setattr(gmc, "_CB_RSS_FEEDS", (("BoE", "http://feed"),))
+    monkeypatch.setattr(gmc.requests, "get", lambda *a, **k: _FakeRSSResp(rss))
+    rows = gmc.fetch_global_cb_decisions(recency_days=5, now=now)
+    assert len(rows) == 1     # minutes + speech + stale + FUTURE-dated all dropped
+    assert rows[0]["institution"] == "BoE"
+    assert "Bank Rate maintained" in rows[0]["headline"]
+    assert rows[0]["date"] == "2026-06-18"
+    assert rows[0]["url"] == "http://x/1"
+
+
+def test_fetch_global_cb_decisions_dead_feed_is_safe(monkeypatch):
+    def _boom(*a, **k):
+        raise RuntimeError("network down")
+    monkeypatch.setattr(gmc, "_CB_RSS_FEEDS", (("ECB", "http://feed"),))
+    monkeypatch.setattr(gmc.requests, "get", _boom)
+    assert gmc.fetch_global_cb_decisions() == []
