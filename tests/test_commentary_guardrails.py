@@ -1681,3 +1681,47 @@ def test_future_tense_cb_announcement_not_harvested():
     rows = gmc._harvest_global_macro_from_news([
         "ECB expected to hike next week; BOJ may raise rates if inflation persists"])
     assert rows == []
+
+
+# --- 2026-06-22: Quant Desk Read synthesis (#2 quant moat) -------------------
+_TP_RISKON = {
+    "stance": "Risk-on, pro-cyclical",
+    "top_funds": [{"ticker": "EMEQ", "ret_1m": 21.4},
+                  {"ticker": "BPTIX", "ret_1m": 16.3, "beta": 1.066},
+                  {"ticker": "XNTK", "ret_1m": 13.4, "beta": 1.627}],
+    "bottom_funds": [{"ticker": "XLG", "ret_1m": -2.6, "beta": 1.051},
+                     {"ticker": "RLY", "ret_1m": -4.0, "beta": 0.2596}],
+}
+_MAG7_DEFENSIVE = {"AAPL": {"consensus": 1.49}, "TSLA": {"consensus": 0.19},
+                   "AMZN": {"consensus": -3.76}, "MSFT": {"consensus": -1.0},
+                   "GOOGL": {"consensus": -0.5}, "META": {"consensus": -1.2},
+                   "NVDA": {"consensus": -2.0}}
+
+
+def test_desk_read_riskon_tape_vs_defensive_models():
+    out = gmc._build_quant_desk_read(_TP_RISKON, _MAG7_DEFENSIVE)
+    assert "agree on risk-on" in out
+    assert "β 1.35 vs laggards 0.66" in out
+    assert "skew defensive" in out
+    assert "AMZN weakest" in out
+    assert "soft spot rather than its engine" in out
+
+
+def test_desk_read_is_never_advice():
+    # Compliance: interpretive only — no directive verbs.
+    out = gmc._build_quant_desk_read(_TP_RISKON, _MAG7_DEFENSIVE).lower()
+    for word in ("buy", "sell", " lean", "trim", "overweight", "underweight", "we recommend"):
+        assert word not in out, f"desk read must not contain advice term {word!r}"
+
+
+def test_desk_read_models_concur_riskon():
+    mag7_bull = {"AAPL": {"consensus": 2.0}, "MSFT": {"consensus": 1.5},
+                 "NVDA": {"consensus": 3.0}, "META": {"consensus": 0.8},
+                 "AMZN": {"consensus": -0.5}}
+    out = gmc._build_quant_desk_read(_TP_RISKON, mag7_bull)
+    assert "models concur" in out and "risk-on" in out
+
+
+def test_desk_read_empty_on_thin_inputs():
+    assert gmc._build_quant_desk_read({"stance": "Risk-on"}, {}) == ""
+    assert gmc._build_quant_desk_read({}, _MAG7_DEFENSIVE) == ""

@@ -1187,6 +1187,79 @@ def build_tactical_positioning(
         return {}
 
 
+def _build_quant_desk_read(tp: dict, mag7_consensus: dict) -> str:
+    """Fuse EPM's three quant lenses — the day's sector-tilt STANCE, the portfolio
+    FACTOR tilt (leader vs laggard beta), and the MAG7 MODEL forecast — into one
+    interpretive 'Quant Desk Read'. This is the differentiated edge the Sevens cannot
+    reproduce (it has no model book): it surfaces AGREEMENT or DISSENT across the lenses.
+
+    INTERPRETIVE, never a directive — no buy/sell/lean/trim (2026-06-15 advice
+    constraint). Returns "" when inputs are too thin to synthesize."""
+    if not isinstance(tp, dict):
+        return ""
+    low = str(tp.get("stance") or "").lower()
+    tape_riskon = low.startswith(("risk-on", "pro-cyclical"))
+    tape_riskoff = low.startswith(("risk-off", "defensive"))
+    tb = [f.get("beta") for f in (tp.get("top_funds") or []) if f.get("beta") is not None]
+    bb = [f.get("beta") for f in (tp.get("bottom_funds") or []) if f.get("beta") is not None]
+    if not tb or not bb:
+        return ""
+    at, ab = sum(tb) / len(tb), sum(bb) / len(bb)
+    port_highbeta = at - ab > 0.2
+    port_lowbeta = ab - at > 0.2
+
+    cons = [v.get("consensus") for v in (mag7_consensus or {}).values()
+            if isinstance(v, dict) and v.get("consensus") is not None]
+    if not cons:
+        return ""
+    n = len(cons)
+    bullish = sum(1 for c in cons if c > 0)
+    bearish = sum(1 for c in cons if c < 0)
+    avg = sum(cons) / n
+    weakest, wv = None, None
+    for t, v in (mag7_consensus or {}).items():
+        c = v.get("consensus") if isinstance(v, dict) else None
+        if c is not None and (wv is None or c < wv):
+            wv, weakest = c, t
+    models_riskoff = avg < 0
+    models_riskon = avg > 0
+
+    # ── Part 1: the tape + the book (sector stance vs portfolio beta tilt) ──
+    if port_highbeta:
+        beta_clause = (f"high-beta names lead the 1-month leaderboard (leaders avg "
+                       f"β {at:.2f} vs laggards {ab:.2f})")
+    elif port_lowbeta:
+        beta_clause = (f"the 1-month leaderboard skews low-beta (leaders avg β {at:.2f} "
+                       f"vs laggards {ab:.2f})")
+    else:
+        beta_clause = f"the 1-month leaderboard shows no clear beta tilt (β {at:.2f} vs {ab:.2f})"
+    if tape_riskon and port_highbeta:
+        part1 = f"The book and the tape agree on risk-on — {beta_clause} and the sector tilt is pro-cyclical."
+    elif tape_riskoff and port_lowbeta:
+        part1 = f"The book and the tape agree on a defensive posture — {beta_clause} and the sector tilt is risk-off."
+    else:
+        _tape = "pro-cyclical" if tape_riskon else ("defensive" if tape_riskoff else "mixed")
+        part1 = f"The tape's tilt is {_tape} while {beta_clause}."
+
+    # ── Part 2: the MAG7 model lens — does it confirm or dissent? ──
+    bear_stats = f"{avg:+.2f}% consensus, {bearish} of {n} bearish" + (f", {weakest} weakest" if weakest else "")
+    bull_stats = f"{avg:+.2f}% consensus, {bullish} of {n} bullish"
+    if models_riskoff and tape_riskon:
+        part2 = (f"The dissent is in the models: MAG7 forecasts skew defensive ({bear_stats}), "
+                 f"so leadership is narrow and mega-cap tech screens as the rally's soft spot "
+                 f"rather than its engine.")
+    elif models_riskon and tape_riskoff:
+        part2 = (f"The models are more constructive than the tape ({bull_stats}), pointing to "
+                 f"mega-cap tech as a potential stabilizer if the defensive rotation fades.")
+    elif models_riskoff and tape_riskoff:
+        part2 = f"The models concur: MAG7 consensus is {bear_stats}, reinforcing the defensive read."
+    elif models_riskon and tape_riskon:
+        part2 = f"The models concur: MAG7 consensus is {bull_stats}, reinforcing the risk-on read."
+    else:
+        part2 = f"The MAG7 model lens is roughly balanced ({avg:+.2f}% consensus, {bullish} up / {bearish} down)."
+    return f"{part1} {part2}"
+
+
 def build_mag7_consensus(df: pd.DataFrame) -> dict[str, dict]:
     """Return per-ticker dict with consensus, confidence, agreement, winning model."""
     try:
@@ -7293,6 +7366,15 @@ def main() -> int:
     try:
         _vix_lvl = (tech_levels.get("VIX") or {}).get("current")
         existing["tactical_positioning"] = build_tactical_positioning(df, sector_perf, _vix_lvl)
+        # Quant Desk Read — fuse the sector stance, portfolio beta tilt, and MAG7 model
+        # forecast into one interpretive line (EPM's edge: the Sevens has no model book).
+        try:
+            _dr = _build_quant_desk_read(existing["tactical_positioning"], mag7_consensus)
+            if _dr:
+                existing["tactical_positioning"]["desk_read"] = _dr
+                print(f"[QUANT] Desk read: {_dr[:120]}...")
+        except Exception as _dre:
+            print(f"[WARN] quant desk read skipped: {_dre}")
     except Exception as _tp_exc:
         print(f"[WARN] tactical_positioning skipped: {_tp_exc}")
         existing["tactical_positioning"] = {}

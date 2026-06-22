@@ -1755,6 +1755,7 @@ def build_tactical_positioning_html(commentary: dict) -> str:
     detail   = str(tp.get("stance_detail") or "").strip()
     factor   = str(tp.get("factor_read")   or "").strip()
     take     = str(tp.get("takeaway")      or "").strip()
+    desk     = str(tp.get("desk_read")     or "").strip()
 
     # Colour the stance badge from its lead word.
     low = stance.lower()
@@ -1774,6 +1775,11 @@ def build_tactical_positioning_html(commentary: dict) -> str:
         f'<strong>Takeaway:</strong> {esc(take)}</div>'
         if take else ""
     )
+    desk_html = (
+        f'<div style="margin-top:5px;font-size:10pt;color:#111827;line-height:1.42;">'
+        f'<strong>Desk Read:</strong> {esc(desk)}</div>'
+        if desk else ""
+    )
     detail_html = (
         f'<div style="font-size:9.5pt;color:#374151;margin-top:2px;">{esc(detail)}{factor_html}</div>'
         if detail else (
@@ -1791,6 +1797,7 @@ def build_tactical_positioning_html(commentary: dict) -> str:
     <span style="font-size:8.5pt;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#6b7280;">Quant Tactical Read</span>
     <span class="badge {badge_cls}" style="font-size:10pt;padding:2px 9px;">{esc(stance)}</span>
   </div>
+  {desk_html}
   {detail_html}
   {take_html}
 </div>"""

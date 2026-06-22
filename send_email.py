@@ -553,6 +553,7 @@ def _build_tactical_block(c: dict) -> tuple[str, list]:
     detail   = str(tp.get('stance_detail') or '').strip()
     factor   = str(tp.get('factor_read')   or '').strip()
     take     = str(tp.get('takeaway')      or '').strip()
+    desk     = str(tp.get('desk_read')     or '').strip()
     tops     = tp.get('top_funds')    or []
     bots     = tp.get('bottom_funds') or []
 
@@ -606,6 +607,8 @@ def _build_tactical_block(c: dict) -> tuple[str, list]:
                    f'{html_lib.escape(factor)}</p>') if factor else ''
     take_html   = (f'<p style="margin:4px 0 0 0;font-size:12px;color:#111827;">'
                    f'<strong>Takeaway:</strong> {html_lib.escape(take)}</p>') if take else ''
+    desk_html   = (f'<p style="margin:7px 0 0 0;font-size:12px;color:#111827;line-height:1.45;">'
+                   f'<strong>Desk Read:</strong> {html_lib.escape(desk)}</p>') if desk else ''
 
     html_out = (
         '<div style="margin:14px 0 0 0;padding:10px 12px;background:#f8fafc;'
@@ -617,11 +620,12 @@ def _build_tactical_block(c: dict) -> tuple[str, list]:
         f'font-weight:700;background:{badge_bg};color:{badge_fg};">{html_lib.escape(stance)}</span>'
         f'<span style="font-size:11px;color:#6b7280;">{html_lib.escape(detail)}</span>'
         f'</div>'
-        f'{cols_html}{factor_html}{take_html}'
+        f'{desk_html}{cols_html}{factor_html}{take_html}'
         '</div>'
     )
     text_lines = ['QUANTITATIVE TACTICAL POSITIONING', '',
                   f'Stance: {stance}', f'  {detail}' if detail else '']
+    if desk: text_lines.append(f'  Desk Read: {desk}')
     if tops:
         text_lines.append('  Best-Positioned: ' + ', '.join(
             f"{f.get('ticker','')} ({float(f.get('ret_1m',0)):+.1f}% 1M)" for f in tops))
