@@ -1543,3 +1543,85 @@ def test_offuniverse_currency_scrub_is_idempotent():
     once = data["currencies_commentary"]
     gmc._scrub_offuniverse_currency(data)
     assert data["currencies_commentary"] == once
+
+
+# --- 2026-06-22: risk-on / risk-off polarity guard --------------------------
+# A clearly RISK-ON session (S&P +1.08% on Iran de-escalation, gold/oil falling as the
+# geopolitical premium unwound) was repeatedly labeled "risk-off". De-escalation that
+# drains the safe-haven bid while equities rally is risk-ON, not risk-off.
+_RISKON_SNAP = {"S&P 500": {"pct_change": 1.08}}
+_RISKOFF_SNAP = {"S&P 500": {"pct_change": -1.0}}
+
+
+def test_risk_off_supporting_equities_flagged_on_up_day():
+    # The exact 6/22 page-2 failure (family A).
+    data = {"equities_commentary": (
+        "The S&P 500 closed higher at 7,500.58 as U.S.-Iran peace talks provided a "
+        "risk-off backdrop that supported broad equities.")}
+    assert gmc._check_risk_polarity_inversion(data, _RISKON_SNAP)
+
+
+def test_risk_off_dominant_theme_flagged_on_up_day():
+    # The exact 6/22 synthesis failure framing (family B / C).
+    data = {"cross_asset_synthesis": (
+        "Risk-off sentiment from peace talks is the dominant cross-asset theme as the "
+        "dollar firms.")}
+    assert gmc._check_risk_polarity_inversion(data, _RISKON_SNAP)
+
+
+def test_falling_safe_haven_labeled_risk_off_flagged():
+    # The exact 6/22 commodities failure (family C) — falling silver called risk-off.
+    data = {"commodities_commentary": (
+        "Silver tumbled 6.28% to $66.26, reflecting broader risk-off sentiment in "
+        "precious metals.")}
+    assert gmc._check_risk_polarity_inversion(data, _RISKON_SNAP)
+
+
+def test_risk_on_with_falling_equities_flagged():
+    # Symmetric family A: risk-on label on a day equities fell.
+    data = {"cross_asset_synthesis": "Risk-on conditions pushed the S&P 500 sharply lower."}
+    assert gmc._check_risk_polarity_inversion(data, _RISKOFF_SNAP)
+
+
+def test_session_recap_list_field_is_scanned():
+    # session_recap is a list[str]; the guard must expand it.
+    data = {"session_recap": [
+        "S&P 500 closed higher at 7,500.58, +1.08%.",
+        "Gold slipped to $4,207 as risk-off sentiment gripped bullion.",
+        "WTI fell on easing supply fears."]}
+    assert gmc._check_risk_polarity_inversion(data, _RISKON_SNAP)
+
+
+def test_coherent_risk_off_on_down_day_is_clean():
+    # Genuine risk-off day: equities fell, havens bid. Must NOT flag.
+    data = {"cross_asset_synthesis": (
+        "Risk-off was the prevailing theme as the S&P 500 fell 1.2% and gold rallied "
+        "on a safe-haven bid.")}
+    assert gmc._check_risk_polarity_inversion(data, _RISKOFF_SNAP) == []
+
+
+def test_cross_asset_divergence_on_down_day_not_flagged():
+    # The exact false-positive we engineered against: a down-day verb on the OTHER asset.
+    data = {"cross_asset_synthesis": (
+        "Risk-off dominated the tape as the S&P 500 fell and Treasuries rallied.")}
+    assert gmc._check_risk_polarity_inversion(data, _RISKOFF_SNAP) == []
+
+
+def test_concessive_risk_off_divergence_is_clean():
+    # Explicitly-stated divergence with a concessive — coherent, must pass.
+    data = {"cross_asset_synthesis": (
+        "Equities rallied even as a residual bid for Treasuries signaled risk-off "
+        "caution beneath the surface.")}
+    assert gmc._check_risk_polarity_inversion(data, _RISKON_SNAP) == []
+
+
+def test_risk_off_fading_is_clean():
+    # "risk-off faded" = the regime DECREASING; falling havens are then correct.
+    data = {"fixed_income_commentary": "Treasuries fell as risk-off faded across the board."}
+    assert gmc._check_risk_polarity_inversion(data, _RISKON_SNAP) == []
+
+
+def test_plain_risk_on_rally_is_clean():
+    # Correct usage: risk-on + equities up. Must never flag.
+    data = {"equities_commentary": "Risk-on flows lifted the S&P 500 as cyclicals led."}
+    assert gmc._check_risk_polarity_inversion(data, _RISKON_SNAP) == []

@@ -2131,6 +2131,7 @@ Do NOT cite foreign central banks (BoE, ECB, BoJ, PBoC, RBA, BoC, SNB) or foreig
 COMMITTED VOICE: take a side. The reader pays to know what YOU think, not which way it could go. Forbidden: "investors should watch", "remains to be seen", "wait-and-see", "could go either way", "markets face headwinds", "cautious optimism", "the outlook is mixed", "uncertainty persists". State the directional view, then the conditions that would invalidate it.
 CAUSAL LINKAGE: every commentary section must name a cause and effect, not just describe a level. Wrong: "the 10-year yield fell 6 bp to 4.50%." Right: "the 10-year yield fell 6 bp to 4.50% as falling oil prices eased the inflation impulse, providing relief to growth-name multiples." Connect at least one named driver and one downstream effect.
 GROWTH-MULTIPLE DIRECTION (critical): Falling oil prices and falling Treasury yields are TAILWINDS for growth/tech equity multiples — they relieve discount-rate and inflation pressure, they do not compress it. NEVER attribute a technology or growth-equity selloff, or "compressed/compressing multiples", to lower oil or lower yields. If tech fell on a day when oil and/or yields also fell, the tech driver is its OWN story (AI-capex sustainability doubts, stretched valuations, a single-name disappointment, a broken deal) — name that driver, and treat the lower oil/yields as a partial OFFSET, not the cause. The only correct direction: oil/yields DOWN → multiples RELIEVED; oil/yields UP → multiples PRESSURED.
+RISK-ON / RISK-OFF POLARITY (critical): "risk-off" means investors flee TO safety — equities FALL while safe-havens (gold, Treasuries, the yen, VIX) RISE. "risk-on" is the mirror image — equities RISE while safe-havens fall. Match the label to the tape: if the S&P 500 closed higher and equities rallied, the regime is RISK-ON, even when the catalyst is geopolitical de-escalation — a peace deal or ceasefire that drains the safe-haven and oil-supply premium is RISK-ON, not risk-off. NEVER call falling gold or falling oil "risk-off sentiment" (a falling safe-haven is risk-ON), NEVER write that a "risk-off backdrop supported/lifted equities", and NEVER call risk-off "the dominant theme" on a day the S&P closed higher (and vice-versa for risk-on on a down day). The only exception is genuine cross-asset divergence, which you must state explicitly (e.g. "equities rallied even as a residual bid for Treasuries signaled lingering caution").
 RELEVANCE — NO TANGENTIAL COLOR (critical): Every causal clause must explain the session's actual price move or a near-term catalyst the reader is positioning for. Do NOT decorate a market line with color that does not move the tape: a public figure's reaction or endorsement (a politician's, central banker's, or clergy member's statement of thanks/approval), or a single company's distant forward-quarter revenue/earnings ESTIMATE, do not belong in a pre-market bullet or commentary sentence unless that specific item is what moved the price. If a detail is real but does not bear on the move or an imminent catalyst, omit it — restraint beats embellishment.
 FORWARD HOOK: each commentary section's closing sentence must name a specific price level, threshold, or catalyst the reader is watching next — never generic ("traders will be watching" is banned).
 Return ONLY valid JSON  no markdown fences, no explanation."""
@@ -3115,6 +3116,7 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
             numeric = _check_numeric_consistency(part1, snapshot)
             causal = _check_causal_logic(part1, snapshot)
             gm_inv = _check_growth_multiple_inversion(part1, snapshot)
+            risk_pol = _check_risk_polarity_inversion(part1, snapshot)
             direction = _check_direction_words(part1, snapshot)
             corp_actions = _check_fabricated_corporate_actions(part1)
             # When there are NO economic releases dated today, the narrative must not
@@ -3126,7 +3128,7 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
             editorial = _check_editorial_contradictions(part1, snapshot)
             if (not banned and not leaks and not numeric and not causal and not gm_inv and not dating
                     and not move_sig and not superlatives and not direction and not corp_actions
-                    and not editorial):
+                    and not editorial and not risk_pol):
                 break
             if banned:
                 print(f"  [RETRY] Attempt {attempt + 1} still contained banned phrases after scrub: {banned}. Retrying...")
@@ -3138,6 +3140,8 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
                 print(f"  [RETRY] Attempt {attempt + 1} had causal logic inversions: {causal}. Retrying...")
             if gm_inv:
                 print(f"  [RETRY] Attempt {attempt + 1} blamed multiple compression on falling oil/yields: {gm_inv}. Retrying...")
+            if risk_pol:
+                print(f"  [RETRY] Attempt {attempt + 1} mislabeled the session's risk regime: {risk_pol}. Retrying...")
             if dating:
                 print(f"  [RETRY] Attempt {attempt + 1} dated a non-today event as today: {dating}. Retrying...")
             if move_sig:
@@ -3313,12 +3317,15 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
             part3 = scrub_banned_phrases(part3)
             banned = find_banned_phrases(part3)
             leaks = find_leaked_placeholders(part3)
-            if not banned and not leaks:
+            risk_pol3 = _check_risk_polarity_inversion(part3, snapshot)
+            if not banned and not leaks and not risk_pol3:
                 break
             if banned:
                 print(f"  [RETRY] Attempt {attempt + 1} still contained banned phrases after scrub: {banned}. Retrying...")
             if leaks:
                 print(f"  [RETRY] Attempt {attempt + 1} contained leaked placeholders: {leaks}. Retrying...")
+            if risk_pol3:
+                print(f"  [RETRY] Attempt {attempt + 1} recap mislabeled the session's risk regime: {risk_pol3}. Retrying...")
         except Exception as exc:
             print(f"  [WARN] Recap call failed (attempt {attempt + 1}): {exc}")
             part3 = {}
@@ -3387,7 +3394,8 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
             dating = _check_event_dating(part4, today_has_econ=bool(today_econ))
             yld_err = _check_synthesis_yield_direction(part4, snapshot)
             gm_inv4 = _check_growth_multiple_inversion(part4, snapshot)
-            if not banned and not leaks and not dating and not yld_err and not gm_inv4:
+            risk_pol4 = _check_risk_polarity_inversion(part4, snapshot)
+            if not banned and not leaks and not dating and not yld_err and not gm_inv4 and not risk_pol4:
                 break
             if banned:
                 print(f"  [RETRY] Attempt {attempt + 1} synthesis still had banned phrases: {banned}. Retrying...")
@@ -3399,6 +3407,8 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
                 print(f"  [RETRY] Attempt {attempt + 1} 10Y direction wrong: {yld_err}. Retrying...")
             if gm_inv4:
                 print(f"  [RETRY] Attempt {attempt + 1} synthesis blamed multiple compression on falling oil/yields: {gm_inv4}. Retrying...")
+            if risk_pol4:
+                print(f"  [RETRY] Attempt {attempt + 1} synthesis mislabeled the session's risk regime: {risk_pol4}. Retrying...")
         except Exception as exc:
             print(f"  [WARN] Synthesis call failed (attempt {attempt + 1}): {exc}")
             part4 = {}
@@ -3887,6 +3897,125 @@ def _check_growth_multiple_inversion(data: dict, snapshot: dict) -> list[str]:
                     f"{field}: de-escalation/premium-removal wrongly compressing growth "
                     f"multiples (disinflation relieves them) — \"{sent.strip()[:90]}\"")
                 break
+    return violations[:4]
+
+
+# --- risk-on / risk-off polarity guard ----------------------------------------
+# Regression 2026-06-22: a clearly RISK-ON session (S&P +1.08%, equities rallying on
+# Iran de-escalation, gold/oil falling as the geopolitical premium unwound) was
+# repeatedly labeled "risk-off" — "peace talks provided a risk-off backdrop that
+# SUPPORTED broad equities", "risk-off sentiment ... is the dominant cross-asset
+# theme", and falling silver "reflecting broader risk-off sentiment". De-escalation
+# that drains the safe-haven and oil-supply premium (gold/oil DOWN) while equities
+# RISE is risk-ON, not risk-off. Three families of error:
+#   (A) self-contradiction — "risk-off" in the same sentence as equities RISING (or
+#       "risk-on" with equities FALLING). Always wrong, ungated.
+#   (B) theme mismatch — "risk-off" called the dominant/prevailing theme on a day the
+#       S&P ROSE (symmetric for "risk-on" on a down day). Snapshot-gated.
+#   (C) falling safe-haven — a safe-haven (gold/silver/Treasuries/yen/VIX) FALLING in
+#       the same sentence as "risk-off". Risk-off LIFTS safe-havens. Ungated.
+# Retry-feedback only (no scrub): "risk-off" sits inside otherwise-factual prose and
+# rewriting the regime word in place is unsafe; regeneration with the sharpened
+# RISK-ON/RISK-OFF POLARITY rule is the fix (same approach as the growth-multiple guard).
+_RISKOFF_RE = re.compile(r"\brisk[\s-]?off\b", re.IGNORECASE)
+_RISKON_RE = re.compile(r"\brisk[\s-]?on\b", re.IGNORECASE)
+_EQ_NOUN = (r"(?:equit\w+|stocks?|shares?|S&P(?:\s?500)?|Nasdaq|Dow|small[\s-]caps?|"
+            r"broad\s+market|the\s+tape|risk\s+assets?)")
+_EQ_UP = (r"(?:support\w*|lift\w*|boost\w*|buoy\w*|underpin\w*|fuel\w*|propel\w*|power\w*|"
+          r"rallie?\w*|rally|rose|rising|gain\w*|advanc\w*|surg\w*|climb\w*|jump\w*|"
+          r"higher|outperform\w*)")
+_EQ_DOWN = (r"(?:weigh\w*|pressur\w*|drag\w*|sank|sold\s+off|sell[\s-]?off|fell|declin\w*|"
+            r"slump\w*|slid\w*|drop\w+|tumbl\w*|sink\w*|retreat\w*|underperform\w*|lower)")
+# Verb must sit NEAR its equity noun (within ~30 chars, either order) so a coherent
+# divergence sentence ("the S&P 500 fell and Treasuries rallied") does not trip on the
+# unrelated verb attached to the OTHER asset.
+_EQ_UP_ASSOC_RE = re.compile(
+    rf"\b{_EQ_NOUN}\b[^.;]{{0,30}}\b{_EQ_UP}\b|\b{_EQ_UP}\b[^.;]{{0,30}}\b{_EQ_NOUN}\b", re.IGNORECASE)
+_EQ_DOWN_ASSOC_RE = re.compile(
+    rf"\b{_EQ_NOUN}\b[^.;]{{0,30}}\b{_EQ_DOWN}\b|\b{_EQ_DOWN}\b[^.;]{{0,30}}\b{_EQ_NOUN}\b", re.IGNORECASE)
+_SAFE_HAVEN = (r"(?:gold|bullion|silver|treasur\w+|sovereign\s+bonds?|the\s+yen|japanese\s+yen|"
+               r"swiss\s+franc|VIX|safe[\s-]haven\w*)")
+_DOWN_WORD = (r"(?:fell|fall\w*|declin\w+|slid\w*|slipp\w*|slip|drop\w+|lower|plunge\w*|plummet\w*|"
+              r"sank|tumbl\w+|eas\w+|retreat\w*|weaken\w*|softer|down)")
+_FALLING_WORD = r"(?:falling|lower|sliding|tumbling|plunging|sinking|weaker|declining)"
+# Falling-safe-haven: the down word must sit close to the safe-haven noun, OR a falling
+# adjective directly precedes it — again to avoid catching a down verb from another asset.
+_SAFE_HAVEN_FALLING_RE = re.compile(
+    rf"\b{_SAFE_HAVEN}\b[^.;,]{{0,25}}\b{_DOWN_WORD}\b|\b{_FALLING_WORD}\s+{_SAFE_HAVEN}\b", re.IGNORECASE)
+_THEME_MARKER_RE = re.compile(
+    r"\b(?:dominant|dominat\w*|prevail\w*|overarching|defining|primary|principal)\b"
+    r"[^.;]{0,40}\b(?:theme|driver|narrative|sentiment|backdrop|tone|mood|story)\b"
+    r"|\bcross[\s-]asset\s+(?:theme|driver|narrative)\b",
+    re.IGNORECASE)
+# Skip sentences where the risk regime is framed as a CONTRAST (concessive) or as
+# DECREASING (fading/easing/unwinding) — "equities shrugged off risk-off positioning to
+# rally" and "Treasuries fell as risk-off faded" are both coherent, not inversions.
+_RISK_SKIP_RE = re.compile(
+    r"\b(?:despite|even\s+(?:as|though|after|with)|notwithstanding|regardless|"
+    r"in\s+spite\s+of|shrug\w+|ignor\w+|brush\w*\s+aside|defy\w*|defied)\b"
+    r"|\blook\w*\s+past\b"
+    r"|risk[\s-]?o(?:ff|n)\s+(?:\w+\s+){0,2}(?:fad\w+|eas\w+|ebb\w+|reced\w+|unwind\w+|abat\w+|wan\w+|diminish\w+)"
+    r"|(?:fad\w+|eas\w+|ebb\w+|reced\w+|unwind\w+|abat\w+|wan\w+|diminish\w+)\s+(?:the\s+)?risk[\s-]?o(?:ff|n)",
+    re.IGNORECASE)
+
+
+def _check_risk_polarity_inversion(data: dict, snapshot: dict) -> list[str]:
+    """Flag prose that mislabels the session's risk regime. Three families A/B/C
+    (see comment above). Scans str AND list[str] commentary fields. Returns up to 4
+    violation strings (empty when clean). Retry-feedback only — never scrubs.
+
+    Family A is session-gated: a "risk-off + equities-up" pairing only fires when the
+    day was NOT itself risk-off (and the mirror for risk-on), so a genuine divergence
+    on a down day ("risk-off dominated as the S&P fell while havens caught a bid") is
+    left alone. Families B (theme-vs-tape) gate on the S&P sign; C (falling safe-haven
+    called risk-off) is always wrong, hence ungated."""
+    snap = snapshot or {}
+    spx = (snap.get("S&P 500") or {}).get("pct_change")
+    risk_on_session = spx is not None and spx > 0.3
+    risk_off_session = spx is not None and spx < -0.3
+    fields = ("equities_commentary", "commodities_commentary", "fixed_income_commentary",
+              "currencies_commentary", "economics_commentary", "cross_asset_synthesis",
+              "market_outlook_rationale", "international_section", "session_recap")
+    violations: list[str] = []
+    for field in fields:
+        val = data.get(field)
+        texts = val if isinstance(val, list) else [val]
+        for text in texts:
+            if not isinstance(text, str) or not text:
+                continue
+            for sent in re.split(r"(?<=[.!?])\s+", text):
+                has_off = bool(_RISKOFF_RE.search(sent))
+                has_on = bool(_RISKON_RE.search(sent))
+                if not has_off and not has_on:
+                    continue
+                if _RISK_SKIP_RE.search(sent):
+                    continue  # concessive / regime fading — coherent, not an inversion
+                # (A) self-contradiction — risk regime vs nearby equity direction
+                if has_off and not risk_off_session and _EQ_UP_ASSOC_RE.search(sent):
+                    violations.append(f"{field}: 'risk-off' paired with RISING equities "
+                                      f"— \"{sent.strip()[:90]}\"")
+                    break
+                if has_on and not risk_on_session and _EQ_DOWN_ASSOC_RE.search(sent):
+                    violations.append(f"{field}: 'risk-on' paired with FALLING equities "
+                                      f"— \"{sent.strip()[:90]}\"")
+                    break
+                # (C) falling safe-haven labeled risk-off (always inverted)
+                if has_off and _SAFE_HAVEN_FALLING_RE.search(sent):
+                    violations.append(f"{field}: a FALLING safe-haven labeled 'risk-off' "
+                                      f"(risk-off lifts safe-havens) — \"{sent.strip()[:90]}\"")
+                    break
+                # (B) theme mismatch vs the session's S&P direction
+                if _THEME_MARKER_RE.search(sent):
+                    if risk_on_session and has_off:
+                        violations.append(f"{field}: 'risk-off' called the dominant theme on a "
+                                          f"risk-ON day (S&P up) — \"{sent.strip()[:90]}\"")
+                        break
+                    if risk_off_session and has_on:
+                        violations.append(f"{field}: 'risk-on' called the dominant theme on a "
+                                          f"risk-OFF day (S&P down) — \"{sent.strip()[:90]}\"")
+                        break
+        if len(violations) >= 4:
+            break
     return violations[:4]
 
 
