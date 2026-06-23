@@ -220,3 +220,34 @@ def test_newsworthy_blockbuster_still_wins():
     pl = mm._mover_candidate("PL", "Planet Labs", -0.26, "session", "Industrials", "", corpus, {})
     assert pl["headline_share"] > 0.0
     assert mm.select_spotlight_candidate([theme, pl])["mover_ticker"] == "PL"
+
+
+# --- 2026-06-23: generic-name words must not manufacture false corroboration -----
+def test_generic_name_words_do_not_corroborate_mover():
+    # PRIM's only overlap with the wire is the GENERIC words "Services"/"Corporation" —
+    # not real corroboration. Those must be filtered from the needles so headline_share is 0
+    # and the newsless blockbuster is dropped (it defeated the gate on 6/23, then the writer
+    # confabulated an unrelated Roblox story).
+    corpus = _corpus(
+        "Flash Services PMI ticks higher in June",
+        "Acme Corporation announces a buyback",
+        "AI capex theme dominates the tape", "AI capex supercycle", "misc", "misc",
+    )
+    mover = mm._mover_candidate("PRIM", "Primoris Services Corporation", -0.275,
+                                "session", "Industrials", "", corpus, payload={})
+    assert mover["headline_share"] == 0.0
+    theme = mm.theme_candidate(
+        topic="AI capex", topic_keywords=["ai capex"], why_now="w", category="theme",
+        candidate_funds=["SMH"], matching=[1, 1], corpus=corpus, payload={},
+    )
+    assert mm.select_spotlight_candidate([mover, theme])["kind"] == "theme"
+
+
+def test_distinctive_name_word_still_corroborates():
+    # The DISTINCTIVE word "Primoris" is a real reference — a genuinely corroborated mover
+    # keeps its share and wins via the blockbuster override.
+    corpus = _corpus("Primoris PRIM craters 27% after a guidance cut", "PRIM drags industrials")
+    mover = mm._mover_candidate("PRIM", "Primoris Services Corporation", -0.275,
+                                "session", "Industrials", "", corpus, payload={})
+    assert mover["headline_share"] > 0.0
+    assert mm.select_spotlight_candidate([mover])["mover_ticker"] == "PRIM"

@@ -1627,6 +1627,84 @@ def test_plain_risk_on_rally_is_clean():
     assert gmc._check_risk_polarity_inversion(data, _RISKON_SNAP) == []
 
 
+# --- 2026-06-23: direct "risk-on/off environment" assertion vs the session sign (family D) --
+# The polarity guard fixed the LABEL layer on 6/22 but the 6/23 synthesis still asserted "...are
+# the dominant drivers, confirming a risk-on environment" on a -0.37% (risk-OFF) day. The singular
+# `\bdriver\b` theme-marker missed the plural "drivers", and the broad concessive skip swallowed
+# the commodities line via a trailing "despite". Family D flags the direct regime assertion.
+def test_risk_on_environment_asserted_on_down_day_flagged():
+    data = {"cross_asset_synthesis": (
+        "Gold declined 0.65% as the dollar firmed, confirming a risk-on environment where "
+        "hawkish Fed expectations are the dominant drivers.")}
+    assert gmc._check_risk_polarity_inversion(data, _RISKOFF_SNAP)
+
+
+def test_risk_on_environment_despite_clause_not_excused():
+    # A trailing "...despite <other thing>" must NOT license the wrong regime label.
+    data = {"commodities_commentary": (
+        "The complex is trading in a risk-on environment where the dollar's strength and "
+        "hawkish Fed expectations are the dominant drivers, suppressing safe-haven demand "
+        "despite lingering geopolitical uncertainty.")}
+    assert gmc._check_risk_polarity_inversion(data, _RISKOFF_SNAP)
+
+
+def test_dominant_drivers_plural_theme_marker_flagged():
+    # The plural "drivers" must trip family B just like singular "driver".
+    data = {"cross_asset_synthesis": (
+        "Risk-off positioning is among the dominant drivers as the S&P 500 advanced.")}
+    assert gmc._check_risk_polarity_inversion(data, _RISKON_SNAP)
+
+
+def test_risk_off_environment_faded_is_clean():
+    # Fading carve-out still applies to the direct-assertion family.
+    data = {"commodities_commentary": (
+        "Commodities firmed as the risk-off environment faded into the close.")}
+    assert gmc._check_risk_polarity_inversion(data, _RISKON_SNAP) == []
+
+
+def test_risk_on_environment_on_up_day_is_clean():
+    # Correct usage: a risk-on environment asserted on an up day must never flag.
+    data = {"cross_asset_synthesis": (
+        "Equities led broadly in a risk-on environment where cyclicals are the dominant drivers.")}
+    assert gmc._check_risk_polarity_inversion(data, _RISKON_SNAP) == []
+
+
+# --- 2026-06-23: "interest rate hike" compound must reframe grammatically -----
+# The bare `rate hikes?` rule stripped only "rate hike" and orphaned "interest", shipping the
+# ungrammatical "...Federal Reserve interest higher-for-longer rates in December".
+def test_interest_rate_hike_compound_reframed_grammatically():
+    data = {"commodities_commentary": (
+        "Gold fell on rising expectations of a Federal Reserve interest rate hike in December.")}
+    gmc._correct_fed_hike_language(data)
+    out = data["commodities_commentary"]
+    assert "hike" not in out.lower()
+    assert "interest higher-for-longer" not in out.lower()   # no orphaned "interest"
+    assert "Federal Reserve higher-for-longer rate path in December" in out
+
+
+def test_interest_rate_hike_idempotent():
+    data = {"economics_commentary": "Markets priced an interest rate hike."}
+    gmc._correct_fed_hike_language(data)
+    first = data["economics_commentary"]
+    gmc._correct_fed_hike_language(data)
+    assert data["economics_commentary"] == first
+    assert "hike" not in first.lower()
+
+
+# --- 2026-06-23: spotlight topic-coherence guard (PRIM teaser over a Roblox body) --
+def test_spotlight_offtopic_mover_detects_drift():
+    sel = {"kind": "mover", "mover_ticker": "PRIM",
+           "topic": "Primoris Services Corporation (PRIM) -27.5%"}
+    roblox_body = ("The market's defensive rotation intensified as Roblox (RBLX) fell 9%, "
+                   "extending its drawdown while communication services lagged the tape.")
+    assert gmc._spotlight_offtopic_mover(roblox_body, sel) is True
+    on_topic = ("Primoris cratered 27% after slashing guidance, dragging industrials lower.")
+    assert gmc._spotlight_offtopic_mover(on_topic, sel) is False
+    assert gmc._spotlight_offtopic_mover("Shares of PRIM collapsed on the print.", sel) is False
+    # non-mover spotlights are never off-topic
+    assert gmc._spotlight_offtopic_mover(roblox_body, {"kind": "theme", "topic": "x"}) is False
+
+
 # --- 2026-06-22: global central-bank event harvester (#1 macro feed) ---------
 # The econ calendar is US-only; foreign CB decisions reach the LLM only via the news
 # wire. EPM missed the BOJ 25bp hike on 6/18 and 6/22.

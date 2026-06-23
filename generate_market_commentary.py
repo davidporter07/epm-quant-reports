@@ -4149,8 +4149,24 @@ _SAFE_HAVEN_FALLING_RE = re.compile(
     rf"\b{_SAFE_HAVEN}\b[^.;,]{{0,25}}\b{_DOWN_WORD}\b|\b{_FALLING_WORD}\s+{_SAFE_HAVEN}\b", re.IGNORECASE)
 _THEME_MARKER_RE = re.compile(
     r"\b(?:dominant|dominat\w*|prevail\w*|overarching|defining|primary|principal)\b"
-    r"[^.;]{0,40}\b(?:theme|driver|narrative|sentiment|backdrop|tone|mood|story)\b"
-    r"|\bcross[\s-]asset\s+(?:theme|driver|narrative)\b",
+    # noun may be PLURAL ("the dominant drivers") — the singular-only `\bdriver\b` missed the
+    # 2026-06-23 synthesis line "...are the dominant drivers" and let a risk-on label survive.
+    r"[^.;]{0,40}\b(?:theme|driver|narrative|sentiment|backdrop|tone|mood|story|force)s?\b"
+    r"|\bcross[\s-]asset\s+(?:theme|driver|narrative)s?\b",
+    re.IGNORECASE)
+# A DIRECT regime assertion ("risk-on environment", "risk-off regime") — a stronger claim than
+# a passing mention. Family D flags it when it contradicts the session's S&P sign, gated only on
+# that sign (not on a theme-marker noun) and NOT excused by the broad concessive skip — a trailing
+# "...despite <other thing>" must not license a wrong regime label (2026-06-23 commodities line).
+_RISK_ENV_RE = re.compile(
+    r"\brisk[\s-]?(on|off)\s+(?:environment|regime|backdrop|conditions?|tone|mood|"
+    r"sentiment|footing|tape|posture)\b",
+    re.IGNORECASE)
+# The FADING carve-out, isolated from _RISK_SKIP_RE: a regime described as DECREASING
+# ("risk-off environment faded") is coherent even against the session sign.
+_RISK_FADING_RE = re.compile(
+    r"risk[\s-]?o(?:ff|n)\s+(?:\w+\s+){0,3}(?:fad\w+|eas\w+|ebb\w+|reced\w+|unwind\w+|abat\w+|wan\w+|diminish\w+)"
+    r"|(?:fad\w+|eas\w+|ebb\w+|reced\w+|unwind\w+|abat\w+|wan\w+|diminish\w+)\s+(?:the\s+)?risk[\s-]?o(?:ff|n)",
     re.IGNORECASE)
 # Skip sentences where the risk regime is framed as a CONTRAST (concessive) or as
 # DECREASING (fading/easing/unwinding) — "equities shrugged off risk-off positioning to
@@ -4193,6 +4209,20 @@ def _check_risk_polarity_inversion(data: dict, snapshot: dict) -> list[str]:
                 has_on = bool(_RISKON_RE.search(sent))
                 if not has_off and not has_on:
                     continue
+                # (D) direct "risk-on/off environment|regime|..." assertion vs the session sign.
+                # Checked BEFORE the broad concessive skip: only the explicit FADING carve-out
+                # excuses a regime label, so a trailing "despite <X>" cannot mask a wrong one.
+                env_m = _RISK_ENV_RE.search(sent)
+                if env_m and not _RISK_FADING_RE.search(sent):
+                    regime = env_m.group(1).lower()
+                    if regime == "on" and risk_off_session:
+                        violations.append(f"{field}: a 'risk-on environment/regime' asserted on a "
+                                          f"risk-OFF day (S&P down) — \"{sent.strip()[:90]}\"")
+                        break
+                    if regime == "off" and risk_on_session:
+                        violations.append(f"{field}: a 'risk-off environment/regime' asserted on a "
+                                          f"risk-ON day (S&P up) — \"{sent.strip()[:90]}\"")
+                        break
                 if _RISK_SKIP_RE.search(sent):
                     continue  # concessive / regime fading — coherent, not an inversion
                 # (A) self-contradiction — risk regime vs nearby equity direction
@@ -5522,6 +5552,12 @@ def _scrub_offnarrative_geopolitics(data: dict, source_text: str) -> int:
 # session_recap. Reframe to the defensible "higher-for-longer" (preserving the hawkish
 # polarity that matched the day's +yield/+dollar). Idempotent — leaves no "hike" to re-hit.
 _FED_HIKE_SUBS = [
+    # "interest rate hike" is a COMPOUND — the bare `rate hikes?` rule below strips only
+    # "rate hike" and orphans "interest", yielding the ungrammatical "...Federal Reserve
+    # interest higher-for-longer rates..." (2026-06-23). Capture the whole compound first so
+    # the reframe reads cleanly; idempotent (leaves "rate path", no "hike" to re-hit).
+    (re.compile(r"\binterest[\-\s]?rate\s+hikes?\b", re.IGNORECASE),
+     "higher-for-longer rate path"),
     (re.compile(r"\b(?:renewed|rising|growing|fresh)\s+(?:rate[\-\s]?hike|fed[\-\s]?hike|hike)\s+expectations\b", re.IGNORECASE),
      "renewed higher-for-longer rate expectations"),
     (re.compile(r"\b(?:rate[\-\s]?hike|fed[\-\s]?hike|hike)\s+expectations\b", re.IGNORECASE),
@@ -6714,6 +6750,28 @@ def _spotlight_contradicts_market(text: str, market_dirs: dict[str, int]) -> lis
     return violations
 
 
+def _spotlight_offtopic_mover(body: str, selected: dict | None) -> bool:
+    """True when the spotlight is a single-name MOVER but the written body never references
+    that name — i.e. the writer drifted to a different story while the teaser still advertises
+    the mover (2026-06-23: a PRIM mover teaser over a Roblox body). Defense-in-depth behind the
+    market_movers news gate: even if a name wins the slot, the deep-dive must actually be ABOUT
+    it. A reference = the ticker OR a distinctive (non-generic) word of the company name."""
+    if not selected or selected.get("kind") != "mover":
+        return False
+    tkr = str(selected.get("mover_ticker") or "").upper().strip()
+    if not tkr:
+        return False
+    text = body or ""
+    if re.search(r"\b" + re.escape(tkr) + r"\b", text, re.IGNORECASE):
+        return False
+    import market_movers
+    for w in re.split(r"[^A-Za-z]+", str(selected.get("topic") or "")):
+        if len(w) > 3 and w.lower() not in market_movers._GENERIC_NAME_WORDS:
+            if re.search(r"\b" + re.escape(w) + r"\b", text, re.IGNORECASE):
+                return False
+    return True
+
+
 def _pick_fallback_theme(payload: dict) -> dict | None:
     """Pillar 1.5 — when no dominant NEWS topic exists, pick a market-data theme.
 
@@ -7070,8 +7128,25 @@ def generate_topic_spotlight(
             _spotlight_contradicts_market(title + ". " + body, market_dirs)
             if market_dirs else []
         )
-        if not contradictions:
+        # Topic-coherence guard: a single-name mover spotlight whose body never mentions the
+        # mover has drifted off-topic (the teaser still advertises it). Retry on-target; an
+        # exhausted loop drops rather than ship a dangling teaser (2026-06-23 PRIM→Roblox).
+        offtopic = _spotlight_offtopic_mover(body, _selected)
+        if not contradictions and not offtopic:
             break
+        if offtopic:
+            _mv = str((_selected or {}).get("mover_ticker") or "").strip()
+            print(f"  [SPOTLIGHT] Attempt {attempt + 1}: body never references the mover {_mv} "
+                  f"— off-topic drift; retrying on-target.")
+            writer_payload["factual_correction"] = (
+                f"Your previous draft was REJECTED: this spotlight is about {_mv} "
+                f"({topic}), but the draft never discussed {_mv}. Rewrite the entire piece so it "
+                f"is specifically ABOUT {_mv} — its move today, the catalyst behind it, and the "
+                f"read-through for related funds. Do NOT write about a different company or drift "
+                f"to a generic market-rotation theme."
+            )
+            story, title, body = {}, "", ""
+            continue
         print(f"  [SPOTLIGHT] Attempt {attempt + 1}: claim contradicts market close "
               f"{contradictions}; retrying with correction.")
         writer_payload["factual_correction"] = (

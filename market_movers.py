@@ -23,6 +23,22 @@ PORTFOLIO_BOOST = 0.10
 # earnings loses the slot (regression 2026-06-05: tech-selloff theme beat the AVGO mover).
 BLOCKBUSTER_PCT = 0.10        # 10%
 
+# Generic corporate-name words that must NOT count as headline corroboration on their own.
+# A mover's needles are [ticker, full-name, *distinctive-name-words]; without this filter a
+# name like "Primoris Services Corporation (PRIM)" draws spurious headline "matches" from any
+# unrelated story containing "Services"/"Corporation", inflating its headline_share above zero
+# and defeating the news gate in select_spotlight_candidate. Regression 2026-06-23: PRIM -27.5%
+# (zero real corroboration) hijacked the spotlight via the blockbuster override, then the writer
+# — handed a topic with no grounding material — confabulated an unrelated Roblox story.
+_GENERIC_NAME_WORDS = frozenset({
+    "services", "service", "corporation", "corp", "company", "companies", "holdings",
+    "holding", "group", "incorporated", "international", "intl", "technologies",
+    "technology", "systems", "solutions", "industries", "industrial", "partners",
+    "capital", "financial", "global", "enterprises", "enterprise", "limited",
+    "trust", "fund", "ventures", "resources", "products", "brands", "worldwide",
+    "associates", "management", "networks", "communications", "energy", "motors",
+})
+
 # Sector label (lowercased) -> representative ETF for tie-ins.
 _SECTOR_ETF = {
     "technology": "XLK", "information technology": "XLK", "semiconductor": "SMH",
@@ -88,7 +104,13 @@ def _mover_candidate(ticker: str, company: str, pct: float, when: str, sector: s
     """Build a normalized 'mover' candidate dict from a resolved name + verified move."""
     ticker = str(ticker).upper().strip()
     company = str(company or ticker).strip()
-    needles = [ticker, company] + [w for w in re.split(r"\s+", company) if len(w) > 3]
+    # Distinctive name words only: drop generic corporate words ("Services", "Corporation",
+    # ...) so they cannot manufacture false headline corroboration (see _GENERIC_NAME_WORDS).
+    # The ticker and the full company string stay as needles — the full name only matches when
+    # the whole phrase appears, which is genuine corroboration.
+    distinctive = [w for w in re.split(r"\s+", company)
+                   if len(w) > 3 and w.lower() not in _GENERIC_NAME_WORDS]
+    needles = [ticker, company] + distinctive
     share = _headline_share(needles, corpus)
     portfolio = _portfolio_tickers(payload)
     ties = _resolve_tie_in_tickers(ticker, sector, peers=[])
