@@ -2643,6 +2643,8 @@ Rules:
 - Active voice, present tense. No preamble, no summary sentence, no "in conclusion". Start the body with the development itself.
 - NON-ADVICE FRAMING: never instruct the reader to buy/sell/"lean into"/"trim"/"should express this view by leaning into". Present vehicles as OPTIONS with a counter/caveat. Cite at least two verified_funds when two or more are available; a single sole "buy this" recommendation is forbidden.
 - Geopolitical themes: market-impact framing only (energy, currencies, supply chains, rate path).
+- SESSION-SPECIFIC, NOT EVERGREEN: every paragraph must be about TODAY's theme and the current session. Do NOT pad with timeless personal-finance rules (e.g. the "4% retirement rule"), long-horizon household wealth-distribution statistics ("the top 20% account for X% of spending"), or other generic tangents that are not specific to today's move — they read as stale filler scraped from unrelated articles.
+- LONG ETFs ARE NOT HEDGES: a long sector/index ETF (XLK, QQQ, SPY, SMH, a sector SPDR, etc.) falls WITH its sector — it does NOT offer "inverse beta", "inverse exposure", or a hedge to its own decline. To REDUCE exposure to a selloff, one underweights/avoids the long ETF or rotates to defensives; only an explicitly inverse/short product (e.g. an "-inverse"/"short" ETF) provides inverse beta. Never describe a long ETF as inverse to the move it participates in.
 - EARNINGS-DRIVEN MOVES: if `earnings_grounding` is present in the input, the spotlight subject moved on its OWN earnings/guidance release. Attribute the move to the company-specific results (revenue, guidance/outlook, bookings, margins, segment weakness) named in earnings_grounding — NOT to the day's macro or geopolitical theme. A single company's earnings-day move is NOT caused by a war, ceasefire, deal, or rate decision; do not write that it was, even if those themes dominate the wire. Lead Paragraph 1 with the earnings/guidance fact.
 
 ONE-SHOT EXAMPLE (abbreviated — yours must be 4-6 full paragraphs):
@@ -3465,9 +3467,10 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
             stance_rev = _check_stance_reversal_unexplained(part2, outlook_payload.get("prior_day_label"))
             aco_coh = _check_asset_class_stance_coherence(part2)
             gm_inv2 = _check_growth_multiple_inversion(part2, snapshot)
+            risk_pol2 = _check_risk_polarity_inversion(part2, snapshot)
             if (not banned and not leaks and not echo and not move_sig and not superlatives
                     and not direction and not corp_actions and not editorial and not stance_rev
-                    and not aco_coh and not gm_inv2):
+                    and not aco_coh and not gm_inv2 and not risk_pol2):
                 break
             if banned:
                 print(f"  [RETRY] Attempt {attempt + 1} still contained banned phrases after scrub: {banned}. Retrying...")
@@ -3491,6 +3494,8 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
                 print(f"  [RETRY] Attempt {attempt + 1} asset-class label/rationale polarity clash: {aco_coh}. Retrying...")
             if gm_inv2:
                 print(f"  [RETRY] Attempt {attempt + 1} blamed multiple compression on falling oil/yields: {gm_inv2}. Retrying...")
+            if risk_pol2:
+                print(f"  [RETRY] Attempt {attempt + 1} outlook mislabeled the session's risk regime: {risk_pol2}. Retrying...")
         except Exception as exc:
             print(f"  [WARN] Outlook call failed (attempt {attempt + 1}): {exc}")
             part2 = {}
@@ -4197,9 +4202,18 @@ def _check_risk_polarity_inversion(data: dict, snapshot: dict) -> list[str]:
     fields = ("equities_commentary", "commodities_commentary", "fixed_income_commentary",
               "currencies_commentary", "economics_commentary", "cross_asset_synthesis",
               "market_outlook_rationale", "international_section", "session_recap")
+    scan_items: list[tuple[str, object]] = [(f, data.get(f)) for f in fields]
+    # The Long-Term Fundamental Outlook table prose lives in the NESTED
+    # data["asset_class_outlooks"][name]["rationale"], not a flat field — so the scan above
+    # never reached it. Regression 2026-06-24: the Commodities row asserted a "risk-on
+    # environment" on a risk-OFF day while every flat field was clean. Pull each rationale in.
+    aco = data.get("asset_class_outlooks")
+    if isinstance(aco, dict):
+        for _name, _row in aco.items():
+            if isinstance(_row, dict):
+                scan_items.append((f"asset_class_outlooks[{_name}]", _row.get("rationale")))
     violations: list[str] = []
-    for field in fields:
-        val = data.get(field)
+    for field, val in scan_items:
         texts = val if isinstance(val, list) else [val]
         for text in texts:
             if not isinstance(text, str) or not text:
@@ -5568,8 +5582,16 @@ _FED_HIKE_SUBS = [
      "higher-for-longer bias"),
     (re.compile(r"\bfed\s+rate\s+hikes?\b", re.IGNORECASE),
      "a higher-for-longer Fed stance"),
-    (re.compile(r"\brate\s+hikes?\b", re.IGNORECASE),
+    # Split singular vs plural: the SINGULAR "rate hike" is a discrete event and usually
+    # carries a determiner ("a potential rate hike", "the next scheduled rate hike"), so the
+    # plural "higher-for-longer rates" orphaned it into nonsense (2026-06-24: "a potential
+    # higher-for-longer rates", "the next scheduled higher-for-longer rates"). The singular
+    # state-noun "rate path" reads cleanly under any determiner; reserve the plural for the
+    # bare plural "rate hikes". (\b after "hike" keeps the singular rule off "hikes".)
+    (re.compile(r"\brate\s+hikes\b", re.IGNORECASE),
      "higher-for-longer rates"),
+    (re.compile(r"\brate\s+hike\b", re.IGNORECASE),
+     "higher-for-longer rate path"),
 ]
 
 
@@ -5881,6 +5903,40 @@ _THIRD_PARTY_SPEAKER_RE = re.compile(
     re.IGNORECASE)
 
 
+# A genuine schedule/quote entry attributes the speaking verb to the OFFICIAL: the surname
+# (optionally possessive) sits within ~2 words BEFORE the verb as its subject ("Fed's Daly
+# says...", "Barkin speaks at 8:30", "Cook to deliver remarks"), or the verb precedes the
+# surname in a "remarks by/from <surname>" / "speech by <surname>" frame. Regression
+# 2026-06-24: "Fed's Warsh — The Dollar Just Hit A 13-Month High On Warsh's Hawkish Debut:
+# History Says Don't" was harvested as a "Fed's Warsh" slot because the editorial "History
+# Says" tripped the bare speak-token gate while Warsh was only NAMED, not the speaker
+# (Sevens carried NO Fed speakers). Require the surname to be the verb's subject.
+_FED_SPEAK_VERB = (r"(?:speak\w*|to\s+speak|spoke|says?|said|remark\w*|comment(?:s|ed|ing)?|"
+                   r"testif\w*|testimony|address(?:es|ed|ing)?|speech\w*|interview\w*|"
+                   r"discuss\w*|told|deliver\w*|moderat\w*|reiterat\w*|reaffirm\w*|"
+                   r"notes?|noted|noting|signals?|signal(?:ed|ing)|warns?|warned|"
+                   r"sees?|expects?|urges?|stress\w*|emphasiz\w*|downplay\w*|"
+                   r"reassur\w*|argues?|argued|flag\w*|hints?|hinted)")
+
+
+def _surname_is_speaker(text: str, surname: str) -> bool:
+    """True when `surname` is the agent of a speaking event in `text` (not merely mentioned):
+    subject-before-verb within a 0-3 word window ("Daly says", "Daly of the Fed speaks"),
+    a colon attribution ("Fed's Daly: ..."), or a "remarks by/from <surname>" frame.
+    A dash after the surname does NOT count — "Fed's Warsh — <market-action headline>" is an
+    article ABOUT the official, not a quote (2026-06-24 regression)."""
+    sn = re.escape(surname)
+    subj_before = re.compile(
+        r"\b" + sn + r"(?:'s|’s)?\b(?:\s+\w+){0,3}\s+" + _FED_SPEAK_VERB + r"\b",
+        re.IGNORECASE)
+    colon_attrib = re.compile(r"\b" + sn + r"(?:'s|’s)?\s*:", re.IGNORECASE)
+    verb_before = re.compile(
+        r"\b(?:remark\w*|comment\w*|speech\w*|testimony|address(?:es|ed|ing)?|interview\w*)\b"
+        r"\s+(?:by|from)\s+(?:\w+\s+){0,2}" + sn + r"\b",
+        re.IGNORECASE)
+    return bool(subj_before.search(text) or colon_attrib.search(text) or verb_before.search(text))
+
+
 def _harvest_fed_speakers_from_news(headlines, existing_speakers=None) -> list[dict]:
     """Supplement the Governors-only calendar feed with regional reserve-bank presidents
     named in today's news wire.
@@ -5921,7 +5977,7 @@ def _harvest_fed_speakers_from_news(headlines, existing_speakers=None) -> list[d
             sl = surname.lower()
             if sl in existing_surnames or sl in seen:
                 continue
-            if re.search(r"\b" + re.escape(sl) + r"\b", low):
+            if re.search(r"\b" + re.escape(sl) + r"\b", low) and _surname_is_speaker(text, surname):
                 _m = _FED_TIME_RE.search(text)
                 rows.append({
                     "speaker": f"Fed's {surname}",
@@ -6833,6 +6889,33 @@ def _spotlight_offtopic_mover(body: str, selected: dict | None) -> bool:
     return True
 
 
+# Evergreen personal-finance / society tropes that crawled EVERGREEN articles inject into an
+# otherwise on-theme daily spotlight. Regression 2026-06-24: a tech-selloff deep-dive was padded
+# with the "4% retirement rule … 2000s-style collapse" and "the top 20% of Americans now account
+# for nearly 60% of spending" — timeless filler with no bearing on the session. The off-topic
+# mover guard only catches whole-body drift; an on-theme body can still smuggle these in. Flag
+# them as retry feedback (never scrub) so the writer rewrites without the tangent.
+_SPOTLIGHT_EVERGREEN_RE = re.compile(
+    r"(?:\b\d{1,2}%?\s*(?:percent\s+)?retirement\s+rule\b|\bretirement\s+rule\b|"
+    r"\b4%\s+rule\b|\bfour[\-\s]?percent\s+rule\b|"
+    r"\b(?:top|bottom)\s+\d{1,2}%\s+of\s+(?:americans|households|earners|the\s+population)\b|"
+    r"\baccount\s+for\s+(?:nearly\s+)?\d{1,2}%\s+of\s+(?:all\s+)?(?:consumer\s+)?spending\b)",
+    re.IGNORECASE)
+
+
+def _spotlight_evergreen_drift(body: str) -> list[str]:
+    """Return evergreen-trope phrases found in a spotlight body (empty when clean). Retry-feedback
+    only — these are session-irrelevant tangents from stale crawled articles, not analysis."""
+    hits: list[str] = []
+    for m in _SPOTLIGHT_EVERGREEN_RE.finditer(body or ""):
+        frag = m.group(0).strip()
+        if frag not in hits:
+            hits.append(frag)
+        if len(hits) >= 3:
+            break
+    return hits
+
+
 def _pick_fallback_theme(payload: dict) -> dict | None:
     """Pillar 1.5 — when no dominant NEWS topic exists, pick a market-data theme.
 
@@ -7193,8 +7276,23 @@ def generate_topic_spotlight(
         # mover has drifted off-topic (the teaser still advertises it). Retry on-target; an
         # exhausted loop drops rather than ship a dangling teaser (2026-06-23 PRIM→Roblox).
         offtopic = _spotlight_offtopic_mover(body, _selected)
-        if not contradictions and not offtopic:
+        evergreen = _spotlight_evergreen_drift(body)
+        if not contradictions and not offtopic and not evergreen:
             break
+        if evergreen:
+            print(f"  [SPOTLIGHT] Attempt {attempt + 1}: evergreen filler not tied to the session "
+                  f"{evergreen}; retrying without it.")
+            writer_payload["factual_correction"] = (
+                "Your previous draft was REJECTED for padding the analysis with evergreen, "
+                "session-irrelevant filler: " + "; ".join(evergreen) + ". Rewrite the entire "
+                "piece so EVERY paragraph is about today's theme and the current session — the "
+                "catalyst, the mechanism, the data, and the read-through for the verified funds. "
+                "Do NOT include timeless personal-finance rules (e.g. the '4% retirement rule'), "
+                "long-horizon household wealth-distribution statistics, or other generic tangents "
+                "that are not specific to today's move."
+            )
+            story, title, body = {}, "", ""
+            continue
         if offtopic:
             _mv = str((_selected or {}).get("mover_ticker") or "").strip()
             print(f"  [SPOTLIGHT] Attempt {attempt + 1}: body never references the mover {_mv} "

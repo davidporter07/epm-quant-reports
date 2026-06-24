@@ -1917,3 +1917,63 @@ def test_fetch_global_cb_decisions_dead_feed_is_safe(monkeypatch):
     monkeypatch.setattr(gmc, "_CB_RSS_FEEDS", (("ECB", "http://feed"),))
     monkeypatch.setattr(gmc.requests, "get", _boom)
     assert gmc.fetch_global_cb_decisions() == []
+
+
+# ── 2026-06-24 eval fixes: guard-leak coverage extensions ──────────────────────
+
+def test_risk_polarity_scans_asset_class_outlook_rationale():
+    """#2 leak (6/24): a 'risk-on environment' assertion in the nested
+    asset_class_outlooks[*].rationale evaded the polarity scan, which only covered flat
+    commentary fields. The Long-Term Fundamental Outlook prose must be scanned too."""
+    snap = {"S&P 500": {"pct_change": -1.44}}
+    data = {"asset_class_outlooks": {
+        "Commodities": {"label": "Bearish", "rationale":
+            "Gold declined 1.89% as the safe-haven bid evaporated in a risk-on "
+            "environment driven by higher-for-longer rate expectations."}}}
+    viol = gmc._check_risk_polarity_inversion(data, snap)
+    assert any("asset_class_outlooks[Commodities]" in v for v in viol)
+    # Same wording on an UP day is coherent — must not flag.
+    assert gmc._check_risk_polarity_inversion(data, {"S&P 500": {"pct_change": 1.2}}) == []
+
+
+def test_fed_hike_singular_reframes_grammatically():
+    """#3 regression (6/24): the bare plural 'higher-for-longer rates' orphaned a singular
+    discrete-event 'rate hike' under a determiner into nonsense. Singular -> 'rate path'."""
+    d = {"equities_commentary": "Every meeting is now live for a potential rate hike.",
+         "economics_commentary": "Traders watch the next scheduled rate hike.",
+         "currencies_commentary": "Markets priced multiple rate hikes this year."}
+    gmc._correct_fed_hike_language(d)
+    assert d["equities_commentary"] == "Every meeting is now live for a potential higher-for-longer rate path."
+    assert d["economics_commentary"] == "Traders watch the next scheduled higher-for-longer rate path."
+    assert "higher-for-longer rates" in d["currencies_commentary"]   # plural keeps plural
+    # Idempotent: no residual "hike" to re-trigger.
+    before = dict(d)
+    gmc._correct_fed_hike_language(d)
+    assert d == before
+
+
+def test_harvest_rejects_official_named_in_editorial_headline():
+    """#4 regression (6/24): "Fed's Warsh - ... History Says Don't" was harvested as a
+    speaker because the editorial 'History Says' tripped the speak-token gate while Warsh
+    was only NAMED. Require the surname to be the verb's subject."""
+    warsh = ("Fed's Warsh - The Dollar Just Hit A 13-Month High On Warsh's "
+             "Hawkish Debut: History Says Don't")
+    assert gmc._harvest_fed_speakers_from_news([warsh]) == []
+    # Genuine schedule/quote entries still harvest.
+    assert any("Daly" in r["speaker"] for r in
+               gmc._harvest_fed_speakers_from_news(["Fed's Daly says data shows inflation cooling"]))
+    assert any("Barkin" in r["speaker"] for r in
+               gmc._harvest_fed_speakers_from_news(["Richmond Fed President Barkin speaks at 8:30 a.m. ET"]))
+
+
+def test_spotlight_evergreen_drift_flags_session_irrelevant_filler():
+    """#1 family (6/24): an on-theme spotlight smuggled in evergreen tropes (the '4%
+    retirement rule', household wealth-share stats). They must be flagged for a rewrite."""
+    body = ("Technology led the decline. The potential failure of the 4% retirement rule "
+            "looms if markets repeat 2000s-style collapses. The top 20% of Americans now "
+            "account for nearly 60% of spending.")
+    hits = gmc._spotlight_evergreen_drift(body)
+    assert hits, "expected evergreen tropes to be flagged"
+    # A genuinely session-grounded paragraph is clean.
+    assert gmc._spotlight_evergreen_drift(
+        "The XLK index fell 4.14% as memory and chip names led declines on AI-capex doubts.") == []
