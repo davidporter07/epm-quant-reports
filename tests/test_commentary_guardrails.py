@@ -1114,6 +1114,59 @@ def test_harvest_dedupes_against_existing_speakers():
     assert rows == []
 
 
+# --- 2026-06-23: third-party commentary about the Fed is not a Fed speaking event --
+def test_harvest_rejects_third_party_commentary_about_fed():
+    # The exact 6/23 failure: a JPMorgan-sourced headline about Warsh became a "Fed's Warsh"
+    # slot (Sevens carried NO Fed speakers that day). Warsh is the OBJECT, not the speaker.
+    headlines = ["Circle Your Calendars for July 29. JPMorgan Executive Says Fed Chair "
+                 "Kevin Warsh Could Raise Rates in As Little as Six Weeks."]
+    assert gmc._harvest_fed_speakers_from_news(headlines, existing_speakers=[]) == []
+
+
+def test_harvest_rejects_analyst_commentary_about_fed():
+    headlines = ["Goldman strategist says the Fed's Waller will dissent at the next meeting"]
+    assert gmc._harvest_fed_speakers_from_news(headlines, existing_speakers=[]) == []
+
+
+def test_harvest_still_keeps_genuine_speaker_despite_bank_word():
+    # A genuine Fed-speak headline where the official is the agent must still be harvested.
+    headlines = ["Fed's Daly says bank capital rules need not slow lending, in 1:10 p.m. remarks"]
+    rows = gmc._harvest_fed_speakers_from_news(headlines, existing_speakers=[])
+    assert any("Daly" in r["speaker"] for r in rows)
+
+
+# --- 2026-06-23: ungrounded Wall-Street-figure name scrub (invented "Bob Michael") --
+def test_ungrounded_analyst_name_scrubbed():
+    data = {"equities_commentary": (
+        "Traders are watching the July 29 FOMC, where JPMorgan CIO Bob Michael suggests "
+        "every meeting is now live.")}
+    src = "JPMorgan Executive Says Fed Chair Kevin Warsh Could Raise Rates"
+    gmc._scrub_ungrounded_analyst_attribution(data, src)
+    out = data["equities_commentary"]
+    assert "Bob Michael" not in out
+    assert "a JPMorgan executive suggests" in out
+
+
+def test_grounded_analyst_name_preserved():
+    # A name present in the source headlines is a real quote — keep it intact.
+    data = {"economics_commentary": "Goldman Sachs CEO David Solomon said rates stay higher."}
+    src = "Goldman Sachs CEO David Solomon warns on higher-for-longer policy"
+    gmc._scrub_ungrounded_analyst_attribution(data, src)
+    assert "David Solomon" in data["economics_commentary"]
+
+
+def test_ungrounded_analyst_possessive_form_scrubbed():
+    data = {"cross_asset_synthesis": "Pimco's Jane Doe expects duration to outperform."}
+    gmc._scrub_ungrounded_analyst_attribution(data, "no relevant names in the wire today")
+    out = data["cross_asset_synthesis"]
+    assert "Jane Doe" not in out and "Pimco executive" in out
+
+
+def test_analyst_scrub_noop_without_source():
+    data = {"economics_commentary": "JPMorgan CIO Bob Michael sees cuts."}
+    assert gmc._scrub_ungrounded_analyst_attribution(data, "") == 0
+
+
 # --- gold spot: 3-tier fallback XAUUSD=X -> GLD*ratio -> futures (#5, 2026-06-05) --
 # XAUUSD=X 404s intermittently. We then report a GLD-derived SPOT level (GLD is
 # physically-backed spot gold), scaled by a ratio that self-calibrates off live spot;

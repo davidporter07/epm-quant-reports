@@ -5866,6 +5866,19 @@ _FED_SPEAK_TOKENS_RE = re.compile(
     r"address(?:es|ed|ing)?|speech\w*|panel|interview\w*|discuss\w*|told|q&a|"
     r"fireside|moderat\w*|deliver\w*)\b",
     re.IGNORECASE)
+# A THIRD PARTY (a bank, analyst, strategist, executive...) commenting ABOUT a Fed official is
+# not a Fed speaking event — the official is the OBJECT of someone else's remark, not the agent.
+# Regression 2026-06-23: "JPMorgan Executive Says Fed Chair Kevin Warsh Could Raise Rates ..."
+# was harvested as a "Fed's Warsh" speaker slot (Sevens correctly carried NO Fed speakers that
+# day). Reject when a non-Fed firm/role is the subject of the speaking verb.
+_THIRD_PARTY_SPEAKER_RE = re.compile(
+    r"\b(?:JPMorgan|JP\s?Morgan|Goldman(?:\s+Sachs)?|Morgan\s+Stanley|Citi\w*|"
+    r"Bank\s+of\s+America|BofA|Wells\s+Fargo|Barclays|UBS|Deutsche\s+Bank|Nomura|"
+    r"BlackRock|Pimco|Vanguard|Fidelity|executive\w*|CEO|CIO|CFO|strateg\w*|"
+    r"analyst\w*|investor\w*|trader\w*|hedge\s+fund\w*)\b"
+    r"(?:\s+\w+){0,3}\s+(?:says?|said|sees?|expects?|predicts?|warns?|argues?|notes?|"
+    r"suggests?|believes?|thinks?|forecasts?|claims?|told)\b",
+    re.IGNORECASE)
 
 
 def _harvest_fed_speakers_from_news(headlines, existing_speakers=None) -> list[dict]:
@@ -5902,6 +5915,8 @@ def _harvest_fed_speakers_from_news(headlines, existing_speakers=None) -> list[d
             continue   # no central-bank context — skip (Tim Cook, Serena Williams, ...)
         if not _FED_SPEAK_TOKENS_RE.search(text):
             continue   # mentions an official but not a speaking event — skip profiles/analysis
+        if _THIRD_PARTY_SPEAKER_RE.search(text):
+            continue   # a bank/analyst/exec commenting ABOUT the Fed — not a Fed speaking event
         for surname in _FED_SURNAMES:
             sl = surname.lower()
             if sl in existing_surnames or sl in seen:
@@ -6022,6 +6037,51 @@ def _scrub_ungrounded_fed_attribution(data: dict, source_text: str) -> int:
     def _fix(text: str) -> str:
         for rx, repl in subs:
             text = rx.sub(repl, text)
+        return text
+
+    return _map_all_prose(data, _fix)
+
+
+# --- ungrounded Wall-Street-figure attribution scrub --------------------------
+# Mirror of the Fed scrub for non-Fed Street figures: the report has no analyst-note feed, so
+# attributing a market view to a NAMED bank/asset-manager person who never appears in the source
+# headlines is fabrication (2026-06-23: source carried only "JPMorgan Executive"; the prose
+# invented "JPMorgan CIO Bob Michael suggests every meeting is now live"). The firm + a generic
+# role are preserved; only the fabricated NAME is removed. A name that IS grounded in the source
+# corpus (e.g. a quoted CEO) is left intact.
+_STREET_FIRMS = (
+    "JPMorgan", "JP Morgan", "Goldman Sachs", "Goldman", "Morgan Stanley", "Citigroup",
+    "Citi", "Bank of America", "BofA", "Wells Fargo", "Barclays", "UBS", "Deutsche Bank",
+    "Nomura", "BlackRock", "Pimco", "PIMCO", "Vanguard", "Fidelity", "State Street",
+)
+_STREET_TITLE = (r"(?:CEO|CIO|CFO|COO|chief\s+\w+\s+officer|chief\s+economist|"
+                 r"chief\s+strategist|head\s+of\s+[\w\s]{3,30}?|strategist|economist|"
+                 r"analyst|portfolio\s+manager)")
+_STREET_NAME = r"[A-Z][a-z]+(?:\s+[A-Z]\.?)?\s+[A-Z][a-z]+"   # First [M.] Last
+
+
+def _scrub_ungrounded_analyst_attribution(data: dict, source_text: str) -> int:
+    """De-name a Wall-Street-figure attribution whose person-name is absent from the source
+    headline corpus. Keeps the firm + a generic role; removes only the fabricated name."""
+    src = (source_text or "").lower()
+    if not src:
+        return 0
+    firm_alt = "|".join(re.escape(f) for f in _STREET_FIRMS)
+    pat1 = re.compile(rf"\b(?P<firm>{firm_alt})\s+{_STREET_TITLE}\s+(?P<name>{_STREET_NAME})\b")
+    pat2 = re.compile(rf"\b(?P<firm>{firm_alt})(?:'s|’s)\s+(?P<name>{_STREET_NAME})\b")
+    pat3 = re.compile(rf"\b{_STREET_TITLE}\s+(?P<name>{_STREET_NAME})\s+(?:of|at)\s+(?P<firm>{firm_alt})\b")
+
+    def _repl(m):
+        # A name present in the source headlines is a real quote — leave the whole match intact.
+        if m.group("name").split()[-1].lower() in src:
+            return m.group(0)
+        prev = m.string[:m.start()].rstrip()
+        art = "A" if ((not prev) or prev[-1] in ".!?:") else "a"
+        return f"{art} {m.group('firm')} executive"
+
+    def _fix(text: str) -> str:
+        for rx in (pat1, pat2, pat3):
+            text = rx.sub(_repl, text)
         return text
 
     return _map_all_prose(data, _fix)
@@ -6304,6 +6364,7 @@ def sanitize_commentary(data: dict, snapshot: dict | None = None, source_text: s
         total += _scrub_offnarrative_geopolitics(data, source_text)
         total += _scrub_fabricated_kinetic_detail(data, source_text)
         total += _scrub_ungrounded_fed_attribution(data, source_text)
+        total += _scrub_ungrounded_analyst_attribution(data, source_text)
     return total
 
 
