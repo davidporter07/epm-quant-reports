@@ -159,8 +159,8 @@ if not DEV_MODE:
     if _ycharts_fresh:
         print("  YCharts data is fresh from pre-market scrape — skipping rescrape.")
     else:
-        _ycharts_proc = subprocess.Popen([VENV_PYTHON, "scrape_ycharts.py"])
-        print("  YCharts scrape launched in background.")
+        _ycharts_proc = subprocess.Popen([VENV_PYTHON, "ycharts_api.py"])
+        print("  YCharts API pull launched in background.")
 
 # Refresh MAG7 training panel — independent of YCharts, runs while scrape is in progress.
 try:
@@ -350,12 +350,12 @@ except Exception as e:
 # By now build_training_dataset + DL training have been running concurrently,
 # so the scrape has had several minutes to complete.
 if _ycharts_proc is not None:
-    print("  Waiting for YCharts scrape to finish...")
+    print("  Waiting for YCharts API pull to finish...")
     _ycharts_proc.wait()
     if _ycharts_proc.returncode != 0:
-        print(f"  YCharts scrape exited with code {_ycharts_proc.returncode} (non-fatal, cached data will be used).")
+        print(f"  YCharts API pull exited with code {_ycharts_proc.returncode} (non-fatal, cached data will be used).")
     else:
-        print("  YCharts scrape complete.")
+        print("  YCharts API pull complete.")
 
 # Freshness alarm: regardless of how the scrape was launched (or skipped as "fresh"),
 # verify ycharts_live.json is actually recent. A silent scraper failure (e.g. the

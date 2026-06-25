@@ -1,0 +1,73 @@
+{
+  "_comment": "YCharts REST API v4 code map for the headless pipeline, replacing the playwright scraper's web-slug lookups (scrape_ycharts.py YIELD_CURVE_INDICATORS / ECONOMIC_INDICATORS / RISK_ROW_MAP / KEY_STAT_ROW_MAP / PERFORMANCE_ROW_MAP). Built + verified 2026-06-24 via the YCharts MCP/API live session. INDICATORS use I:-prefixed codes (FREQUENCY IS ENCODED IN THE SUFFIX; the bare base symbol is NOT reliably daily, e.g. I:EFFR=yearly vs I:EFFRND=daily, I:10YTR mixed vs I:10YTCMR=daily -- always use the verified code, never substitute by name). FUND_METRICS use YCharts security metric calc-names (verified: all 21 codes survive comp-table column validation; pull via the v4 securities points endpoint /v4/companies|funds/<symbol>/points?metrics=<code>). unit: 'pct' = API returns a decimal fraction (0.045=4.5%) which already matches the scraper's stored format (scraper did value/100 on % strings) so NO further scaling; 'count'/'index'/'thousands'/'ratio'/'usd' = raw numeric as-is.",
+  "_ycharts_objects": {
+    "_note": "Persistent YCharts account objects backing the fund-metrics pull (v4 has no per-security points endpoint). One-time created 2026-06-24. Daily client run GETs the comp table (recomputes fresh). Keep the watchlist in sync with portfolio_funds.json portfolio_ycharts_symbols.",
+    "watchlist_id": 910251,
+    "watchlist_name": "EPM Portfolio (API)",
+    "comp_table_id": 4694872,
+    "comp_table_name": "EPM Fund Metrics (API)"
+  },
+  "yield_curve": {
+    "1M":            {"code": "I:1MTCMR",  "name": "1 Month Treasury Rate",            "frequency": "market_daily", "unit": "pct"},
+    "3M":            {"code": "I:3MTCMR",  "name": "3 Month Treasury Rate",            "frequency": "market_daily", "unit": "pct"},
+    "6M":            {"code": "I:6MTCMR",  "name": "6 Month Treasury Rate",            "frequency": "market_daily", "unit": "pct"},
+    "1Y":            {"code": "I:1YTCMR",  "name": "1 Year Treasury Rate",             "frequency": "market_daily", "unit": "pct"},
+    "2Y":            {"code": "I:2YTCMR",  "name": "2 Year Treasury Rate",             "frequency": "market_daily", "unit": "pct"},
+    "3Y":            {"code": "I:3YTCMR",  "name": "3 Year Treasury Rate",             "frequency": "market_daily", "unit": "pct"},
+    "5Y":            {"code": "I:5YTCMR",  "name": "5 Year Treasury Rate",             "frequency": "market_daily", "unit": "pct"},
+    "7Y":            {"code": "I:7YTCMR",  "name": "7 Year Treasury Rate",             "frequency": "market_daily", "unit": "pct"},
+    "10Y":           {"code": "I:10YTCMR", "name": "10 Year Treasury Rate",            "frequency": "market_daily", "unit": "pct"},
+    "20Y":           {"code": "I:20YTCMR", "name": "20 Year Treasury Rate",            "frequency": "market_daily", "unit": "pct"},
+    "30Y":           {"code": "I:30YTCMR", "name": "30 Year Treasury Rate",            "frequency": "market_daily", "unit": "pct"},
+    "10s2s":         {"code": "I:102YTYS", "name": "10-2 Year Treasury Yield Spread",  "frequency": "market_daily", "unit": "pct"},
+    "Breakeven_10Y": {"code": "I:10YTIPST","name": "10 Year TIPS/Treasury Breakeven Rate", "frequency": "market_daily", "unit": "pct"},
+    "Fed_Funds":     {"code": "I:EFFRND",  "name": "Effective Federal Funds Rate",     "frequency": "market_daily", "unit": "pct"},
+    "SOFR":          {"code": "I:SOFR",    "name": "Secured Overnight Financing Rate", "frequency": "market_daily", "unit": "pct"}
+  },
+  "economic": {
+    "CPI_YoY":           {"code": "I:USIR",       "name": "US Inflation Rate",                          "frequency": "monthly",   "unit": "pct"},
+    "Core_CPI_YoY":      {"code": "I:USCIR",      "name": "US Core Inflation Rate",                     "frequency": "monthly",   "unit": "pct"},
+    "PCE_YoY":           {"code": "I:USCPCEPIY",  "name": "US PCE Price Index YoY",                     "frequency": "monthly",   "unit": "pct"},
+    "Core_PCE_YoY":      {"code": "I:USCCPCEPIY", "name": "US Core PCE Price Index YoY",                "frequency": "monthly",   "unit": "pct"},
+    "Unemployment":      {"code": "I:USUR",       "name": "US Unemployment Rate",                       "frequency": "monthly",   "unit": "pct"},
+    "GDP_Growth":        {"code": "I:USRGDPG",    "name": "US Real GDP QoQ",                            "frequency": "quarterly", "unit": "pct"},
+    "Initial_Claims":    {"code": "I:USICUI",     "name": "US Initial Claims for Unemployment Insurance","frequency": "weekly",    "unit": "count"},
+    "ISM_Manufacturing": {"code": "I:USPMI",      "name": "US ISM Manufacturing PMI",                   "frequency": "monthly",   "unit": "index"},
+    "Consumer_Sentiment":{"code": "I:USCS",       "name": "US Index of Consumer Sentiment",            "frequency": "monthly",   "unit": "index"},
+    "PPI_YoY":           {"code": "I:USCPPI",     "name": "US Producer Price Index YoY",                "frequency": "monthly",   "unit": "pct"},
+    "Retail_Sales_MoM":  {"code": "I:USRSMM",     "name": "US Retail Sales MoM",                        "frequency": "monthly",   "unit": "pct"},
+    "Housing_Starts":    {"code": "I:USHS",       "name": "US Housing Starts",                          "frequency": "monthly",   "unit": "thousands"},
+    "Nonfarm_Payrolls":  {"code": "I:USCNP",      "name": "US Nonfarm Payrolls MoM",                    "frequency": "monthly",   "unit": "thousands"},
+    "Fed_Funds":         {"code": "I:EFFRND",     "name": "Effective Federal Funds Rate",              "frequency": "market_daily","unit": "pct"}
+  },
+  "fund_metrics": {
+    "_note": "Per-security metric calc-names (YCharts funds/calc-names). Pull via v4 securities points endpoint with the plain symbol (ETFs = company type, mutual funds = fund type). pe_ratio/roe below are the FUND (holdings-weighted) variants; for company-type securities (MAG7) use the companies/calc-names equivalents instead. Codes validated 2026-06-24 (survived comp-table column validation); per-ticker VALUE + obscure-fund coverage still to confirm when the client runs.",
+    "price":                  {"code": "price",                                   "label": "Price",                            "unit": "usd"},
+    "alpha_3y":               {"code": "market_alpha_36_month",                    "label": "Alpha (3Y)",                       "unit": "ratio"},
+    "beta_3y":                {"code": "market_beta_36_month",                     "label": "Beta (3Y)",                        "unit": "ratio"},
+    "sharpe_3y":              {"code": "historical_sharpe_3y",                     "label": "Historical Sharpe Ratio (3Y)",     "unit": "ratio"},
+    "sortino_3y":             {"code": "historical_sortino_3y",                    "label": "Historical Sortino (3Y)",          "unit": "ratio"},
+    "max_drawdown_3y":        {"code": "max_drawdown_3y",                          "label": "Max Drawdown (3Y)",                "unit": "pct"},
+    "std_dev_3y":             {"code": "monthly_standard_deviation_annualized_3y", "label": "Annualized Std Dev of Monthly Returns (3Y)", "unit": "pct"},
+    "var_5pct_3y":            {"code": "historical_monthly_var_5_3y",              "label": "Monthly Value at Risk (VaR) 5% (3Y)", "unit": "pct"},
+    "expense_ratio":          {"code": "expense_ratio",                           "label": "Net Expense Ratio",                "unit": "pct"},
+    "aum":                    {"code": "total_assets_under_management",            "label": "Total Assets Under Management",    "unit": "usd"},
+    "dividend_yield":         {"code": "dividend_yield",                           "label": "Dividend Yield",                   "unit": "pct"},
+    "turnover_ratio":         {"code": "turnover_ratio",                           "label": "Turnover Ratio",                   "unit": "pct"},
+    "sec_yield_30d":          {"code": "sec_yield",                                "label": "30-Day SEC Yield",                 "unit": "pct"},
+    "pe_ratio":               {"code": "weighted_average_pe_ratio",                "label": "Weighted Average PE Ratio (fund)", "unit": "ratio"},
+    "roe":                    {"code": "latest_return_on_equity_weighted_average_generic", "label": "Weighted Average Latest ROE (closest API match to scraper's winsorized 'Weighted Median ROE' fund-page stat; no exact twin)", "unit": "pct"},
+    "return_1m":              {"code": "one_month_total_return",                   "label": "1 Month Total Returns (Daily)",    "unit": "pct"},
+    "return_3m":              {"code": "three_month_total_return",                 "label": "3 Month Total Returns (Daily)",    "unit": "pct"},
+    "return_ytd":             {"code": "ytd_total_return",                         "label": "Year to Date Total Returns (Daily)", "unit": "pct"},
+    "return_1y":              {"code": "one_year_total_return",                    "label": "1 Year Total Returns (Daily)",     "unit": "pct"},
+    "return_3y_ann":          {"code": "annualized_daily_three_year_total_return", "label": "Annualized 3 Year Total Returns (Daily)", "unit": "pct"},
+    "return_5y_ann":          {"code": "annualized_daily_five_year_total_return",  "label": "Annualized 5 Year Total Returns (Daily)", "unit": "pct"},
+    "max_drawdown_inception": {"code": "max_drawdown_all",                         "label": "Max Drawdown (Since Inception)",   "unit": "pct"},
+    "up_capture_3y":          {"code": "upside_3y",                                "label": "Upside (3Y) capture vs primary benchmark",   "unit": "pct"},
+    "down_capture_3y":        {"code": "downside_3y",                              "label": "Downside (3Y) capture vs primary benchmark", "unit": "pct"}
+  },
+  "_computed": {
+    "updown_ratio": "Not a standalone YCharts metric. Compute = up_capture_3y / down_capture_3y (upside_3y / downside_3y), same as the YCharts 'Capture Ratio' UI row. Capture codes validated 6/24. Note: plain upside_3y/downside_3y are vs the fund's PRIMARY benchmark (matches the scraper's performance-page rows); alternates exist (upside_3y_vs_category, upside_3y_vs_pg, enhanced_upside_3y=vs YCharts Benchmark) if a different reference is wanted."
+  }
+}

@@ -137,7 +137,7 @@ _NOT_DEPLOYED_PY = frozenset({
     "post_run.py", "push_to_github.py", "quantconnect_model.py",
     "record_predictions.py", "refresh_fama_french_factors.py",
     "refresh_growth24_price_cache.py", "refresh_quant_cup_price_cache.py",
-    "regime_detector.py", "run_daily.py", "scrape_ycharts.py",
+    "regime_detector.py", "run_daily.py", "scrape_ycharts.py", "ycharts_api.py",
     "summarize_distill_sweep.py",
     "sync_forecasts_to_features.py", "test_earnings_trigger.py",
     "update_sentiment.py",
