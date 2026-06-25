@@ -206,6 +206,15 @@ def main(
                 _send_alert("dirty_guard", msg)
                 return 4
 
+    # Per-stage timing (informational; never affects the run). Defensive import so
+    # a missing module degrades to no-ops rather than breaking the daily pipeline.
+    try:
+        from services.stage_timer import stage_mark, stage_reset
+    except Exception:
+        def stage_mark(_n): pass
+        def stage_reset(_l=""): pass
+    stage_reset("run_daily.py")
+
     # 1. Generate + email. send_email.py owns the freshness GATE that blocks stale
     #    or non-LLM reports, so a non-zero exit here means we must NOT deploy —
     #    except exit 6 (EXIT_PARTIAL_SEND): partial sends still deploy so the site
@@ -227,6 +236,7 @@ def main(
         _send_alert("send_email", msg)
         return 1
 
+    stage_mark("send_email.py + monitor.py (gen + send)")
     # 2. Post-run tasks + sync to server. A non-zero exit means the deploy itself
     #    failed (dirty guard, transfer error, restart failure, or health probe). We
     #    still run the freshness check so the operator sees content state too, but
@@ -239,6 +249,7 @@ def main(
         _record_status("post_run", False, post_run_warn)
         _send_alert("post_run", post_run_warn)
 
+    stage_mark("post_run.py (DL inference + sync)")
     # 3. Verify the public site actually reflects today's analysis.
     if args.skip_freshness:
         print("[run_daily] freshness check skipped by flag.")

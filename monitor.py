@@ -43,6 +43,15 @@ except Exception:
 
 start_time = time.time()
 
+# Per-stage timing (informational; never affects the run). Defensive import so a
+# missing module degrades to no-ops rather than breaking the daily pipeline.
+try:
+    from services.stage_timer import stage_mark, stage_reset
+except Exception:
+    def stage_mark(_name): pass
+    def stage_reset(_label=""): pass
+stage_reset("monitor.py")
+
 import sys
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 os.environ.setdefault('PYTHONIOENCODING', 'utf-8')
@@ -387,6 +396,7 @@ except Exception as _yc_fresh_exc:
 # (rather than late in the pipeline) fixes the one-cycle lag that previously meant a
 # changed fund universe / fresh metrics only reached the report the FOLLOWING day
 # (e.g. the 2026-06-16 run where 10 newly-added funds were missing from features.parquet).
+stage_mark("ycharts + training + DL fine-tune")
 try:
     subprocess.run([VENV_PYTHON, "data_arbiter.py"], check=True, timeout=120)
 except Exception as e:
@@ -449,6 +459,7 @@ except subprocess.CalledProcessError as e:
     print(f" Warning: Model ranking failed or skipped. Details: {e}")
 
 
+stage_mark("data_arbiter + features + model suite")
 # --- Deep Learning (PyTorch) inference + live prediction logging ---
 try:
     subprocess.run([
@@ -478,6 +489,7 @@ try:
 except subprocess.CalledProcessError as e:
     print(f" Leaderboard build failed but continuing. Details: {e}")
 
+stage_mark("DL inference + predictions + leaderboard")
 # --- Load features (with forecast CSV joins) ---
 features_df = load_ycharts_features()
 
@@ -2409,6 +2421,7 @@ models_overview_html = """
 if not DEV_MODE:
     subprocess.run([VENV_PYTHON, "generate_toggle_chart.py"], check=True)
     subprocess.run([VENV_PYTHON, "generate_charts.py"], check=True)
+stage_mark("charts")
 # Generate market-level LLM commentary; non-zero exit means narrative unavailable.
 os.makedirs("logs", exist_ok=True)
 _gmc_log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "generate_market_commentary.log")
@@ -2422,6 +2435,7 @@ with open(_gmc_log_path, "a", encoding="utf-8") as _gmc_lf:
     _gmc_lf.write(f"\n--- {datetime.now().isoformat()} ---\n")
     _gmc_lf.write(_gmc_result.stdout)
 _gmc_ok = (_gmc_result.returncode == 0)
+stage_mark("commentary (LLM / Ollama)")
 if not _gmc_ok:
     print("[WARN] generate_market_commentary.py returned non-zero — narrative unavailable; PDF will be skipped.")
 # NOTE: data_arbiter.py now runs EARLIER (before features.py) so the current fund
@@ -2431,6 +2445,7 @@ if not DEV_MODE and _gmc_ok:
     subprocess.run([VENV_PYTHON, "generate_pdf_report.py"], check=True)
 elif not DEV_MODE:
     print("[SKIP] PDF generation skipped — narrative unavailable.")
+stage_mark("PDF report")
 
 # --- Read charts ---
 fund_chart_html = _safe_read_text(
@@ -2803,6 +2818,7 @@ except Exception as e:
 # except subprocess.CalledProcessError as e:
 #     print(f" GitHub push failed: {e}")
 
+stage_mark("monitor.py done (pre post_run)")
 print(f" Total runtime: {time.time() - start_time:.1f}s")
 
 # Sync output to server and log predictions
