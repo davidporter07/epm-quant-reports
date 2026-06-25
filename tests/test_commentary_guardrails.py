@@ -1977,3 +1977,46 @@ def test_spotlight_evergreen_drift_flags_session_irrelevant_filler():
     # A genuinely session-grounded paragraph is clean.
     assert gmc._spotlight_evergreen_drift(
         "The XLK index fell 4.14% as memory and chip names led declines on AI-capex doubts.") == []
+
+
+def test_tradingview_headlines_maps_wire_items_to_article_shape(monkeypatch):
+    """#6 substance gap (6/24): the macro feed was a single retail content farm. The new
+    TradingView wire must map its public-widget JSON into the exact article shape
+    fetch_world_news emits (title/summary/source/published_at/url/category) and survive a
+    network failure by returning []."""
+    import io, json as _json, urllib.request as _ur
+
+    payload = {"items": [
+        {"id": "DJN_X:0", "title": "Asian Stocks Rise After Micron Earnings Ease AI Fears",
+         "provider": "dow-jones", "source": "Dow Jones Newswires", "published": 1782359580,
+         "relatedSymbols": [{"symbol": "NASDAQ:MU"}, {"symbol": "TVC:NI225"}],
+         "storyPath": "/news/DJN_X:0/"},
+        {"id": "RTR_Y:0", "title": "", "provider": "reuters", "published": 1782359399,
+         "storyPath": "/news/RTR_Y:0/"},  # empty title must be dropped
+        {"id": "TE_Z:0", "title": "Flash Composite PMI Beats at 52.2", "provider": "trading-economics",
+         "published": 1782359340, "storyPath": "/news/TE_Z:0/"},
+    ]}
+
+    class _Resp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return _json.dumps(payload).encode("utf-8")
+
+    monkeypatch.setattr(_ur, "urlopen", lambda *a, **k: _Resp())
+    arts = gmc.fetch_tradingview_headlines(limit=40)
+
+    assert len(arts) == 2, "empty-title item must be dropped"
+    a = arts[0]
+    assert sorted(a.keys()) == ["category", "published_at", "source", "summary", "title", "url"]
+    assert a["title"].startswith("Asian Stocks Rise")
+    assert a["source"] == "Dow Jones Newswires"
+    assert a["url"] == "https://www.tradingview.com/news/DJN_X:0/"
+    assert a["published_at"].startswith("2026-")          # unix ts -> ISO
+    assert "MU" in a["summary"] and "NI225" in a["summary"]  # related-symbol hint
+    # Trading-Economics carries the flash-PMI print EPM had been missing.
+    assert any("PMI" in x["title"] and x["source"] == "Trading Economics" for x in arts)
+
+    # Network failure must fail soft (no exception, empty list).
+    def _boom(*a, **k): raise OSError("network down")
+    monkeypatch.setattr(_ur, "urlopen", _boom)
+    assert gmc.fetch_tradingview_headlines() == []

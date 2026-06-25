@@ -1395,8 +1395,92 @@ def load_news_headlines() -> dict[str, list[str]]:
     return bucket_headlines(entries)
 
 
+# --- TradingView public news wire (institutional, headless, no-key) -----------
+# The FMP `news.world` feed that fed the macro layer is a retail content farm
+# (24/7 Wall St./Stocktwits/GuruFocus — ~60% of 6/24's payload, 23% pure evergreen
+# SEO filler) that BOTH starved substance (no same-day econ/markets analysis: flash
+# PMI, breadth, commodity reads) AND injected evergreen spam into the Topic Spotlight.
+# See memory project_world_news_feed_quality. TradingView's PUBLIC news-headlines
+# JSON endpoint (the one that powers its web news widget — distinct from the
+# interactive desktop MCP, which is dev-time only) is a free, no-key, headless wire
+# carrying Reuters / Dow Jones Newswires / Trading-Economics / CNBC headlines. We
+# prepend it so its quality items win the de-dup and the 40-slot cap, putting
+# institutional macro coverage at the top of what the Spotlight + commentary see.
+_TV_HEADLINES_URL = "https://news-headlines.tradingview.com/v2/headlines?client=overview&lang=en"
+# Display names for TradingView's provider codes (everything here is a real wire —
+# the whole point of the source swap).
+_TV_PROVIDER_NAMES = {
+    "reuters": "Reuters",
+    "dow-jones": "Dow Jones Newswires",
+    "trading-economics": "Trading Economics",
+    "cnbctv": "CNBC",
+    "dpa_afx": "dpa-AFX",
+    "moneycontrol": "Moneycontrol",
+    "tmx_newsfile": "TMX Newsfile",
+}
+
+
+def fetch_tradingview_headlines(limit: int = 40) -> list[dict]:
+    """Pull macro/markets headlines from TradingView's public news widget API and
+    map them to the same article shape fetch_world_news emits. Headless + no-key;
+    fails soft (returns []) so it can never break the pipeline."""
+    out: list[dict] = []
+    try:
+        import urllib.request as _ur
+        req = _ur.Request(_TV_HEADLINES_URL, headers={
+            "User-Agent": "Mozilla/5.0",
+            "Origin": "https://www.tradingview.com",
+            "Referer": "https://www.tradingview.com/",
+            "Accept": "application/json",
+        })
+        with _ur.urlopen(req, timeout=15) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:
+        print(f"[WARN] TradingView headlines fetch failed: {exc}")
+        return out
+
+    for it in (payload.get("items") or []):
+        if not isinstance(it, dict):
+            continue
+        title = str(it.get("title") or "").strip()
+        if not title:
+            continue
+        prov = str(it.get("provider") or "").strip()
+        source = str(it.get("source") or "").strip() or _TV_PROVIDER_NAMES.get(prov, prov)
+        # published is a unix timestamp (seconds) — normalise to an ISO string.
+        published_at = ""
+        ts = it.get("published")
+        if isinstance(ts, (int, float)) and ts > 0:
+            try:
+                published_at = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+            except Exception:
+                published_at = ""
+        story = str(it.get("storyPath") or "").strip()
+        url = ("https://www.tradingview.com" + story) if story.startswith("/") else story
+        # Surface the wire's own ticker tags as a lightweight summary hint so the
+        # downstream bucketer/Spotlight can connect a headline to fund symbols.
+        rels = it.get("relatedSymbols") or []
+        syms = [str(r.get("symbol", "")).split(":")[-1] for r in rels if isinstance(r, dict)]
+        summary = ("Related: " + ", ".join(s for s in syms if s)) if syms else ""
+        out.append({
+            "title":        title,
+            "summary":      summary,
+            "source":       source,
+            "published_at": published_at,
+            "url":          url,
+            "category":     "world",
+        })
+        if len(out) >= limit:
+            break
+    if out:
+        print(f"[OK] TradingView headlines: {len(out)} institutional items "
+              f"({', '.join(sorted({a['source'] for a in out}))[:120]})")
+    return out
+
+
 def fetch_world_news() -> list[dict]:
-    articles: list[dict] = []
+    # Quality wire FIRST so its institutional items win de-dup + the 40-slot cap.
+    articles: list[dict] = fetch_tradingview_headlines(limit=40)
 
     try:
         from providers.openbb_provider import OpenBBProvider
