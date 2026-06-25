@@ -244,6 +244,11 @@ def test_macro_prints_units(tmp_path, monkeypatch):
         "Initial Jobless Claims": {"value": 215000.0, "prev_value": 210000.0, "date": recent_date},
         "Nonfarm Payrolls":       {"value": 115.0,    "prev_value": 185.0,    "date": old_date},
         "Core PCE (YoY)":         {"value": 3.28919,  "prev_value": 3.23629,  "date": old_date},
+        # 6/25 YCharts API migration supplies pct econ as DECIMAL fractions
+        # (0.042 = 4.2%), not percentages. _fmt must scale these or every print
+        # renders "0.0%" (the 6/25 regression). prev -0.007 -> "-0.7%", not "-0.0%".
+        "CPI (YoY)":              {"value": 0.042,    "prev_value": 0.038,    "date": old_date},
+        "Retail Sales (MoM)":     {"value": 0.048,    "prev_value": -0.007,   "date": old_date},
     }}
     (tmp_path / "market_data_arbitrated.json").write_text(_json.dumps(arb), encoding="utf-8")
     monkeypatch.setattr(gmc, "DATA_DIR", tmp_path)
@@ -251,7 +256,11 @@ def test_macro_prints_units(tmp_path, monkeypatch):
     assert rows["Initial Jobless Claims"]["actual"] == "215k"
     assert rows["Initial Jobless Claims"]["prior"] == "210k"
     assert rows["Nonfarm Payrolls"]["actual"] == "115k"   # already-thousands, not "0k"
-    assert rows["Core PCE (YoY)"]["actual"] == "3.3%"
+    assert rows["Core PCE (YoY)"]["actual"] == "3.3%"     # already-percent (legacy) preserved
+    # Decimal-fraction inputs (YCharts API) must scale to percent, not render 0.0%.
+    assert rows["CPI (YoY)"]["actual"] == "4.2%"
+    assert rows["Retail Sales (MoM)"]["actual"] == "4.8%"
+    assert rows["Retail Sales (MoM)"]["prior"] == "-0.7%"
     # weekly claims (recent obs date) flagged recent; monthly PCE not
     assert rows["Initial Jobless Claims"]["recent"] is True
     assert rows["Core PCE (YoY)"]["recent"] is False

@@ -2357,6 +2357,13 @@ def load_recent_macro_prints(lookback_days: int = 10) -> list[dict]:
         if kind == "m":              # level in thousands -> millions (JOLTS: 7620 -> "7.62M")
             return f"{v/1000:.2f}M"
         if kind == "pct":
+            # YCharts API v4 supplies pct econ values as decimal fractions
+            # (0.042 = 4.2%); the legacy scraper supplied them already as
+            # percentages (4.2). Normalise both: a magnitude < 1 is a decimal
+            # fraction -> scale to percent. Without this, the 6/25 YCharts
+            # migration made EVERY econ print render "0.0%" (decimal 0.042 -> 0.0%).
+            if abs(v) < 1:
+                v *= 100
             return f"{v:.1f}%"
         return f"{v:.1f}"
 
