@@ -2426,7 +2426,7 @@ Do NOT cite foreign central banks (BoE, ECB, BoJ, PBoC, RBA, BoC, SNB) or foreig
 COMMITTED VOICE: take a side. The reader pays to know what YOU think, not which way it could go. Forbidden: "investors should watch", "remains to be seen", "wait-and-see", "could go either way", "markets face headwinds", "cautious optimism", "the outlook is mixed", "uncertainty persists". State the directional view, then the conditions that would invalidate it.
 CAUSAL LINKAGE: every commentary section must name a cause and effect, not just describe a level. Wrong: "the 10-year yield fell 6 bp to 4.50%." Right: "the 10-year yield fell 6 bp to 4.50% as falling oil prices eased the inflation impulse, providing relief to growth-name multiples." Connect at least one named driver and one downstream effect.
 GROWTH-MULTIPLE DIRECTION (critical): Falling oil prices and falling Treasury yields are TAILWINDS for growth/tech equity multiples — they relieve discount-rate and inflation pressure, they do not compress it. NEVER attribute a technology or growth-equity selloff, or "compressed/compressing multiples", to lower oil or lower yields. If tech fell on a day when oil and/or yields also fell, the tech driver is its OWN story (AI-capex sustainability doubts, stretched valuations, a single-name disappointment, a broken deal) — name that driver, and treat the lower oil/yields as a partial OFFSET, not the cause. The only correct direction: oil/yields DOWN → multiples RELIEVED; oil/yields UP → multiples PRESSURED.
-RISK-ON / RISK-OFF POLARITY (critical): "risk-off" means investors flee TO safety — equities FALL while safe-havens (gold, Treasuries, the yen, VIX) RISE. "risk-on" is the mirror image — equities RISE while safe-havens fall. Match the label to the tape: if the S&P 500 closed higher and equities rallied, the regime is RISK-ON, even when the catalyst is geopolitical de-escalation — a peace deal or ceasefire that drains the safe-haven and oil-supply premium is RISK-ON, not risk-off. NEVER call falling gold or falling oil "risk-off sentiment" (a falling safe-haven is risk-ON), NEVER write that a "risk-off backdrop supported/lifted equities", and NEVER call risk-off "the dominant theme" on a day the S&P closed higher (and vice-versa for risk-on on a down day). The only exception is genuine cross-asset divergence, which you must state explicitly (e.g. "equities rallied even as a residual bid for Treasuries signaled lingering caution").
+RISK-ON / RISK-OFF POLARITY (critical): "risk-off" means investors flee TO safety — equities FALL while safe-havens (gold, Treasuries, the yen, VIX) RISE. "risk-on" is the mirror image — equities RISE while safe-havens fall. Match the label to the tape: if the S&P 500 closed higher and equities rallied, the regime is RISK-ON, even when the catalyst is geopolitical de-escalation — a peace deal or ceasefire that drains the safe-haven and oil-supply premium is RISK-ON, not risk-off. NEVER call falling gold or falling oil "risk-off sentiment" (a falling safe-haven is risk-ON), NEVER write that a "risk-off backdrop supported/lifted equities", and NEVER call risk-off "the dominant theme" on a day the S&P closed higher (and vice-versa for risk-on on a down day). The only exception is genuine cross-asset divergence, which you must state explicitly (e.g. "equities rallied even as a residual bid for Treasuries signaled lingering caution"). CROSS-SECTION CONSISTENCY (2026-06-26): pick ONE characterization of the session's risk regime and use it in EVERY section — never label the same day "risk-on" in one place (recap, quant read) and "risk-off" in another (spotlight, outlook). When the tape is genuinely flat or mixed (|S&P 500 daily move| < ~0.25%, or cyclical-sector leadership coexisting with a geopolitical safe-haven bid), call it a "mixed session" explicitly rather than asserting opposite regimes in different sections.
 RELEVANCE — NO TANGENTIAL COLOR (critical): Every causal clause must explain the session's actual price move or a near-term catalyst the reader is positioning for. Do NOT decorate a market line with color that does not move the tape: a public figure's reaction or endorsement (a politician's, central banker's, or clergy member's statement of thanks/approval), or a single company's distant forward-quarter revenue/earnings ESTIMATE, do not belong in a pre-market bullet or commentary sentence unless that specific item is what moved the price. If a detail is real but does not bear on the move or an imminent catalyst, omit it — restraint beats embellishment.
 FORWARD HOOK: each commentary section's closing sentence must name a specific price level, threshold, or catalyst the reader is watching next — never generic ("traders will be watching" is banned).
 Return ONLY valid JSON  no markdown fences, no explanation."""
@@ -5005,6 +5005,32 @@ def _flip_direction_words(text: str, truth_pct: float) -> tuple[str, bool]:
             return w
         changed = True
         return repl[0].upper() + repl[1:] if w[:1].isupper() else repl
+
+    # Directional trend-NOUNS first (before the verb pass, so "gains/losses" here are
+    # handled as nouns, not the verb-map's "gains"->"loses"). "extended losses" /
+    # "extension of losses" / "added to its declines" is a noun-phrase trend the
+    # verb-only map missed. 2026-06-26: gold rose +0.97% on the day yet
+    # commodities_commentary + cross_asset_synthesis said "Gold extended losses to
+    # $4,045.59 (+0.97%)" / "extension of losses". Flip only the trend NOUN (keep the
+    # verb), and only when it rides a trend-CONTINUATION verb so reversal phrasing
+    # ("pared/trimmed losses", coherent on an up day) and unrelated "losses" are left
+    # untouched.
+    _wrong_nouns = r"loss(?:es)?|declines?" if up else r"gains?|advances?"
+    _right_noun = "gains" if up else "losses"
+    _trend_noun_re = re.compile(
+        r"\b(extend\w*|extension\s+of|deepen\w*|add\w*\s+to|continu\w*|mount\w*)"
+        r"((?:\s+(?:its|their))?\s+)(" + _wrong_nouns + r")\b",
+        re.IGNORECASE,
+    )
+
+    def _trend_noun_sub(m: "re.Match") -> str:
+        nonlocal changed
+        changed = True
+        orig = m.group(3)
+        repl = _right_noun[0].upper() + _right_noun[1:] if orig[:1].isupper() else _right_noun
+        return m.group(1) + m.group(2) + repl
+
+    text = _trend_noun_re.sub(_trend_noun_sub, text)
 
     text = verb_re.sub(_verb_sub, text)
 

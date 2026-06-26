@@ -193,6 +193,33 @@ def test_direction_word_noop_on_empty_snapshot():
     assert gmc._check_direction_words(data, {}) == []
 
 
+def test_direction_word_extended_losses_flagged_when_asset_rose():
+    # 6/26 regression: gold ROSE on the day (+1.36% in this snapshot) yet two fields
+    # said "extended losses" / "extension of losses". The verb-only flip map missed
+    # the noun-phrase trend, so the contradiction shipped.
+    data = {
+        "commodities_commentary":
+            "Gold extended losses to $4,045.59 (+0.97%) as the dollar weakened.",
+        "cross_asset_synthesis":
+            "Gold's extension of losses signals the safe-haven bid is insufficient.",
+    }
+    assert gmc._check_direction_words(data, _SNAP_0601)                 # flagged
+    fixes = gmc._correct_direction_words(data, _SNAP_0601)
+    assert fixes == 2                                                   # both fields fixed
+    assert "extended gains" in data["commodities_commentary"]
+    assert "extension of gains" in data["cross_asset_synthesis"]
+    assert "loss" not in data["cross_asset_synthesis"].lower()
+    assert gmc._check_direction_words(data, _SNAP_0601) == []           # clean after
+
+
+def test_direction_word_pared_losses_on_up_day_is_left_alone():
+    # "pared losses" describes a REVERSAL toward green — coherent on an up day, so the
+    # trend-noun flip must NOT touch it (only trend-CONTINUATION verbs flip).
+    data = {"commodities_commentary": "Gold pared losses to finish higher on the session."}
+    assert gmc._correct_direction_words(data, _SNAP_0601) == 0
+    assert gmc._check_direction_words(data, _SNAP_0601) == []
+
+
 # --- fabricated corporate-action guard (Fix #2) ----------------------------
 # Regression: 2026-06-01 shipped "Nvidia's 2,400% dividend hike reshapes S&P 500
 # income streams" (and echoed it into the Equities outlook + XNTK spotlight).
