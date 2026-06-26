@@ -220,6 +220,65 @@ def test_direction_word_pared_losses_on_up_day_is_left_alone():
     assert gmc._check_direction_words(data, _SNAP_0601) == []
 
 
+# --- Asian-index settled-close reconciliation (6/26 Nikkei staleness) -----------
+import datetime as _dtmod
+
+
+def _patch_fast_info(monkeypatch, last_price):
+    class _FI:
+        pass
+    fi = _FI()
+    fi.last_price = last_price
+
+    class _Tk:
+        def __init__(self, *a, **k):
+            pass
+        @property
+        def fast_info(self):
+            return fi
+    monkeypatch.setattr(gmc.yf, "Ticker", _Tk)
+
+
+_US_MORNING = _dtmod.datetime(2026, 6, 26, 13, 0, tzinfo=_dtmod.timezone.utc)   # 8am CDT
+_TOKYO_OPEN = _dtmod.datetime(2026, 6, 26, 2, 0, tzinfo=_dtmod.timezone.utc)    # Asia trading
+
+
+def test_asian_index_rolls_forward_to_settled_close(monkeypatch):
+    # 6/26: daily bar carried the 6/25 Tokyo close (72,366.34, +4.61%); the true 6/26
+    # settled close (69,360.88, -4.15%, the value Sevens printed) sits in fast_info.
+    _patch_fast_info(monkeypatch, 69360.88)
+    q = {"level": 72366.34, "change": 3191.0, "pct_change": 4.61}
+    out = gmc._reconcile_asian_index_close("^N225", q, now_utc=_US_MORNING)
+    assert out["level"] == 69360.88
+    assert out["pct_change"] == -4.15            # vs the daily bar as the prior session
+    assert q["level"] == 72366.34                # input dict not mutated
+
+
+def test_asian_index_noop_during_asia_trading_hours(monkeypatch):
+    # Inside Asian trading, fast_info is a LIVE intraday tick, not a settled close —
+    # the time gate must prevent adopting it.
+    _patch_fast_info(monkeypatch, 69360.88)
+    q = {"level": 72366.34, "change": 3191.0, "pct_change": 4.61}
+    out = gmc._reconcile_asian_index_close("^N225", q, now_utc=_TOKYO_OPEN)
+    assert out == q
+
+
+def test_asian_index_noop_when_daily_bar_already_current(monkeypatch):
+    # fast_info == daily bar → nothing to roll forward.
+    _patch_fast_info(monkeypatch, 72366.34)
+    q = {"level": 72366.34, "change": 100.0, "pct_change": 0.14}
+    out = gmc._reconcile_asian_index_close("^N225", q, now_utc=_US_MORNING)
+    assert out == q
+
+
+def test_asian_index_rejects_garbage_quote(monkeypatch):
+    # A wildly out-of-band fast_info value (bad tick) must be ignored.
+    _patch_fast_info(monkeypatch, 5.0)
+    q = {"level": 72366.34, "change": 100.0, "pct_change": 0.14}
+    out = gmc._reconcile_asian_index_close("^N225", q, now_utc=_US_MORNING)
+    assert out == q
+
+
 # --- fabricated corporate-action guard (Fix #2) ----------------------------
 # Regression: 2026-06-01 shipped "Nvidia's 2,400% dividend hike reshapes S&P 500
 # income streams" (and echoed it into the Equities outlook + XNTK spotlight).

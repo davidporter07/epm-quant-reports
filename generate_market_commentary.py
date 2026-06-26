@@ -495,6 +495,50 @@ def fetch_market_snapshot(prev_data: dict | None = None) -> dict[str, dict]:
     return result
 
 
+# Asian CASH indices: yfinance's daily-bar feed (history/download) lags ~1 session
+# for these, but the exchange has long since CLOSED by the time the pipeline runs in
+# the US morning, so fast_info.last_price already holds the true latest completed
+# close — the same session Sevens reports. (European indices are deliberately NOT in
+# this set: they are still OPEN at the US-morning run, so their fast_info would be a
+# live intraday tick, not a settled close.)
+_ASIAN_INDEX_TICKERS = {"^N225", "^HSI", "^AXJO"}
+
+
+def _reconcile_asian_index_close(ticker: str, q: dict, *, now_utc=None) -> dict:
+    """Roll an Asian index forward to its latest SETTLED close when the daily bar lags.
+
+    2026-06-26: the Nikkei daily bar carried the 6/25 Tokyo close (+4.61%) while the
+    actual 6/26 close was -4.15% (the value Sevens printed). The fresh close sits in
+    fast_info.last_price; adopt it as the level, keeping the daily bar (q['level']) as
+    the prior session so the % move matches. Gated to 08:00-22:00 UTC, the window in
+    which Tokyo/Hong Kong/Sydney are all closed, so an in-session intraday tick can
+    never be mistaken for a settled close. Shape-preserving; never raises.
+    """
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        hour = (now_utc or _dt.now(_tz.utc)).hour
+        if not (8 <= hour < 22):
+            return q
+        prior = q.get("level")
+        if not prior:
+            return q
+        last = getattr(yf.Ticker(ticker).fast_info, "last_price", None)
+        if last is None:
+            return q
+        last = float(last)
+        # Adopt only a DIFFERENT, sane session (a newer close not yet in the daily
+        # bars). The sanity band rejects a garbage quote; the 0.05% floor ignores
+        # rounding noise when the daily bar is already current.
+        if 0.5 < last / prior < 2.0 and abs(last / prior - 1) > 0.0005:
+            q = dict(q)
+            q["level"] = round(last, 4)
+            q["change"] = round(last - prior, 4)
+            q["pct_change"] = round((last / prior - 1) * 100, 2)
+        return q
+    except Exception:
+        return q
+
+
 def fetch_global_markets(prev_data: dict | None = None) -> dict[str, dict]:
     # NOTE: unlike commodities/futures, global equity INDICES do not roll contracts, so
     # the stored prev_close mechanism (designed for BZ=F/CL=F/GC=F roll protection) is the
@@ -508,6 +552,8 @@ def fetch_global_markets(prev_data: dict | None = None) -> dict[str, dict]:
     for name, ticker in GLOBAL_TICKERS.items():
         q = _fetch_quote(ticker)
         if q:
+            if ticker in _ASIAN_INDEX_TICKERS:
+                q = _reconcile_asian_index_close(ticker, q)
             result[name] = q
     return result
 
