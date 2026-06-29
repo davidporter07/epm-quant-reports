@@ -256,7 +256,7 @@ function renderForecastCards(tickers, asOf, chartDataMap) {
       </div>
       <div class="forecast-card-meta">
         <span class="badge ${confClass}" title="Model consensus level — not realized forecast accuracy">${d.confidence_label || '—'} Agreement</span>
-        ${d.winning_model ? `<span class="agree-badge">★ ${d.winning_model}</span>` : ''}
+        ${d.winning_model ? `<span class="agree-badge" title="Best recent fit — the model with the lowest recent forecast error. A recency measure, not a recommendation.">★ ${d.winning_model}</span>` : ''}
       </div>
       ${agreePct !== null ? `
         <div class="forecast-agree-bar">
@@ -344,15 +344,15 @@ function initFanChart(ticker, forecastItem, chartItem) {
 
     // Band 3 (±3σ) — widest, most transparent
     traces.push({ x: d, y: fan.band_3_lower, mode: 'lines', line: { width: 0 }, showlegend: false, hoverinfo: 'skip' });
-    traces.push({ x: d, y: fan.band_3_upper, fill: 'tonexty', fillcolor: 'rgba(59,130,246,0.06)', mode: 'lines', line: { width: 0 }, name: '±3σ', hoverinfo: 'skip' });
+    traces.push({ x: d, y: fan.band_3_upper, fill: 'tonexty', fillcolor: 'rgba(59,130,246,0.06)', mode: 'lines', line: { width: 0 }, name: 'Model spread ±3σ', hoverinfo: 'skip' });
 
     // Band 2 (±2σ)
     traces.push({ x: d, y: fan.band_2_lower, mode: 'lines', line: { width: 0 }, showlegend: false, hoverinfo: 'skip' });
-    traces.push({ x: d, y: fan.band_2_upper, fill: 'tonexty', fillcolor: 'rgba(99,102,241,0.10)', mode: 'lines', line: { width: 0 }, name: '±2σ', hoverinfo: 'skip' });
+    traces.push({ x: d, y: fan.band_2_upper, fill: 'tonexty', fillcolor: 'rgba(99,102,241,0.10)', mode: 'lines', line: { width: 0 }, name: 'Model spread ±2σ', hoverinfo: 'skip' });
 
     // Band 1 (±1σ) — narrowest, most visible
     traces.push({ x: d, y: fan.band_1_lower, mode: 'lines', line: { width: 0 }, showlegend: false, hoverinfo: 'skip' });
-    traces.push({ x: d, y: fan.band_1_upper, fill: 'tonexty', fillcolor: 'rgba(52,211,153,0.18)', mode: 'lines', line: { width: 0 }, name: '±1σ', hoverinfo: 'skip' });
+    traces.push({ x: d, y: fan.band_1_upper, fill: 'tonexty', fillcolor: 'rgba(52,211,153,0.18)', mode: 'lines', line: { width: 0 }, name: 'Model spread ±1σ', hoverinfo: 'skip' });
 
     // Consensus line
     traces.push({
@@ -837,11 +837,11 @@ function renderModalChart(ticker, forecastItem, chartItem, showModels) {
   if (fan) {
     const d = fan.dates;
     traces.push({ x: d, y: fan.band_3_lower, mode: 'lines', line: { width: 0 }, showlegend: false, hoverinfo: 'skip' });
-    traces.push({ x: d, y: fan.band_3_upper, fill: 'tonexty', fillcolor: 'rgba(59,130,246,0.07)', mode: 'lines', line: { width: 0 }, name: '±3σ', hoverinfo: 'skip' });
+    traces.push({ x: d, y: fan.band_3_upper, fill: 'tonexty', fillcolor: 'rgba(59,130,246,0.07)', mode: 'lines', line: { width: 0 }, name: 'Model spread ±3σ', hoverinfo: 'skip' });
     traces.push({ x: d, y: fan.band_2_lower, mode: 'lines', line: { width: 0 }, showlegend: false, hoverinfo: 'skip' });
-    traces.push({ x: d, y: fan.band_2_upper, fill: 'tonexty', fillcolor: 'rgba(99,102,241,0.12)', mode: 'lines', line: { width: 0 }, name: '±2σ', hoverinfo: 'skip' });
+    traces.push({ x: d, y: fan.band_2_upper, fill: 'tonexty', fillcolor: 'rgba(99,102,241,0.12)', mode: 'lines', line: { width: 0 }, name: 'Model spread ±2σ', hoverinfo: 'skip' });
     traces.push({ x: d, y: fan.band_1_lower, mode: 'lines', line: { width: 0 }, showlegend: false, hoverinfo: 'skip' });
-    traces.push({ x: d, y: fan.band_1_upper, fill: 'tonexty', fillcolor: 'rgba(52,211,153,0.2)', mode: 'lines', line: { width: 0 }, name: '±1σ', hoverinfo: 'skip' });
+    traces.push({ x: d, y: fan.band_1_upper, fill: 'tonexty', fillcolor: 'rgba(52,211,153,0.2)', mode: 'lines', line: { width: 0 }, name: 'Model spread ±1σ', hoverinfo: 'skip' });
     traces.push({
       x: d, y: fan.consensus, mode: 'lines', name: 'Consensus',
       line: { color: '#d4a84b', width: 3 },

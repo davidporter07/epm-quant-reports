@@ -24,6 +24,9 @@ BACKTEST_FILES = {
 }
 
 CURRENT_FORECAST_FILES = {
+    # Model names here MUST match the Model column in model_leaderboard_by_ticker.csv so the
+    # walk-forward skill (RMSE/Corr/Directional) lines up per model.
+    "DeepLearning": (os.path.join(DATA_DIR, "dl_forecasts.csv"), "DL Forecast (%)"),
     "Fama-French": (os.path.join(DATA_DIR, "fama_french_forecasts.csv"), "FF Forecast (%)"),
     "Institutional": (os.path.join(DATA_DIR, "institutional_forecasts.csv"), "Institutional Forecast (%)"),
     "QuantConnect": (os.path.join(DATA_DIR, "quantconnect_forecasts.csv"), "QuantConnect Forecast (%)"),
@@ -31,6 +34,73 @@ CURRENT_FORECAST_FILES = {
     "ML": (os.path.join(DATA_DIR, "ml_forecasts.csv"), "ML Forecast (%)"),
     "ARIMAX": (os.path.join(DATA_DIR, "arimax_forecasts.csv"), "ARIMAX Forecast (%)"),
 }
+
+# Single source of truth for model skill: the same walk-forward leaderboard the forecasting
+# page shows (model_leaderboard.py -> model_leaderboard_by_ticker.csv). Using it here keeps the
+# consensus, the page "winner", and the report summary from disagreeing about which model is best.
+LEADERBOARD_PATH = os.path.join(DATA_DIR, "model_leaderboard_by_ticker.csv")
+
+# A model with no directional edge (anti-correlated, or sub-coin-flip direction) over a
+# meaningful sample is down-weighted to this fraction of its inverse-RMSE weight in the
+# consensus — floored, never removed, so every model still contributes and stays in the suite.
+SKILL_FLOOR = 0.15
+# Require at least this many matured observations before we trust (and act on) a skill estimate.
+MIN_SKILL_N = 8
+
+
+def _safe_float(v):
+    try:
+        f = float(v)
+        return None if (f != f) else f   # drop NaN
+    except Exception:
+        return None
+
+
+def load_leaderboard_skill(path: str = LEADERBOARD_PATH) -> dict:
+    """Per-(ticker, model) walk-forward skill from the page's leaderboard.
+
+    Returns {(TICKER, Model): {rmse, corr, dir, dir_no, mae, n, rank}}; empty when the file is
+    missing/unreadable so callers fall back to the legacy behaviour. Rank is recomputed by
+    lowest MAE (RMSE tiebreak) to mirror the page exactly.
+    """
+    out: dict = {}
+    if not os.path.exists(path):
+        return out
+    try:
+        lb = pd.read_csv(path)
+    except Exception:
+        return out
+    if lb.empty or "Ticker" not in lb.columns or "Model" not in lb.columns or "MAE" not in lb.columns:
+        return out
+    # The leaderboard writes "FamaFrench"; the consensus/current-forecast layer uses
+    # "Fama-French". Normalize so skill keys line up with current["Model"] (every other
+    # model name already matches exactly).
+    lb_name_aliases = {"FamaFrench": "Fama-French"}
+    lb = lb.sort_values(["Ticker", "MAE", "RMSE"]).copy()
+    lb["__rank"] = lb.groupby("Ticker").cumcount() + 1
+    for _, r in lb.iterrows():
+        raw_model = str(r["Model"]).strip()
+        key = (str(r["Ticker"]).upper().strip(), lb_name_aliases.get(raw_model, raw_model))
+        out[key] = {
+            "rmse": _safe_float(r.get("RMSE")),
+            "corr": _safe_float(r.get("Corr")),
+            "dir": _safe_float(r.get("Directional_Accuracy")),
+            "dir_no": _safe_float(r.get("Directional_Accuracy_NO")),
+            "mae": _safe_float(r.get("MAE")),
+            "n": _safe_float(r.get("N")),
+            "rank": int(r["__rank"]),
+        }
+    return out
+
+
+def _is_unskilled(sk: dict) -> bool:
+    """True when a model shows no directional edge over a trustworthy sample: anti-correlated
+    (Corr <= 0) OR sub-coin-flip directional accuracy. Gated on MIN_SKILL_N so an unproven model
+    is treated as neutral, not punished."""
+    if not sk or not sk.get("n") or sk["n"] < MIN_SKILL_N:
+        return False
+    corr, d = sk.get("corr"), sk.get("dir")
+    return (corr is not None and corr <= 0) or (d is not None and d < 0.5)
 
 
 def load_backtests() -> pd.DataFrame:
@@ -135,9 +205,37 @@ def load_current_forecasts() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def pick_winners(rankings: pd.DataFrame, current: pd.DataFrame) -> pd.DataFrame:
+def pick_winners(rankings: pd.DataFrame, current: pd.DataFrame, skill: dict | None = None) -> pd.DataFrame:
+    """Winning model per ticker = the leaderboard's rank-1 model that has a current forecast
+    (identical to the page), with its skill metrics. Falls back to the legacy composite ranking
+    only when the leaderboard is unavailable, so the report and the page never crown different
+    models."""
+    if skill is None:
+        skill = load_leaderboard_skill()
     rows = []
     for ticker in MAG7:
+        cur_t = current[current["Ticker"] == ticker]
+        lb_ranked = sorted(
+            ((m, sk) for (tk, m), sk in skill.items() if tk == ticker and sk.get("rank")),
+            key=lambda kv: kv[1]["rank"],
+        )
+        chosen = next(((m, sk) for m, sk in lb_ranked if not cur_t[cur_t["Model"] == m].empty), None)
+        if chosen is not None:
+            m, sk = chosen
+            sub = cur_t[cur_t["Model"] == m]
+            rows.append({
+                "Date": datetime.today().date().isoformat(),
+                "Ticker": ticker,
+                "Winning_Model": m,
+                "Winning_Forecast": sub["Forecast_Return"].iloc[-1] if not sub.empty else np.nan,
+                "Composite_Score": np.nan,
+                "MAE": sk.get("mae"),
+                "RMSE": sk.get("rmse"),
+                "Directional_Accuracy": sk.get("dir"),
+                "Correlation": sk.get("corr"),
+            })
+            continue
+        # Fallback: legacy composite ranking (leaderboard absent / model not matured yet)
         rk = rankings[rankings["Ticker"] == ticker].sort_values(["Rank", "Composite_Score"])
         if rk.empty:
             continue
@@ -158,7 +256,18 @@ def pick_winners(rankings: pd.DataFrame, current: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def build_consensus(current: pd.DataFrame, rankings: pd.DataFrame) -> pd.DataFrame:
+def build_consensus(current: pd.DataFrame, rankings: pd.DataFrame, skill: dict | None = None) -> pd.DataFrame:
+    """Skill-gated inverse-RMSE consensus.
+
+    Each model is weighted by 1/RMSE from the walk-forward leaderboard, then a directional-skill
+    gate floors (does NOT remove) any model with no edge — anti-correlated or sub-coin-flip — to
+    SKILL_FLOOR of its weight, so a reliably wrong-signed model can no longer steer the consensus
+    while every model still contributes. Models without a trustworthy leaderboard entry keep a
+    neutral fallback weight (unproven, not penalised). Top_Model is the leaderboard's rank-1 for
+    the ticker, so the consensus, the page, and the report all name the same best model.
+    """
+    if skill is None:
+        skill = load_leaderboard_skill()
     rows = []
     for ticker in MAG7:
         cur = current[current["Ticker"] == ticker].copy()
@@ -166,27 +275,46 @@ def build_consensus(current: pd.DataFrame, rankings: pd.DataFrame) -> pd.DataFra
             continue
         simple = cur["Forecast_Return"].mean()
 
+        # Legacy backtest RMSE (Linear/ML/ARIMAX) as a fallback base weight when a model has no
+        # leaderboard entry yet; the leaderboard is the primary source below.
         ranked = rankings[rankings["Ticker"] == ticker].copy()
-        weight_map = {}
+        legacy_rmse = {}
         if not ranked.empty:
             ranked = ranked[ranked["Observations"] >= 5].copy()
-            if not ranked.empty:
-                ranked["weight"] = 1.0 / ranked["RMSE"].replace(0, np.nan)
-                ranked["weight"] = ranked["weight"].replace([np.inf, -np.inf], np.nan)
-                med = ranked["weight"].median()
-                for _, rr in ranked.iterrows():
-                    weight_map[rr["Model"]] = rr["weight"]
-            else:
-                med = np.nan
-        else:
-            med = np.nan
-        fallback_weight = float(med) * 0.5 if pd.notna(med) and med > 0 else 1.0
-        cur["Weight"] = cur["Model"].map(weight_map).fillna(fallback_weight)
+            for _, rr in ranked.iterrows():
+                legacy_rmse[rr["Model"]] = _safe_float(rr["RMSE"])
+        lb_weights = [1.0 / sk["rmse"] for (tk, _m), sk in skill.items()
+                      if tk == ticker and sk.get("rmse") and sk["rmse"] > 0]
+        median_lb_weight = float(np.median(lb_weights)) if lb_weights else np.nan
+        fallback_weight = median_lb_weight * 0.5 if pd.notna(median_lb_weight) and median_lb_weight > 0 else 1.0
+
+        def _weight_for(model: str) -> float:
+            sk = skill.get((ticker, model))
+            rmse = sk.get("rmse") if sk else None
+            if rmse is None or rmse <= 0:
+                rmse = legacy_rmse.get(model)
+            if rmse is None or rmse <= 0:
+                return fallback_weight                      # unproven model — neutral weight
+            w = 1.0 / rmse
+            if _is_unskilled(sk):
+                w *= SKILL_FLOOR                            # no directional edge — floored, not dropped
+            return w
+
+        cur["Weight"] = cur["Model"].map(_weight_for)
         weighted = np.average(cur["Forecast_Return"], weights=cur["Weight"]) if cur["Weight"].sum() > 0 else simple
 
-        top_model = None
-        top_forecast = np.nan
-        if not ranked.empty:
+        # Top model = leaderboard rank-1 (same as the page); fall back to the composite ranking.
+        top_model, top_forecast = None, np.nan
+        lb_ranked = sorted(
+            ((m, sk) for (tk, m), sk in skill.items() if tk == ticker and sk.get("rank")),
+            key=lambda kv: kv[1]["rank"],
+        )
+        for m, _sk in lb_ranked:
+            sub = cur[cur["Model"] == m]
+            if not sub.empty:
+                top_model, top_forecast = m, sub["Forecast_Return"].iloc[-1]
+                break
+        if top_model is None and not ranked.empty:
             rtop = ranked.sort_values(["Composite_Score", "RMSE"]).iloc[0]
             top_model = rtop["Model"]
             sub = cur[cur["Model"] == top_model]
@@ -198,7 +326,7 @@ def build_consensus(current: pd.DataFrame, rankings: pd.DataFrame) -> pd.DataFra
             "Ticker": ticker,
             "Consensus_Forecast_Simple": simple,
             "Consensus_Forecast": weighted,
-            "Consensus_Method": "WeightedInverseRMSE",
+            "Consensus_Method": "SkillGatedInverseRMSE",
             "Model_Count": int(len(cur)),
             "Top_Model": top_model,
             "Top_Model_Forecast": top_forecast,
@@ -299,10 +427,11 @@ def main() -> None:
     rankings.to_csv(RANKINGS_PATH, index=False)
 
     current = load_current_forecasts()
-    winners = pick_winners(rankings, current)
+    skill = load_leaderboard_skill()   # one read, shared by winners + consensus for consistency
+    winners = pick_winners(rankings, current, skill)
     winners.to_csv(WINNERS_PATH, index=False)
 
-    consensus = build_consensus(current, rankings)
+    consensus = build_consensus(current, rankings, skill)
     consensus.to_csv(CONSENSUS_PATH, index=False)
 
     agreement = compute_agreement(current, consensus)
