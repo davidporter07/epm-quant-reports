@@ -488,6 +488,8 @@ function renderPodiumLeaderboard(forecastTickers, chartDataMap) {
       const rank0 = topRankings.indexOf(r); // 0=gold,1=silver,2=bronze
       const mClass = MEDAL_CLASSES[rank0] || '';
       const dirAcc = r.Directional_Accuracy != null ? (r.Directional_Accuracy * 100).toFixed(0) + '%' : '—';
+      const dirNO = (r.Directional_Accuracy_NO != null && !Number.isNaN(Number(r.Directional_Accuracy_NO)))
+        ? (Number(r.Directional_Accuracy_NO) * 100).toFixed(0) + '%' : null;
       const rmse = metricPct(r.RMSE);
       const modelLabel = MODEL_LABELS[r.Model] || r.Model || '—';
       const modelColor = MODEL_COLORS[r.Model] || '#aaa';
@@ -514,7 +516,7 @@ function renderPodiumLeaderboard(forecastTickers, chartDataMap) {
         <div class="podium-slot ${mClass}">
           <div class="podium-medal">${MEDALS[rank0]}</div>
           <div class="podium-model-name" style="color:${modelColor}">${modelLabel}</div>
-          <div class="podium-model-stats">RMSE ${rmse} · Dir ${dirAcc}</div>
+          <div class="podium-model-stats" title="Dir = directional hit-rate over all (overlapping) 21-day forecasts. ind = hit-rate over only the independent, non-overlapping windows (the honest read).">RMSE ${rmse} · Dir ${dirAcc}${dirNO ? ` · ind ${dirNO}` : ''}</div>
           <div class="podium-platform ${mClass}"></div>
         </div>`;
     }).join('');
@@ -524,6 +526,9 @@ function renderPodiumLeaderboard(forecastTickers, chartDataMap) {
       const modelLabel = MODEL_LABELS[r.Model] || r.Model || '—';
       const modelColor = MODEL_COLORS[r.Model] || '#aaa';
       const dirAcc = r.Directional_Accuracy != null ? (r.Directional_Accuracy * 100).toFixed(0) + '%' : '—';
+      const dirNO = (r.Directional_Accuracy_NO != null && !Number.isNaN(Number(r.Directional_Accuracy_NO)))
+        ? (Number(r.Directional_Accuracy_NO) * 100).toFixed(0) + '%' : '—';
+      const nNO = r.N_NonOverlap != null ? Number(r.N_NonOverlap).toFixed(0) : '—';
       const obs = r.N != null ? Number(r.N).toFixed(0) : '—';
       const corr = r.Corr != null && !Number.isNaN(Number(r.Corr)) ? Number(r.Corr).toFixed(2) : '—';
       let lookbackHTML = '<span class="lookback-verdict neutral">—</span>';
@@ -543,7 +548,8 @@ function renderPodiumLeaderboard(forecastTickers, chartDataMap) {
           <span class="leaderboard-model" style="color:${modelColor}">${modelLabel}</span>
           <span class="leaderboard-stat leaderboard-stat--mae"><span>MAE</span>${metricPct(r.MAE)}</span>
           <span class="leaderboard-stat leaderboard-stat--rmse"><span>RMSE</span>${metricPct(r.RMSE)}</span>
-          <span class="leaderboard-stat leaderboard-stat--dir"><span>Dir</span>${dirAcc}</span>
+          <span class="leaderboard-stat leaderboard-stat--dir" title="Directional hit-rate over ALL ${obs} logged 21-day forecasts. These windows overlap ~95%, so read it as optimistic."><span>Dir</span>${dirAcc}</span>
+          <span class="leaderboard-stat optional" title="Honest hit-rate: directional accuracy over only the ${nNO} INDEPENDENT, non-overlapping 21-day windows. Small sample — treat as a directional read, not a precise number."><span>Dir·ind</span>${dirNO}<small style="opacity:.55;margin-left:3px;">n${nNO}</small></span>
           <span class="leaderboard-stat optional"><span>Corr</span>${corr}</span>
           <span class="leaderboard-stat optional"><span>N</span>${obs}</span>
           <span class="leaderboard-lookback">${lookbackHTML}</span>

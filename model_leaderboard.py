@@ -141,12 +141,51 @@ def _realized_forward_return_from_prices(
     return start_dt, end_dt, realized
 
 
+def _greedy_nonoverlap(g: pd.DataFrame) -> pd.DataFrame:
+    """Pick a chain of predictions whose forward [start, end] windows do not overlap.
+
+    Daily forecasts of a 21-trading-day return overlap ~95% (consecutive windows share
+    20 of 21 days), so a hit-rate computed over all of them is built on only a handful of
+    INDEPENDENT outcomes and looks more impressive than it is. Greedily walk the windows in
+    start-date order, keeping each one only when it begins on/after the previously kept
+    window's end — yielding a maximal set of independent, non-overlapping observations.
+    """
+    gg = g.copy()
+    gg["_s"] = pd.to_datetime(gg.get("StartTradingDay"), errors="coerce")
+    gg["_e"] = pd.to_datetime(gg.get("EndTradingDay"), errors="coerce")
+    gg = gg.dropna(subset=["_s", "_e"]).sort_values("_s")
+    keep_idx: List = []
+    last_end: Optional[pd.Timestamp] = None
+    for idx, row in gg.iterrows():
+        if last_end is None or row["_s"] >= last_end:
+            keep_idx.append(idx)
+            last_end = row["_e"]
+    return gg.loc[keep_idx]
+
+
+def _nonoverlap_pool(group: pd.DataFrame) -> pd.DataFrame:
+    """Non-overlapping subset, computed PER TICKER then pooled — different tickers' windows
+    are independent of each other, so overlap only has to be broken within a single ticker."""
+    if "Ticker" in group.columns and group["Ticker"].nunique() > 1:
+        parts = [_greedy_nonoverlap(g) for _, g in group.groupby("Ticker")]
+        return pd.concat(parts) if parts else group.iloc[0:0]
+    return _greedy_nonoverlap(group)
+
+
 def _metrics(group: pd.DataFrame) -> Dict[str, float]:
     err = group["RealizedPct"] - group["ForecastPct"]
     mae = float(np.nanmean(np.abs(err)))
     rmse = float(np.sqrt(np.nanmean(err**2)))
     dir_acc = float(np.nanmean(np.sign(group["RealizedPct"]) == np.sign(group["ForecastPct"])))
     corr = float(group[["RealizedPct", "ForecastPct"]].corr().iloc[0, 1]) if len(group) > 2 else float("nan")
+
+    # Non-overlapping directional accuracy — the statistically honest hit-rate. Same sign
+    # test as dir_acc, but only over independent (non-overlapping) forward windows, so a
+    # short, heavily-overlapping daily log can't inflate it.
+    no = _nonoverlap_pool(group)
+    n_no = int(len(no))
+    dir_acc_no = (float(np.nanmean(np.sign(no["RealizedPct"]) == np.sign(no["ForecastPct"])))
+                  if n_no else float("nan"))
 
     # CI coverage (only where CI exists)
     has_ci = group["CI_Lower"].notna() & group["CI_Upper"].notna()
@@ -161,6 +200,8 @@ def _metrics(group: pd.DataFrame) -> Dict[str, float]:
         "MAE": mae,
         "RMSE": rmse,
         "Directional_Accuracy": dir_acc,
+        "Directional_Accuracy_NO": dir_acc_no,
+        "N_NonOverlap": float(n_no),
         "Corr": corr,
         "CI_Coverage": cov,
         "Avg_Forecast": float(np.nanmean(group["ForecastPct"])),

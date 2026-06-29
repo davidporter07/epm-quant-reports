@@ -627,6 +627,8 @@ def _forecast_store() -> dict[str, dict]:
                 "Composite_Score",
                 "RMSE",
                 "Directional_Accuracy",
+                "Directional_Accuracy_NO",
+                "N_NonOverlap",
                 "MAE",
                 "N",
                 "Corr",
