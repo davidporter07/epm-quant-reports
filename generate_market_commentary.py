@@ -143,6 +143,22 @@ SECTOR_TICKERS: dict[str, str] = {
 # ---------------------------------------------------------------------------
 # Market data helpers
 # ---------------------------------------------------------------------------
+def _last_completed_session(today) -> "date":
+    """Most recent NYSE trading day STRICTLY before `today` (skips weekends + holidays).
+
+    Used to decide whether a daily-bar feed is genuinely lagging. In the US-morning run,
+    the latest *completed* session is always the prior trading day — today's session has
+    not closed yet — so a fresh daily bar should already carry this date. (`_is_us_market_holiday`
+    is resolved at call time; defined below.)"""
+    from datetime import timedelta as _td
+    d = today - _td(days=1)
+    for _ in range(10):
+        if d.weekday() < 5 and not _is_us_market_holiday(d.isoformat()):
+            return d
+        d -= _td(days=1)
+    return d
+
+
 def _fetch_quote(ticker: str, days_back: int = 7, prev_close: float | None = None,
                  mode: str = "eod", verify_fresh: bool = False) -> dict | None:
     """Return {level, change, pct_change} for a single ticker, or None.
@@ -222,12 +238,26 @@ def _fetch_quote(ticker: str, days_back: int = 7, prev_close: float | None = Non
         # daily-bar feed can't print a stale prior close next to live futures.
         if verify_fresh:
             try:
-                official_prev = float(yf.Ticker(ticker).fast_info.previous_close)
-                if official_prev > 0 and abs(official_prev - latest) / latest > 0.004:
-                    print(f"  [SNAP] {ticker}: daily-bar close {latest:.4f} is stale vs official "
-                          f"previous_close {official_prev:.4f} ({(official_prev-latest)/latest*100:+.2f}%) "
-                          f"— rolling forward to the newer session.")
-                    prev, latest = latest, official_prev
+                # Roll forward ONLY when the daily bar is genuinely STALE — i.e. it has not
+                # yet posted the most recent completed trading session. fast_info.previous_close
+                # is normally the authoritative latest settle, but at a pre-market run it can
+                # ITSELF lag the daily bar by a session. Rolling on a bare value mismatch then
+                # corrupts a FRESH daily bar with a STALE fast_info close — and because the swap
+                # moves `latest` into `prev`, it INVERTS the sign. 2026-06-29: Nasdaq 100's true
+                # -1.09% Friday close (29,118.24, the fresh daily bar) was flipped to +1.11%
+                # (29,440.32, a stale Thursday fast_info.previous_close), fabricating a "tech
+                # rally" the tape never had. Gate on a DATE check so the roll fires only for a
+                # bar that is actually behind the last completed session.
+                latest_date = closes.index[-1].date()
+                bar_is_stale = latest_date < _last_completed_session(end.date())
+                if bar_is_stale:
+                    official_prev = float(yf.Ticker(ticker).fast_info.previous_close)
+                    if official_prev > 0 and abs(official_prev - latest) / latest > 0.004:
+                        print(f"  [SNAP] {ticker}: daily-bar close {latest:.4f} (dated {latest_date}) "
+                              f"is stale vs the last completed session; official previous_close "
+                              f"{official_prev:.4f} ({(official_prev-latest)/latest*100:+.2f}%) "
+                              f"— rolling forward to the newer session.")
+                        prev, latest = latest, official_prev
             except Exception:
                 pass
         change = latest - prev
@@ -2456,7 +2486,7 @@ Do not invent figures or events not in the payload.
 Do NOT attribute geopolitical actions, policy proposals, or peace initiatives to specific companies or financial institutions — if a headline mentions a bank alongside a geopolitical event, the bank is a commentator or stakeholder, not the actor proposing the policy.
 Do NOT escalate the severity of geopolitical events beyond the exact language in the payload — if headlines say "tensions" or "conflict", do not write "war"; if they say "negotiations", do not write "deal reached".
 NARRATIVE COHERENCE: All sections must describe the same geopolitical reality. If one section cites escalating risk ("expanded strikes", "rising tensions"), no other section may simultaneously frame the same situation as de-escalating ("easing tensions", "peace deal hopes", "ceasefire optimism"). Pick the dominant tone from the headlines payload and apply it consistently across every section.
-LEAD WITH THE MARKET DRIVER, NOT ONE HEADLINE: identify what actually moved the tape from the DATA — the leading/lagging sectors (sector_top3/sector_bottom3) and the biggest single-name movers — and lead with that. Do NOT frame the entire session around one geopolitical storyline (e.g., a ceasefire) when sector and price action point elsewhere: if Technology leads on AI/earnings while geopolitics is a side note, the lead is the tech/AI move and geopolitics is secondary context — not the headline. Avoid monothematic commentary where every section repeats the same single theme; each section should add a distinct, data-grounded angle.
+LEAD WITH THE MARKET DRIVER, NOT ONE HEADLINE: identify what actually moved the tape from the DATA — the leading/lagging sectors (sector_top3/sector_bottom3) and the biggest single-name movers — and lead with that. Do NOT frame the entire session around one geopolitical storyline (e.g., a ceasefire) when sector and price action point elsewhere: if Technology leads on AI/earnings while geopolitics is a side note, the lead is the tech/AI move and geopolitics is secondary context — not the headline. Avoid monothematic commentary where every section repeats the same single theme; each section should add a distinct, data-grounded angle. STORYLINE DE-DUPLICATION: a single geopolitical storyline (e.g. a "pause in strikes" / ceasefire / Middle East de-escalation) may be the explicit causal driver in AT MOST two sections. Where it is genuinely relevant elsewhere, reference it once and briefly (a clause, not a re-explanation) or vary the framing — do NOT repeat the same "pause in [Middle East hostilities/strikes]" clause verbatim in the recap, rates, commodities, FX, synthesis, AND outlook. Each section's causal clause should foreground that section's OWN dominant driver.
 ONE-SHOT CALIBRATION — geopolitical tone (follow this pattern exactly):
   Headline in payload: "U.S. and Israel expand strikes near Iranian facilities; diplomatic talks stall"
   BAD: "Mounting costs of the Iran war strain U.S. finances as the conflict widens."
@@ -2469,6 +2499,8 @@ UNCONFIRMED EVENTS ARE NOT FACTS (critical): A ceasefire, truce, peace deal, or 
     GOOD: "Stocks held gains on continued ceasefire hopes even as the two sides exchanged limited strikes; a signed truce remains the key unconfirmed catalyst."
 WINDOW & SUPERLATIVE FIDELITY: any claim about a multi-day window or a superlative MUST match the sign of that window's data. Do NOT say the dollar made its "biggest weekly gain", "best week", or "hit a six-week high" when DXY's daily or weekly pct_change is negative — if the dollar fell, say it fell. Do NOT say "rising yields"/"higher yields" as a current driver when the 10-Yr bp_change is <= 0 on the day and on the week. A DECLINE can never be attributed to a bullish driver: if WTI fell, do NOT explain it with "supply shocks", "renewed tensions", or "supply disruption" — a falling price reflects easing supply fear, not rising it. Match driver polarity to the move.
 Do NOT cite foreign central banks (BoE, ECB, BoJ, PBoC, RBA, BoC, SNB) or foreign sovereign yields (Gilts, Bunds, JGBs) as drivers of US asset moves unless a US-asset headline in the payload explicitly names that institution. Foreign monetary policy may move foreign assets in the international section; for US equities, US bonds, and US dollar commentary, drivers must come from the US payload.
+EMERGING-MARKET DEBT IS OFF-UNIVERSE (critical): emerging-market bonds / EM debt / EM local-currency bonds are NOT part of this report's universe. When the payload carries a Fed-hawkishness headline framed around EM bonds (e.g. "hawkish Fed challenges the EM bond rally"), express the Fed angle in US equities, US Treasuries, the dollar, and commodities sections through its US effect ONLY — firmer-for-longer US yields, growth-multiple pressure, a firmer dollar — NEVER as an "emerging-market bond rally/recovery/selloff". Do NOT close a Commodities or US-Dollar line on EM bonds; they do not move crude or DXY.
+SINGLE-CATALYST ATTRIBUTION ON A FLAT TAPE (critical): when the S&P 500's daily move is within ±0.25%, do NOT name a single off-universe or niche cross-asset storyline (e.g. an EM-bond item, one foreign print) as THE cause of the index's move — a flat tape is rotation/positioning, not one headline. State the rotation; if you cite the catalyst at all, frame it as a backdrop that "caps risk appetite", not the driver of the close.
 COMMITTED VOICE: take a side. The reader pays to know what YOU think, not which way it could go. Forbidden: "investors should watch", "remains to be seen", "wait-and-see", "could go either way", "markets face headwinds", "cautious optimism", "the outlook is mixed", "uncertainty persists". State the directional view, then the conditions that would invalidate it.
 CAUSAL LINKAGE: every commentary section must name a cause and effect, not just describe a level. Wrong: "the 10-year yield fell 6 bp to 4.50%." Right: "the 10-year yield fell 6 bp to 4.50% as falling oil prices eased the inflation impulse, providing relief to growth-name multiples." Connect at least one named driver and one downstream effect.
 GROWTH-MULTIPLE DIRECTION (critical): Falling oil prices and falling Treasury yields are TAILWINDS for growth/tech equity multiples — they relieve discount-rate and inflation pressure, they do not compress it. NEVER attribute a technology or growth-equity selloff, or "compressed/compressing multiples", to lower oil or lower yields. If tech fell on a day when oil and/or yields also fell, the tech driver is its OWN story (AI-capex sustainability doubts, stretched valuations, a single-name disappointment, a broken deal) — name that driver, and treat the lower oil/yields as a partial OFFSET, not the cause. The only correct direction: oil/yields DOWN → multiples RELIEVED; oil/yields UP → multiples PRESSURED.
@@ -5905,6 +5937,84 @@ def _scrub_offuniverse_currency(data: dict) -> int:
     return 0
 
 
+# --- off-topic emerging-market-bond scrub -------------------------------------
+# 2026-06-29: a real but NICHE wire item ("Hawkish Fed throws down challenge for the EM bond
+# rally" / "Warsh disrupts emerging-market bond recovery") was elevated into the PRIMARY driver
+# of a FLAT US tape — the session-recap LEAD pinned the S&P's -0.05% on "Warsh disrupted
+# emerging-market bond recovery," and the Commodities and US-Dollar asset-class outlooks both
+# CLOSED on "the Fed's challenge to emerging-market bond rallies," a non-sequitur for crude and
+# DXY. EM debt is off-universe for US equities, commodities, and the dollar: Fed hawkishness
+# belongs in those sections as its US effect (firmer-for-longer yields, growth-multiple pressure,
+# a firmer dollar), not an EM-bond storyline. Trim the trailing EM-bond clause (keep the factual
+# head); drop a whole sentence that is ONLY the EM-bond aside. fixed_income_commentary is EXEMPT
+# (Fed rate-path context there is legitimate). Mirrors _scrub_offuniverse_currency.
+_EM_BOND_RE = re.compile(
+    r"\b(?:emerging[-\s]?market|EM)\s+(?:bond|debt|local[-\s]?currency)\w*",
+    re.IGNORECASE)
+_EM_CLAUSE_BOUNDARY_RE = re.compile(
+    r"(?:\s+(?:as|with|while|and|that|which|given|amid)\s+|,\s+|;\s+)", re.IGNORECASE)
+
+
+def _em_clean_sentence(sent: str):
+    """Trim a trailing EM-bond clause from one sentence; None = whole sentence is the aside."""
+    if not _EM_BOND_RE.search(sent):
+        return sent
+    best = None
+    for m in _EM_CLAUSE_BOUNDARY_RE.finditer(sent):
+        head, tail = sent[:m.start()], sent[m.start():]
+        if (_EM_BOND_RE.search(tail) and not _EM_BOND_RE.search(head)
+                and len(head.strip()) > 20):
+            best = m.start()
+    if best is not None:
+        h = sent[:best].rstrip(" ,;:")
+        return (h + ".") if h and h[-1] not in ".!?" else h
+    return None  # whole sentence is the EM-bond aside → drop it
+
+
+def _em_clean_text(text):
+    """Sentence-wise EM-bond trim for a prose field; returns (new_text, changed)."""
+    if not isinstance(text, str) or not text or not _EM_BOND_RE.search(text):
+        return text, False
+    kept = [cs for sent in re.split(r"(?<=[.!?])\s+", text)
+            if (cs := _em_clean_sentence(sent))]
+    nv = " ".join(kept).strip()
+    return (nv, True) if nv != text else (text, False)
+
+
+def _scrub_offtopic_em_bonds(data: dict) -> int:
+    """Trim off-topic emerging-market-bond clauses from US-asset sections. Non-failing."""
+    n = 0
+    # Prose fields where EM debt is off-universe (NOT fixed_income — Fed context legitimate there).
+    for key in ("commodities_commentary", "currencies_commentary", "market_outlook_rationale",
+                "cross_asset_synthesis"):
+        nv, changed = _em_clean_text(data.get(key))
+        if changed:
+            data[key] = nv
+            n += 1
+    # Asset-class outlook rationales: only Commodities / US Dollar (Equities/Fixed Income exempt).
+    aco = data.get("asset_class_outlooks")
+    if isinstance(aco, dict):
+        for cls in ("Commodities", "US Dollar"):
+            row = aco.get(cls)
+            if isinstance(row, dict):
+                nv, changed = _em_clean_text(row.get("rationale"))
+                if changed:
+                    row["rationale"] = nv
+                    n += 1
+    # session_recap bullets: trim the EM-bond causal clause but never drop a whole bullet
+    # (each leads with the index level — losing it would blank the recap line).
+    recap = data.get("session_recap")
+    if isinstance(recap, list):
+        for i, bullet in enumerate(recap):
+            if not isinstance(bullet, str):
+                continue
+            trimmed = _em_clean_sentence(bullet)
+            if trimmed is not None and trimmed != bullet:
+                recap[i] = trimmed
+                n += 1
+    return n
+
+
 # --- "Tomorrow's <event>" / "Friday's <event>" slip when the event is actually today ----
 # The scenarios block carries the canonical event timing (scenario_event_day). When that is
 # "today" but the synthesis prose calls the same event "tomorrow's", the reader sees a
@@ -6574,6 +6684,7 @@ def sanitize_commentary(data: dict, snapshot: dict | None = None, source_text: s
     total += _scrub_foreign_macro_lead(data)
     total += _scrub_safe_haven_inversion(data)
     total += _scrub_offuniverse_currency(data)
+    total += _scrub_offtopic_em_bonds(data)
     total += _correct_event_day_slip(data)
     total += _reconcile_tactical_stance_with_outlook(data)
     total += _scrub_unreleased_econ_prints(data)

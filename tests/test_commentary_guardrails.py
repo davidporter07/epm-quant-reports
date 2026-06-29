@@ -58,6 +58,50 @@ def test_plain_52week_high_is_not_flagged():
     assert gmc._check_unsourced_superlatives(data, headlines=[]) == []
 
 
+# --- off-topic emerging-market-bond scrub (2026-06-29) ---------------------
+
+def test_em_bond_recap_misattribution_is_trimmed():
+    # The lead recap bullet pinned a flat S&P on an EM-bond storyline — trim the causal clause.
+    data = {"session_recap": [
+        "S&P 500 closed lower at 7354.02, -0.05% as Federal Reserve Chairman Kevin Warsh "
+        "disrupted emerging-market bond recovery with hawkish commentary."]}
+    assert gmc._scrub_offtopic_em_bonds(data) == 1
+    out = data["session_recap"][0]
+    assert "emerging-market bond" not in out.lower()
+    assert "7354.02" in out and "-0.05%" in out   # factual head preserved
+
+
+def test_em_bond_offtopic_outlook_clause_is_trimmed():
+    data = {"asset_class_outlooks": {
+        "Commodities": {"label": "Bearish", "rationale":
+            "WTI Crude fell to $69.23 on easing supply fears, while gold's rise signals a "
+            "residual safe-haven bid given the Fed's challenge to emerging-market bond rallies."},
+        "US Dollar": {"label": "Bearish", "rationale":
+            "The dollar eased 0.07%, but the Fed's hawkish stance keeps it resilient against "
+            "emerging-market bond rallies."},
+    }}
+    assert gmc._scrub_offtopic_em_bonds(data) == 2
+    for cls in ("Commodities", "US Dollar"):
+        assert "emerging-market bond" not in data["asset_class_outlooks"][cls]["rationale"].lower()
+    assert "WTI Crude fell" in data["asset_class_outlooks"]["Commodities"]["rationale"]
+
+
+def test_fixed_income_em_bond_context_is_exempt():
+    # Fed rate-path context in the Treasury section is legitimate — must NOT be scrubbed.
+    data = {"fixed_income_commentary":
+            "The 10-year yield fell 2 bp to 4.38% as Warsh's hawkish stance on emerging-market "
+            "bonds suggests US yields stay elevated."}
+    assert gmc._scrub_offtopic_em_bonds(data) == 0
+    assert "emerging-market bonds" in data["fixed_income_commentary"].lower()
+
+
+def test_em_currencies_generic_not_touched():
+    # "emerging-market currencies" (generic, on-topic via the dollar) is not an EM-bond aside.
+    data = {"currencies_commentary":
+            "The dollar's decline supports emerging-market currencies broadly."}
+    assert gmc._scrub_offtopic_em_bonds(data) == 0
+
+
 # --- pre-market data-bullet enforcement (level hallucination guard) ---------
 # Regression: 2026-05-29 shipped page-1 bullets with hallucinated levels
 # (10-Yr "3.92%", gold "$2,680", DXY "98.42", BTC "$1.28") while the snapshot
