@@ -35,12 +35,12 @@
   </script>
   <title>Forecasting | EPM Market Intelligence</title>
   <link rel="stylesheet" href="/static/css/styles.css?v=20260608a" />
-  <link rel="stylesheet" href="/static/css/design-v2.css?v=20260608b" />
+  <link rel="stylesheet" href="/static/css/design-v2.css?v=20260629a" />
   <link rel="stylesheet" href="/static/css/design-system.css?v=20260429b" />
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
   <script src="/static/js/chrome.js?v=20260608a"></script>
   <script defer src="/static/js/site.js?v=20260608a"></script>
-  <script defer src="/static/js/forecasting.js?v=20260608a"></script>
+  <script defer src="/static/js/forecasting.js?v=20260629a"></script>
   <link rel="icon" type="image/png" href="/static/epm_logo_sq.png">
   <link rel="apple-touch-icon" href="/static/epm_logo_sq.png">
   <meta property="og:image" content="/static/epm_logo.png">
@@ -157,6 +157,39 @@
         </div>
       </div>
       <div id="chartModalPlot" class="chart-modal-plot"></div>
+    </div>
+  </div>
+
+  <!-- Data Points explainer popup (per-ticker metrics + glossary) -->
+  <div id="dataPointsModal" class="chart-modal" aria-hidden="true">
+    <div class="chart-modal-backdrop"></div>
+    <div class="chart-modal-box" style="max-width:760px;">
+      <div class="chart-modal-header">
+        <div>
+          <span id="dataPointsTicker" class="chart-modal-ticker" style="font-size:15px;letter-spacing:0;">Data Points</span>
+          <span class="chart-modal-name">What each metric means &amp; how to read it</span>
+        </div>
+        <button class="chart-modal-close" id="dataPointsClose" aria-label="Close">✕</button>
+      </div>
+      <div id="dataPointsContent" style="padding:18px 22px 24px;overflow-y:auto;max-height:74vh;"></div>
+    </div>
+  </div>
+
+  <!-- 21-Day Lookback chart modal (actual path vs each model's prediction) -->
+  <div id="lookbackModal" class="chart-modal" aria-hidden="true">
+    <div class="chart-modal-backdrop"></div>
+    <div class="chart-modal-box">
+      <div class="chart-modal-header">
+        <div>
+          <span id="lookbackModalTicker" class="chart-modal-ticker"></span>
+          <span id="lookbackModalName" class="chart-modal-name"></span>
+        </div>
+        <div class="chart-modal-actions">
+          <button class="chart-toggle-btn" id="lookbackModalToggle">Show All Models</button>
+          <button class="chart-modal-close" id="lookbackModalClose" aria-label="Close">✕</button>
+        </div>
+      </div>
+      <div id="lookbackModalPlot" class="chart-modal-plot"></div>
     </div>
   </div>
 </body>

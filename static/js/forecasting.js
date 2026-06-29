@@ -484,108 +484,45 @@ function renderPodiumLeaderboard(forecastTickers, chartDataMap) {
     const topRankings = rankings.slice(0, 3);
     const slots = PLATFORM_ORDER.map(i => topRankings[i]).filter(Boolean);
 
+    // Podium: medal + model name only — the numbers now live in the Data Points popup.
     const slotsHTML = slots.map(r => {
       const rank0 = topRankings.indexOf(r); // 0=gold,1=silver,2=bronze
       const mClass = MEDAL_CLASSES[rank0] || '';
-      const dirAcc = r.Directional_Accuracy != null ? (r.Directional_Accuracy * 100).toFixed(0) + '%' : '—';
-      const dirNO = (r.Directional_Accuracy_NO != null && !Number.isNaN(Number(r.Directional_Accuracy_NO)))
-        ? (Number(r.Directional_Accuracy_NO) * 100).toFixed(0) + '%' : null;
-      const rmse = metricPct(r.RMSE);
       const modelLabel = MODEL_LABELS[r.Model] || r.Model || '—';
       const modelColor = MODEL_COLORS[r.Model] || '#aaa';
-
-      // Find this model's lookback prediction
-      let lookbackHTML = '';
-      if (lookback && lookback.predictions) {
-        const pred = lookback.predictions[r.Model];
-        const actual = lookback.actual_pct;
-        if (pred !== undefined && actual !== undefined) {
-          const predDir = pred >= 0;
-          const actualDir = actual >= 0;
-          const correct = predDir === actualDir;
-          lookbackHTML = `
-            <div class="podium-lookback-model">
-              <span style="color:${modelColor};font-weight:600;">${r.Model}</span>
-              <span>Pred: <span class="${signClass(pred)}">${pct(pred)}</span></span>
-              <span class="lookback-verdict ${correct ? 'correct' : 'wrong'}">${correct ? '✓' : '✗'}</span>
-            </div>`;
-        }
-      }
-
       return `
         <div class="podium-slot ${mClass}">
           <div class="podium-medal">${MEDALS[rank0]}</div>
           <div class="podium-model-name" style="color:${modelColor}">${modelLabel}</div>
-          <div class="podium-model-stats" title="Dir = directional hit-rate over all (overlapping) 21-day forecasts. ind = hit-rate over only the independent, non-overlapping windows (the honest read).">RMSE ${rmse} · Dir ${dirAcc}${dirNO ? ` · ind ${dirNO}` : ''}</div>
           <div class="podium-platform ${mClass}"></div>
         </div>`;
     }).join('');
 
+    // Bare ranking rows — rank + model + winner star. Every metric lives in the Data Points popup.
+    const winnerModel = (rankings[0] && rankings[0].Model) || d.winning_model;
     const rankingRowsHTML = rankings.map((r, idx) => {
       const rank = Number(r.Rank || idx + 1);
       const modelLabel = MODEL_LABELS[r.Model] || r.Model || '—';
       const modelColor = MODEL_COLORS[r.Model] || '#aaa';
-      const dirAcc = r.Directional_Accuracy != null ? (r.Directional_Accuracy * 100).toFixed(0) + '%' : '—';
-      const dirNO = (r.Directional_Accuracy_NO != null && !Number.isNaN(Number(r.Directional_Accuracy_NO)))
-        ? (Number(r.Directional_Accuracy_NO) * 100).toFixed(0) + '%' : '—';
-      const nNO = r.N_NonOverlap != null ? Number(r.N_NonOverlap).toFixed(0) : '—';
-      const obs = r.N != null ? Number(r.N).toFixed(0) : '—';
-      const corr = r.Corr != null && !Number.isNaN(Number(r.Corr)) ? Number(r.Corr).toFixed(2) : '—';
-      let lookbackHTML = '<span class="lookback-verdict neutral">—</span>';
-      if (lookback && lookback.predictions) {
-        const pred = lookback.predictions[r.Model];
-        const actual = lookback.actual_pct;
-        if (pred !== undefined && actual !== undefined) {
-          const correct = (pred >= 0) === (actual >= 0);
-          lookbackHTML = `
-            <span class="${signClass(pred)}">${pct(pred)}</span>
-            <span class="lookback-verdict ${correct ? 'correct' : 'wrong'}">${correct ? '✓ Hit' : '✕ Miss'}</span>`;
-        }
-      }
+      const isWinner = r.Model === winnerModel;
       return `
-        <div class="leaderboard-model-row${rank <= 3 ? ' is-top-three' : ''}">
+        <div class="leaderboard-model-row leaderboard-model-row--bare${rank <= 3 ? ' is-top-three' : ''}">
           <span class="leaderboard-rank">#${rank}</span>
-          <span class="leaderboard-model" style="color:${modelColor}">${modelLabel}</span>
-          <span class="leaderboard-stat leaderboard-stat--mae"><span>MAE</span>${metricPct(r.MAE)}</span>
-          <span class="leaderboard-stat leaderboard-stat--rmse"><span>RMSE</span>${metricPct(r.RMSE)}</span>
-          <span class="leaderboard-stat leaderboard-stat--dir" title="Directional hit-rate over ALL ${obs} logged 21-day forecasts. These windows overlap ~95%, so read it as optimistic."><span>Dir</span>${dirAcc}</span>
-          <span class="leaderboard-stat optional" title="Honest hit-rate: directional accuracy over only the ${nNO} INDEPENDENT, non-overlapping 21-day windows. Small sample — treat as a directional read, not a precise number."><span>Dir·ind</span>${dirNO}<small style="opacity:.55;margin-left:3px;">n${nNO}</small></span>
-          <span class="leaderboard-stat optional"><span>Corr</span>${corr}</span>
-          <span class="leaderboard-stat optional"><span>N</span>${obs}</span>
-          <span class="leaderboard-lookback">${lookbackHTML}</span>
+          <span class="leaderboard-model" style="color:${modelColor}">${modelLabel}${isWinner ? '<span class="winner-crown" title="Best-ranked model (lowest 21-day forecast error)">★</span>' : ''}</span>
         </div>`;
     }).join('');
 
-    // 21-day lookback section
-    let lookbackSection = '';
-    if (lookback && lookback.run_date) {
-      const actual = lookback.actual_pct;
-      const actualStr = actual != null ? pct(actual) : '—';
-      const actualDir = actual != null && actual >= 0;
-      const predsHTML = (rankings).map(r => {
-        const pred = lookback.predictions && lookback.predictions[r.Model];
-        if (pred === undefined) return '';
-        const correct = actual != null && (pred >= 0) === (actual >= 0);
-        const modelLabel = MODEL_LABELS[r.Model] || r.Model;
-        return `
-          <div class="lookback-row">
-            <span style="color:${MODEL_COLORS[r.Model] || '#aaa'}">${modelLabel}</span>
-            <span class="${signClass(pred)}">${pct(pred)}</span>
-            <span class="lookback-verdict ${correct ? 'correct' : 'wrong'}">${correct ? '✓ Hit' : '✗ Miss'}</span>
-          </div>`;
-      }).join('');
-
-      lookbackSection = `
-        <div class="podium-lookback">
-          <div class="podium-lookback-title">21-Day Lookback · From ${lookback.run_date}</div>
-          <div class="lookback-actual-row">
-            <span>Actual move</span>
-            <span class="lookback-actual ${signClass(actual)}">${actualStr}</span>
-            ${lookback.start_price && lookback.end_price ? `<span class="lookback-prices">$${lookback.start_price} → $${lookback.end_price}</span>` : ''}
-          </div>
-          <div class="lookback-predictions">${predsHTML}</div>
+    // Compact lookback summary — the full actual-vs-prediction chart opens in a modal.
+    let lookbackSummary = '';
+    if (lookback && lookback.run_date && lookback.actual_pct != null) {
+      lookbackSummary = `
+        <div class="lookback-actual-row">
+          <span>Actual 21-day move</span>
+          <span class="lookback-actual ${signClass(lookback.actual_pct)}">${pct(lookback.actual_pct)}</span>
+          <span class="lookback-prices">since ${lookback.run_date}</span>
         </div>`;
     }
+    const hasLookback = !!(lookback && lookback.run_date && lookback.predictions);
 
     const consensus = d.consensus;
     const dirClass = signClass(consensus);
@@ -601,14 +538,237 @@ function renderPodiumLeaderboard(forecastTickers, chartDataMap) {
         </div>
         <div class="podium-stage">${slotsHTML}</div>
         <div class="leaderboard-full-list">
-          <div class="podium-lookback-title">All Matured Models · 21-Trading-Day Performance</div>
+          <div class="podium-lookback-title">Model Ranking · by 21-day forecast error</div>
           ${rankingRowsHTML || '<div style="color:var(--text-muted);font-size:11px;padding:8px 0;">No ranked model history available.</div>'}
         </div>
-        ${lookbackSection}
+        ${lookbackSummary}
+        <div class="leaderboard-actions">
+          <button class="btn btn-ghost dp-btn" data-ticker="${ticker}" type="button">&#9432; Data points</button>
+          ${hasLookback ? `<button class="btn btn-ghost lookback-btn" data-ticker="${ticker}" type="button">View lookback chart &rarr;</button>` : ''}
+        </div>
       </div>`;
   }).join('');
 
   container.innerHTML = `<div class="podium-grid">${cards}</div>`;
+}
+
+// ── Data Points popup (per-ticker metrics table + glossary) ──────────────────
+const DATA_POINT_DEFS = [
+  ['Rank', 'Models ordered by lowest MAE (RMSE breaks ties). #1 is the best fit on the matured backtest — a measure of past accuracy, not a buy signal.'],
+  ['MAE — Mean Absolute Error', 'Average gap between the predicted and the actual 21-day return, in percentage points. Lower is better; this is the primary ranking key. Caveat: on noisy returns a model that forecasts small, cautious numbers can win MAE without real skill.'],
+  ['RMSE', 'Like MAE but squares the errors first, so a few big misses are punished harder. Used as the tiebreaker.'],
+  ['Dir — Directional Accuracy', 'Share of forecasts that got the direction (up vs down) right, across ALL logged forecasts. Consecutive 21-day windows overlap ~95%, so treat this as the optimistic read.'],
+  ['Dir·ind — Independent hit-rate', 'The same direction test, but counted only over independent, non-overlapping windows (n shown beside it). This is the honest hit-rate; with small n, read it as a directional lean, not a precise number.'],
+  ['Corr', 'Correlation between predicted and actual returns. Positive = the model moves with reality; near zero = no signal; negative = systematically wrong-signed.'],
+  ['CI — Confidence-interval coverage', "How often the actual return landed inside the model's stated confidence band (only models that emit one). ~90% is well-calibrated; far below = overconfident, far above = bands too wide."],
+  ['N', 'Number of matured forecasts scored for this model.'],
+];
+
+function _dpFmtPct(v) {
+  if (v == null || Number.isNaN(Number(v))) return '—';
+  const n = Number(v);
+  return (Math.abs(n) > 1 ? n : n * 100).toFixed(2) + '%';
+}
+
+function openDataPointsModal(ticker) {
+  const modal = document.getElementById('dataPointsModal');
+  const content = document.getElementById('dataPointsContent');
+  if (!modal || !content) return;
+  const d = (_forecastDataCache && _forecastDataCache[ticker]) || {};
+  const rankings = d.rankings || [];
+  const tickerEl = document.getElementById('dataPointsTicker');
+  if (tickerEl) tickerEl.textContent = `${ticker} · Data Points`;
+
+  const isDark = document.documentElement.dataset.theme !== 'light';
+  const border = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
+  const muted = 'var(--text-muted)';
+
+  const rowsHTML = rankings.map(r => {
+    const color = MODEL_COLORS[r.Model] || '#aaa';
+    const label = MODEL_LABELS[r.Model] || r.Model;
+    const dir = r.Directional_Accuracy != null ? (r.Directional_Accuracy * 100).toFixed(0) + '%' : '—';
+    const dirNO = (r.Directional_Accuracy_NO != null && !Number.isNaN(Number(r.Directional_Accuracy_NO)))
+      ? (Number(r.Directional_Accuracy_NO) * 100).toFixed(0) + '%' : '—';
+    const nNO = r.N_NonOverlap != null ? Number(r.N_NonOverlap).toFixed(0) : '—';
+    const corr = (r.Corr != null && !Number.isNaN(Number(r.Corr))) ? Number(r.Corr).toFixed(2) : '—';
+    const ci = (r.CI_Coverage != null && !Number.isNaN(Number(r.CI_Coverage))) ? (Number(r.CI_Coverage) * 100).toFixed(0) + '%' : '—';
+    const obs = r.N != null ? Number(r.N).toFixed(0) : '—';
+    return `<tr style="border-bottom:1px solid ${border};">
+      <td style="text-align:center;color:${muted};padding:5px 6px;">#${Number(r.Rank || 0)}</td>
+      <td style="font-weight:600;color:${color};white-space:nowrap;padding:5px 6px;">${label}</td>
+      <td style="text-align:right;padding:5px 6px;">${_dpFmtPct(r.MAE)}</td>
+      <td style="text-align:right;padding:5px 6px;">${_dpFmtPct(r.RMSE)}</td>
+      <td style="text-align:right;padding:5px 6px;">${dir}</td>
+      <td style="text-align:right;padding:5px 6px;">${dirNO}<small style="opacity:.55;"> n${nNO}</small></td>
+      <td style="text-align:right;padding:5px 6px;">${corr}</td>
+      <td style="text-align:right;padding:5px 6px;">${ci}</td>
+      <td style="text-align:right;color:${muted};padding:5px 6px;">${obs}</td>
+    </tr>`;
+  }).join('');
+
+  const tableHTML = rankings.length ? `
+    <div style="overflow-x:auto;margin-bottom:22px;">
+      <table style="width:100%;border-collapse:collapse;font-size:12px;color:var(--text-primary);">
+        <thead><tr style="color:${muted};border-bottom:1px solid ${border};">
+          <th style="text-align:center;padding:5px 6px;">#</th>
+          <th style="text-align:left;padding:5px 6px;">Model</th>
+          <th style="text-align:right;padding:5px 6px;">MAE</th>
+          <th style="text-align:right;padding:5px 6px;">RMSE</th>
+          <th style="text-align:right;padding:5px 6px;">Dir</th>
+          <th style="text-align:right;padding:5px 6px;">Dir&middot;ind</th>
+          <th style="text-align:right;padding:5px 6px;">Corr</th>
+          <th style="text-align:right;padding:5px 6px;">CI</th>
+          <th style="text-align:right;padding:5px 6px;">N</th>
+        </tr></thead>
+        <tbody>${rowsHTML}</tbody>
+      </table>
+    </div>` : '';
+
+  const defsHTML = DATA_POINT_DEFS.map(([term, def], i) => `
+    <div style="padding:10px 0;${i < DATA_POINT_DEFS.length - 1 ? `border-bottom:1px solid ${border};` : ''}">
+      <div style="font-weight:700;font-size:12px;color:var(--text-primary);margin-bottom:3px;">${term}</div>
+      <div style="font-size:12px;color:${muted};line-height:1.55;">${def}</div>
+    </div>`).join('');
+
+  content.innerHTML = tableHTML + `
+    <div style="font-weight:700;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:${muted};margin-bottom:4px;">What each number means</div>
+    ${defsHTML}
+    <div style="margin-top:14px;padding:12px 14px;border-radius:8px;background:rgba(96,165,250,0.08);font-size:12px;color:var(--text-primary);line-height:1.55;">
+      <strong>How to read it:</strong> trust DIRECTION over LEVEL. A low MAE alone can just mean a model bets small. Confirm real skill by pairing it with a positive <em>Corr</em> and a decent <em>Dir&middot;ind</em> — and remember the independent sample is still small, so today's ranking is a lean, not a verdict.
+    </div>`;
+
+  modal.setAttribute('aria-hidden', 'false');
+  modal.classList.add('is-open');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeDataPointsModal() {
+  const modal = document.getElementById('dataPointsModal');
+  if (!modal) return;
+  modal.classList.remove('is-open');
+  modal.setAttribute('aria-hidden', 'true');
+  document.body.style.overflow = '';
+}
+
+// ── 21-Day Lookback chart modal (actual path vs each model's prediction) ──────
+let _lookbackTicker = null;
+let _lookbackShowAll = false;
+
+function openLookbackModal(ticker) {
+  const modal = document.getElementById('lookbackModal');
+  if (!modal) return;
+  const chartItem = _chartDataCache && _chartDataCache[ticker];
+  const forecastItem = _forecastDataCache && _forecastDataCache[ticker];
+  if (!chartItem || !chartItem.lookback_21d) return;
+
+  _lookbackTicker = ticker;
+  _lookbackShowAll = false;
+  const lb = chartItem.lookback_21d;
+  const tEl = document.getElementById('lookbackModalTicker');
+  const nEl = document.getElementById('lookbackModalName');
+  if (tEl) tEl.textContent = `${ticker} · 21-Day Lookback`;
+  if (nEl) nEl.textContent = `Prediction made ${lb.run_date} vs the actual path`;
+  const toggleBtn = document.getElementById('lookbackModalToggle');
+  if (toggleBtn) { toggleBtn.textContent = 'Show All Models'; toggleBtn.classList.remove('active'); }
+
+  modal.setAttribute('aria-hidden', 'false');
+  modal.classList.add('is-open');
+  document.body.style.overflow = 'hidden';
+  requestAnimationFrame(() => renderLookbackChart(ticker, forecastItem, chartItem));
+}
+
+function closeLookbackModal() {
+  const modal = document.getElementById('lookbackModal');
+  if (!modal) return;
+  modal.classList.remove('is-open');
+  modal.setAttribute('aria-hidden', 'true');
+  document.body.style.overflow = '';
+  const plotEl = document.getElementById('lookbackModalPlot');
+  if (plotEl && typeof Plotly !== 'undefined') Plotly.purge(plotEl);
+  _lookbackTicker = null;
+}
+
+function renderLookbackChart(ticker, forecastItem, chartItem) {
+  const el = document.getElementById('lookbackModalPlot');
+  if (!el || typeof Plotly === 'undefined') return;
+
+  const lb = chartItem.lookback_21d || {};
+  const history = chartItem.history || [];
+  const runDate = lb.run_date;
+  const startPrice = lb.start_price;
+  const preds = lb.predictions || {};
+  const isDark = document.documentElement.dataset.theme !== 'light';
+
+  const axisColor   = isDark ? '#4a6080' : '#7a8fa8';
+  const gridColor   = isDark ? 'rgba(55,85,140,0.18)' : 'rgba(100,140,200,0.15)';
+  const actualColor = isDark ? '#e2e8f0' : '#1e293b';
+
+  // Actual daily price path from the prediction date forward.
+  const path = history.filter(h => h.date >= runDate);
+  const endDate = path.length ? path[path.length - 1].date : runDate;
+  const winner = (forecastItem && forecastItem.winning_model) ||
+    (forecastItem && forecastItem.rankings && forecastItem.rankings[0] && forecastItem.rankings[0].Model);
+
+  const traces = [];
+  if (path.length) {
+    traces.push({
+      x: path.map(h => h.date), y: path.map(h => h.price),
+      mode: 'lines', name: 'Actual',
+      line: { color: actualColor, width: 3 },
+      hovertemplate: '$%{y:.2f}<extra>Actual</extra>',
+    });
+  }
+  // Each model's predicted endpoint: a straight line from (runDate, startPrice) to the
+  // predicted target at the end of the window. Winner is shown solid/dashed by default;
+  // the rest are dotted + hidden behind the toggle.
+  if (startPrice) {
+    Object.entries(preds).forEach(([key, p]) => {
+      const target = startPrice * (1 + p);
+      const isWinner = key === winner;
+      traces.push({
+        x: [runDate, endDate], y: [startPrice, target],
+        mode: 'lines+markers',
+        name: (MODEL_LABELS[key] || key) + ' (pred)',
+        line: { color: MODEL_COLORS[key] || '#aaa', width: isWinner ? 2.6 : 1.4, dash: isWinner ? 'dash' : 'dot' },
+        marker: { size: isWinner ? 8 : 5, color: MODEL_COLORS[key] || '#aaa' },
+        visible: isWinner ? true : 'legendonly',
+        hovertemplate: `$%{y:.2f} · ${(p * 100 >= 0 ? '+' : '') + (p * 100).toFixed(2)}%<extra>${MODEL_LABELS[key] || key} predicted</extra>`,
+      });
+    });
+  }
+
+  const actualPct = lb.actual_pct != null ? (lb.actual_pct * 100) : null;
+  const layout = {
+    paper_bgcolor: 'transparent',
+    plot_bgcolor: 'transparent',
+    margin: { t: 8, r: 24, b: 80, l: 72 },
+    height: 460,
+    xaxis: { type: 'date', showgrid: false, color: axisColor, tickfont: { size: 11, color: axisColor }, tickformat: '%b %d', nticks: 8 },
+    yaxis: { showgrid: true, gridcolor: gridColor, color: axisColor, tickfont: { size: 11, color: axisColor }, tickprefix: '$', tickformat: '.2f' },
+    legend: { orientation: 'h', font: { size: 11, color: isDark ? '#8facc8' : '#5a7090' }, bgcolor: 'transparent', borderwidth: 0, x: 0.5, y: -0.18, xanchor: 'center', yanchor: 'top' },
+    showlegend: true,
+    hovermode: 'x unified',
+    hoverlabel: { bgcolor: isDark ? '#0b1c38' : '#fff', bordercolor: 'rgba(212,168,75,0.4)', font: { size: 12 } },
+    annotations: actualPct != null ? [{
+      x: endDate, y: lb.end_price, xanchor: 'right', yanchor: actualPct >= 0 ? 'bottom' : 'top',
+      text: `Actual ${actualPct >= 0 ? '+' : ''}${actualPct.toFixed(1)}%`, showarrow: false,
+      font: { size: 11, color: actualColor }, yshift: actualPct >= 0 ? 8 : -8,
+    }] : [],
+  };
+
+  Plotly.newPlot(el, traces, layout, { displayModeBar: false, responsive: true, scrollZoom: true });
+}
+
+function toggleLookbackModels() {
+  if (!_lookbackTicker) return;
+  _lookbackShowAll = !_lookbackShowAll;
+  const btn = document.getElementById('lookbackModalToggle');
+  if (btn) { btn.textContent = _lookbackShowAll ? 'Hide Models' : 'Show All Models'; btn.classList.toggle('active', _lookbackShowAll); }
+  const el = document.getElementById('lookbackModalPlot');
+  if (!el || !el.data) return;
+  // Flip the dotted (non-winner) prediction lines; the actual path and the winner's dashed line stay.
+  const visible = el.data.map(t => (t.line && t.line.dash === 'dot') ? (_lookbackShowAll ? true : 'legendonly') : (t.visible ?? true));
+  Plotly.restyle(el, { visible });
 }
 
 // ── Chart Modal ─────────────────────────────────────────────────────────────
@@ -883,15 +1043,37 @@ document.addEventListener('DOMContentLoaded', () => {
   if (backdrop) backdrop.addEventListener('click', closeChartModal);
   if (toggleBtn) toggleBtn.addEventListener('click', toggleModalModels);
 
+  // Data Points popup
+  const dpModal = document.getElementById('dataPointsModal');
+  const dpClose = document.getElementById('dataPointsClose');
+  const dpBackdrop = dpModal?.querySelector('.chart-modal-backdrop');
+  if (dpClose) dpClose.addEventListener('click', closeDataPointsModal);
+  if (dpBackdrop) dpBackdrop.addEventListener('click', closeDataPointsModal);
+
+  // Lookback chart modal
+  const lbModal = document.getElementById('lookbackModal');
+  const lbClose = document.getElementById('lookbackModalClose');
+  const lbBackdrop = lbModal?.querySelector('.chart-modal-backdrop');
+  const lbToggle = document.getElementById('lookbackModalToggle');
+  if (lbClose) lbClose.addEventListener('click', closeLookbackModal);
+  if (lbBackdrop) lbBackdrop.addEventListener('click', closeLookbackModal);
+  if (lbToggle) lbToggle.addEventListener('click', toggleLookbackModels);
+
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') {
       if (infoModal?.classList.contains('is-open')) closeModelsInfo();
+      else if (dpModal?.classList.contains('is-open')) closeDataPointsModal();
+      else if (lbModal?.classList.contains('is-open')) closeLookbackModal();
       else if (modal?.classList.contains('is-open')) closeChartModal();
     }
   });
 
-  // Open modal when clicking a mini chart (delegated, cards are rendered after load)
+  // Delegated clicks (cards are rendered after load)
   document.addEventListener('click', e => {
+    const dpBtn = e.target.closest('.dp-btn');
+    if (dpBtn) { openDataPointsModal(dpBtn.dataset.ticker); return; }
+    const lbBtn = e.target.closest('.lookback-btn');
+    if (lbBtn) { openLookbackModal(lbBtn.dataset.ticker); return; }
     const chartEl = e.target.closest('.card-chart');
     if (!chartEl) return;
     const ticker = chartEl.id.replace('chart-', '');

@@ -1794,6 +1794,23 @@ body[data-theme="light"] .mini-stat {
 .leaderboard-model-row .leaderboard-lookback {
   display: none;
 }
+/* Bare ranking rows — rank + model only; metrics live in the Data Points popup. */
+.leaderboard-model-row--bare {
+  grid-template-columns: 34px minmax(0, 1fr);
+  padding: 7px 0;
+  font-size: 12px;
+}
+/* Leaderboard card action buttons (Data Points / lookback chart) */
+.leaderboard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.leaderboard-actions .btn {
+  font-size: 11px;
+  padding: 5px 11px;
+}
 
 /* Light mode */
 [data-theme="light"] .podium-card {
