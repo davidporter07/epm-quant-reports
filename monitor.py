@@ -460,6 +460,23 @@ except subprocess.CalledProcessError as e:
 
 
 stage_mark("data_arbiter + features + model suite")
+# --- Deep Learning: conformal calibration of the prediction interval ---
+# Recompute the conformal 95% multiplier against the (just-accepted) checkpoint on
+# matured forecasts so the displayed DL CI has honest empirical coverage. This only
+# affects the band width, never the point forecast, so it cannot move the
+# leaderboard or the consensus. Non-fatal: if it fails, inference falls back to the
+# static z=1.96 band.
+try:
+    subprocess.run([
+        VENV_PYTHON,
+        "deep_learning_model.py",
+        "calibrate",
+        "--cal-days",
+        "252",
+    ], check=True)
+except subprocess.CalledProcessError as e:
+    print(f" DL conformal calibration skipped/failed (inference will use z=1.96). Details: {e}")
+
 # --- Deep Learning (PyTorch) inference + live prediction logging ---
 try:
     subprocess.run([

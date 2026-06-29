@@ -65,6 +65,7 @@ MODEL_DIR = Path("models")
 MODEL_PATH_DEFAULT = MODEL_DIR / "dl_tcn.pt"
 SCALER_PATH_DEFAULT = MODEL_DIR / "dl_scaler.json"
 FORECASTS_CSV_DEFAULT = Path("data") / "dl_forecasts.csv"
+CONFORMAL_PATH_DEFAULT = MODEL_DIR / "dl_conformal.json"
 
 # --------------------------
 # Dataset
@@ -699,6 +700,11 @@ def infer_live(
     panel = _ensure_panel_schema(read_panel(panel_path))
     model, scaler, feature_cols, seq_len = load_model_and_scaler(model_path, scaler_path, device)
 
+    # Conformal multiplier for the 95% band (falls back to z=1.96 if uncalibrated).
+    z, z_source = _load_conformal_multiplier(CONFORMAL_PATH_DEFAULT, level=0.95)
+    if z_source == "conformal":
+        print(f" Using conformal 95% multiplier q={z:.3f} (vs static 1.96).")
+
     tickers = [str(t).strip().upper().replace(".", "-") for t in tickers if str(t).strip()]
 
     rows = []
@@ -719,7 +725,6 @@ def infer_live(
         mu = float(mu.cpu().numpy().ravel()[0])
         sigma = float(np.exp(log_sigma.cpu().numpy().ravel()[0]))
 
-        z = 1.96
         lo = mu - z * sigma
         hi = mu + z * sigma
 
@@ -807,6 +812,149 @@ def backtest(
     print(summary)
 
 
+# --------------------------
+# Conformal calibration of the prediction interval
+# --------------------------
+#
+# The TCN's Gaussian head emits (mu, sigma). The raw mu +/- 1.96*sigma band is
+# only honest if the head's sigma is perfectly calibrated, which a daily warm-
+# started net rarely is. Split-conformal calibration fixes this WITHOUT touching
+# the point forecast: we measure normalized residuals s = |y - mu| / sigma on a
+# held-out window of MATURED forecasts, then replace the 1.96 multiplier with the
+# finite-sample conformal quantile of s. The band scales sigma (so it stays
+# heteroscedastic) and gains a distribution-free ~coverage guarantee. mu is never
+# altered, so the leaderboard (scores mu) and the consensus (uses the point
+# forecast) are completely unaffected.
+
+CONFORMAL_LEVELS = (0.80, 0.90, 0.95)
+_CONFORMAL_FALLBACK_Z = 1.96
+
+
+def _collect_mu_sigma_y(
+    model: nn.Module,
+    panel: pd.DataFrame,
+    scaler: Dict[str, Dict[str, float]],
+    feature_cols: List[str],
+    seq_len: int,
+    cal_days: int,
+    device: str,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Run the model over the most recent `cal_days` of MATURED dates and return
+    (mu, sigma, y) arrays. Only rows with a realized 21D target are included
+    (PanelSequenceDataset already drops un-matured / NaN-target windows)."""
+    panel = _ensure_panel_schema(panel)
+    panel = panel[pd.to_numeric(panel[TARGET_COL], errors="coerce").notna()].copy()
+    if panel.empty:
+        return np.array([]), np.array([]), np.array([])
+
+    dates = pd.to_datetime(panel["Date"]).drop_duplicates().sort_values()
+    if cal_days > 0 and len(dates) > cal_days:
+        cutoff = dates.iloc[-cal_days]
+        panel = panel[panel["Date"] >= cutoff]
+
+    ds = PanelSequenceDataset(panel, scaler, feature_cols, seq_len)
+    loader = DataLoader(ds, batch_size=1024, shuffle=False)
+
+    mus, sigmas, ys = [], [], []
+    with torch.no_grad():
+        for xb, yb, _, _ in loader:
+            xb = xb.to(device)
+            mu, log_sigma = model(xb)
+            mus.append(mu.cpu().numpy().ravel())
+            sigmas.append(np.exp(log_sigma.cpu().numpy().ravel()))
+            ys.append(yb.cpu().numpy().ravel())
+
+    if not mus:
+        return np.array([]), np.array([]), np.array([])
+    return np.concatenate(mus), np.concatenate(sigmas), np.concatenate(ys)
+
+
+def _conformal_multiplier(scores: np.ndarray, level: float) -> float:
+    """Finite-sample split-conformal quantile of the normalized residual scores.
+
+    Returns the smallest multiplier q such that, on the calibration set, a band of
+    mu +/- q*sigma covers at least the target fraction `level`. Uses the standard
+    (n+1) finite-sample correction; if the corrected rank exceeds n (too few
+    points to certify the level) returns NaN so the caller can fall back."""
+    s = np.sort(scores[np.isfinite(scores)])
+    n = len(s)
+    if n == 0:
+        return float("nan")
+    rank = int(np.ceil((n + 1) * level))
+    if rank > n:
+        return float("nan")
+    return float(s[rank - 1])
+
+
+def calibrate_conformal(
+    panel_path: Path,
+    model_path: Path,
+    scaler_path: Path,
+    cal_days: int,
+    device: str,
+    out_path: Path,
+    levels: Tuple[float, ...] = CONFORMAL_LEVELS,
+) -> dict:
+    panel = _ensure_panel_schema(read_panel(panel_path))
+    model, scaler, feature_cols, seq_len = load_model_and_scaler(model_path, scaler_path, device)
+
+    mu, sigma, y = _collect_mu_sigma_y(model, panel, scaler, feature_cols, seq_len, cal_days, device)
+    n = len(mu)
+    if n == 0:
+        print(" Conformal calibration: no matured calibration rows found. Skipping (inference will use z=1.96).")
+        return {}
+
+    sigma_floor = max(float(np.median(sigma)) * 1e-3, 1e-6)
+    safe_sigma = np.maximum(sigma, sigma_floor)
+    scores = np.abs(y - mu) / safe_sigma
+
+    payload: dict = {
+        "computed": pd.Timestamp.today().date().isoformat(),
+        "n_cal": int(n),
+        "cal_days": int(cal_days),
+        "fallback_z": _CONFORMAL_FALLBACK_Z,
+        "multipliers": {},
+        "coverage": {},
+    }
+
+    for lvl in levels:
+        q = _conformal_multiplier(scores, lvl)
+        key = f"{lvl:.2f}"
+        if np.isfinite(q):
+            payload["multipliers"][key] = round(q, 4)
+            payload["coverage"][key] = round(float(np.mean(scores <= q)), 4)
+        else:
+            # Not enough points to certify this level — record the fallback z.
+            payload["multipliers"][key] = None
+
+    # Diagnostic: how well did the OLD raw 1.96*sigma band actually cover?
+    payload["coverage_95_old_z"] = round(float(np.mean(scores <= _CONFORMAL_FALLBACK_Z)), 4)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(payload, indent=2))
+    q95 = payload["multipliers"].get("0.95")
+    old_cov = payload["coverage_95_old_z"]
+    print(
+        f" Conformal calibration saved -> {out_path} "
+        f"(n={n}, q95={q95}, raw-1.96 band covered {old_cov:.0%} -> target 95%)"
+    )
+    return payload
+
+
+def _load_conformal_multiplier(path: Path, level: float = 0.95) -> Tuple[float, str]:
+    """Return (multiplier, source) for the requested coverage level. Falls back to
+    the static z=1.96 if the calibration file is missing or lacks that level."""
+    try:
+        if path.exists():
+            payload = json.loads(path.read_text())
+            q = payload.get("multipliers", {}).get(f"{level:.2f}")
+            if q is not None and np.isfinite(float(q)) and float(q) > 0:
+                return float(q), "conformal"
+    except Exception as exc:  # corrupt/partial file must never break inference
+        print(f" Conformal multiplier load failed ({exc}); using z={_CONFORMAL_FALLBACK_Z}.")
+    return _CONFORMAL_FALLBACK_Z, "fallback_z"
+
+
 def parse_args():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -870,6 +1018,13 @@ def parse_args():
     bt.add_argument("--test-days", type=int, default=252)
     bt.add_argument("--out", type=str, default=str(Path("data") / "dl_backtest_summary.csv"))
 
+    cal = sub.add_parser("calibrate")
+    cal.add_argument("--panel", type=str, default=str(PANEL_PATH_DEFAULT))
+    cal.add_argument("--model", type=str, default=str(MODEL_PATH_DEFAULT))
+    cal.add_argument("--scaler", type=str, default=str(SCALER_PATH_DEFAULT))
+    cal.add_argument("--cal-days", type=int, default=252)
+    cal.add_argument("--out", type=str, default=str(CONFORMAL_PATH_DEFAULT))
+
     ap.add_argument("--device", type=str, default="cpu", choices=["cpu", "cuda"], help="cuda requires a GPU")
     return ap.parse_args()
 
@@ -931,6 +1086,16 @@ def main():
             test_days=int(args.test_days),
             device=device,
             out_csv=Path(args.out),
+        )
+
+    elif args.cmd == "calibrate":
+        calibrate_conformal(
+            panel_path=Path(args.panel),
+            model_path=Path(args.model),
+            scaler_path=Path(args.scaler),
+            cal_days=int(args.cal_days),
+            device=device,
+            out_path=Path(args.out),
         )
 
 
