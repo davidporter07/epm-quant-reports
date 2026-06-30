@@ -559,7 +559,7 @@ const DATA_POINT_DEFS = [
   ['MAE — Mean Absolute Error', 'Average gap between the predicted and the actual 21-day return, in percentage points. Lower is better; this is the primary ranking key. Caveat: on noisy returns a model that forecasts small, cautious numbers can win MAE without real skill.'],
   ['RMSE', 'Like MAE but squares the errors first, so a few big misses are punished harder. Used as the tiebreaker.'],
   ['Dir — Directional Accuracy', 'Share of forecasts that got the direction (up vs down) right, across ALL logged forecasts. Consecutive 21-day windows overlap ~95%, so treat this as the optimistic read.'],
-  ['Dir·ind — Independent hit-rate', 'The same direction test, but counted only over independent, non-overlapping windows (n shown beside it). This is the honest hit-rate; with small n, read it as a directional lean, not a precise number.'],
+  ['Dir·ind — Independent hit-rate', 'The same direction test, but counted only over independent, non-overlapping windows (n shown beside it). This is the honest hit-rate. The marker shows a Wilson 95% confidence interval: ✓ means the interval excludes 50% (a real directional edge), ~ means it still straddles 50% (not yet distinguishable from a coin flip). Hover the cell for the interval. With today\'s small n almost everything reads ~ — that is the honest state until the independent sample grows.'],
   ['Corr', 'Correlation between predicted and actual returns. Positive = the model moves with reality; near zero = no signal; negative = systematically wrong-signed.'],
   ['CI — Confidence-interval coverage', "How often the actual return landed inside the model's stated confidence band (only models that emit one). ~90% is well-calibrated; far below = overconfident, far above = bands too wide."],
   ['N', 'Number of matured forecasts scored for this model.'],
@@ -591,6 +591,16 @@ function openDataPointsModal(ticker) {
     const dirNO = (r.Directional_Accuracy_NO != null && !Number.isNaN(Number(r.Directional_Accuracy_NO)))
       ? (Number(r.Directional_Accuracy_NO) * 100).toFixed(0) + '%' : '—';
     const nNO = r.N_NonOverlap != null ? Number(r.N_NonOverlap).toFixed(0) : '—';
+    // Wilson 95% CI + significance marker: ✓ = CI excludes 50% (real edge),
+    // ~ = CI straddles 50% (not yet distinguishable from a coin flip).
+    const ciLoNO = Number(r.Dir_NO_CI_Lower), ciHiNO = Number(r.Dir_NO_CI_Upper);
+    const hasDirCI = !Number.isNaN(ciLoNO) && !Number.isNaN(ciHiNO);
+    const dirSig = Number(r.Dir_NO_Significant);
+    const dirCItext = hasDirCI ? `95% CI ${(ciLoNO * 100).toFixed(0)}–${(ciHiNO * 100).toFixed(0)}%` : '';
+    const dirSigMark = hasDirCI ? (dirSig === 1 ? ' ✓' : ' ~') : '';
+    const dirSigTitle = hasDirCI
+      ? `${dirCItext} — ${dirSig === 1 ? 'distinguishable from a coin flip' : 'NOT yet distinguishable from a coin flip'}`
+      : '';
     const corr = (r.Corr != null && !Number.isNaN(Number(r.Corr))) ? Number(r.Corr).toFixed(2) : '—';
     const ci = (r.CI_Coverage != null && !Number.isNaN(Number(r.CI_Coverage))) ? (Number(r.CI_Coverage) * 100).toFixed(0) + '%' : '—';
     const obs = r.N != null ? Number(r.N).toFixed(0) : '—';
@@ -600,7 +610,7 @@ function openDataPointsModal(ticker) {
       <td style="text-align:right;padding:5px 6px;">${_dpFmtPct(r.MAE)}</td>
       <td style="text-align:right;padding:5px 6px;">${_dpFmtPct(r.RMSE)}</td>
       <td style="text-align:right;padding:5px 6px;">${dir}</td>
-      <td style="text-align:right;padding:5px 6px;">${dirNO}<small style="opacity:.55;"> n${nNO}</small></td>
+      <td style="text-align:right;padding:5px 6px;" title="${dirSigTitle}">${dirNO}<small style="opacity:.55;"> n${nNO}${dirSigMark}</small></td>
       <td style="text-align:right;padding:5px 6px;">${corr}</td>
       <td style="text-align:right;padding:5px 6px;">${ci}</td>
       <td style="text-align:right;color:${muted};padding:5px 6px;">${obs}</td>
@@ -623,6 +633,11 @@ function openDataPointsModal(ticker) {
         </tr></thead>
         <tbody>${rowsHTML}</tbody>
       </table>
+      <div style="font-size:11px;color:${muted};margin-top:6px;line-height:1.5;">
+        Dir&middot;ind marker — <strong>&#10003;</strong> the Wilson 95% CI excludes 50% (a real directional edge);
+        <strong>~</strong> the CI still straddles 50% (not yet distinguishable from a coin flip). Hover for the interval.
+        With today&rsquo;s short independent history almost every model reads <strong>~</strong> — read Dir&middot;ind as a lean, not a verdict.
+      </div>
     </div>` : '';
 
   const defsHTML = DATA_POINT_DEFS.map(([term, def], i) => `

@@ -59,3 +59,38 @@ def test_nonoverlap_pools_per_ticker():
     g = pd.concat([_synthetic_group({}, ticker="AAPL"),
                    _synthetic_group({}, ticker="MSFT")], ignore_index=True)
     assert len(mlb._nonoverlap_pool(g)) == 6
+
+
+# --- Wilson CI + significance on the independent hit-rate ----------------------
+
+def test_wilson_interval_brackets_proportion():
+    lo, hi = mlb._wilson_interval(2, 3)
+    assert 0.0 <= lo <= 2 / 3 <= hi <= 1.0
+    # Tiny sample -> wide interval that still includes a coin flip.
+    assert lo < 0.5 < hi
+
+
+def test_wilson_interval_zero_n_is_nan():
+    lo, hi = mlb._wilson_interval(0, 0)
+    assert np.isnan(lo) and np.isnan(hi)
+
+
+def test_small_sample_hitrate_is_not_significant():
+    # 2 of 3 right on independent windows — a coin flip can't be ruled out.
+    g = _synthetic_group({0: 5.0, 21: 3.0, 42: -2.0})
+    m = mlb._metrics(g)
+    assert m["N_NonOverlap"] == 3.0
+    assert m["Dir_NO_Significant"] == 0.0
+    assert m["Dir_NO_CI_Lower"] < 0.5 < m["Dir_NO_CI_Upper"]
+
+
+def test_strong_independent_sample_is_significant():
+    # Build many independent windows that are mostly correct, so the Wilson CI
+    # clears 0.5 and the model reads as a genuine directional edge.
+    n = 21 * 20 + 5  # ~20 independent windows
+    g = _synthetic_group({}, n=n)  # all forecasts +1, all realized +1 -> 100% hit
+    m = mlb._metrics(g)
+    assert m["N_NonOverlap"] >= 18
+    assert m["Directional_Accuracy_NO"] == pytest.approx(1.0)
+    assert m["Dir_NO_Significant"] == 1.0
+    assert m["Dir_NO_CI_Lower"] > 0.5

@@ -172,6 +172,19 @@ def _nonoverlap_pool(group: pd.DataFrame) -> pd.DataFrame:
     return _greedy_nonoverlap(group)
 
 
+def _wilson_interval(successes: int, n: int, z: float = 1.96) -> Tuple[float, float]:
+    """Wilson score interval for a binomial proportion — the honest CI for a
+    hit-rate on a SMALL sample (unlike the normal approximation it stays inside
+    [0,1] and is well-behaved at n=2..3). Returns (lo, hi); (nan, nan) if n==0."""
+    if n <= 0:
+        return float("nan"), float("nan")
+    p = successes / n
+    denom = 1.0 + z * z / n
+    center = (p + z * z / (2 * n)) / denom
+    half = (z / denom) * np.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
+    return max(0.0, center - half), min(1.0, center + half)
+
+
 def _metrics(group: pd.DataFrame) -> Dict[str, float]:
     err = group["RealizedPct"] - group["ForecastPct"]
     mae = float(np.nanmean(np.abs(err)))
@@ -186,6 +199,18 @@ def _metrics(group: pd.DataFrame) -> Dict[str, float]:
     n_no = int(len(no))
     dir_acc_no = (float(np.nanmean(np.sign(no["RealizedPct"]) == np.sign(no["ForecastPct"])))
                   if n_no else float("nan"))
+
+    # Wilson 95% CI on the INDEPENDENT hit-rate, so a 2/3 that is really a coin
+    # flip reads as such. "Significant" = the CI excludes 0.5 (genuine directional
+    # edge either way); with the current tiny n it almost never will, which is the
+    # honest message until the independent sample grows.
+    if n_no:
+        successes_no = int(round(dir_acc_no * n_no))
+        ci_lo_no, ci_hi_no = _wilson_interval(successes_no, n_no)
+        dir_no_significant = float((ci_lo_no > 0.5) or (ci_hi_no < 0.5))
+    else:
+        ci_lo_no = ci_hi_no = float("nan")
+        dir_no_significant = float("nan")
 
     # CI coverage (only where CI exists)
     has_ci = group["CI_Lower"].notna() & group["CI_Upper"].notna()
@@ -202,6 +227,9 @@ def _metrics(group: pd.DataFrame) -> Dict[str, float]:
         "Directional_Accuracy": dir_acc,
         "Directional_Accuracy_NO": dir_acc_no,
         "N_NonOverlap": float(n_no),
+        "Dir_NO_CI_Lower": ci_lo_no,
+        "Dir_NO_CI_Upper": ci_hi_no,
+        "Dir_NO_Significant": dir_no_significant,
         "Corr": corr,
         "CI_Coverage": cov,
         "Avg_Forecast": float(np.nanmean(group["ForecastPct"])),
