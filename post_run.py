@@ -100,7 +100,8 @@ _DEPLOY_CODE_PATHS = SYNC_PY_FILES + [
 # tests/test_post_run_sync.py::test_root_py_inventory_classified enforces this.
 _NOT_DEPLOYED_PY = frozenset({
     "_test_qwen_raw.py", "_test_recap_scenarios.py", "_test_repair.py",
-    "arimax_model.py", "build_directional_feature_panel.py",
+    "arimax_model.py", "backfill_prediction_log.py",
+    "build_directional_feature_panel.py",
     "build_growth24_foundation_sidecar_features.py",
     "build_growth24_pead_hmm_panel.py", "build_growth24_sector_relative_panel.py",
     "build_quantcup_price_dl_panel.py", "build_training_dataset.py",
