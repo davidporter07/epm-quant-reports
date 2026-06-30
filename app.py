@@ -2379,6 +2379,17 @@ def get_forecasts() -> dict:
     except Exception:
         pass
 
+    # Walk-forward backtest verdict for DL (offline, 21-TD-stepped non-overlapping
+    # retrains). Optional — present only after dl_walkforward_backtest.py has run.
+    walkforward: dict = {}
+    try:
+        wf_path = DATA_DIR / "dl_walkforward_summary.json"
+        if wf_path.exists():
+            with wf_path.open("r", encoding="utf-8") as fh:
+                walkforward = json.load(fh)
+    except Exception:
+        walkforward = {}
+
     tickers_out: dict[str, dict] = {}
     for ticker, data in store.items():
         entry = dict(data)  # shallow copy — safe to round top-level scalars
@@ -2390,7 +2401,8 @@ def get_forecasts() -> dict:
                 entry[_k] = round(float(entry[_k]), 4)
         tickers_out[ticker] = entry
 
-    return {"ok": True, "as_of": as_of, "tickers": tickers_out, "commentary": commentary}
+    return {"ok": True, "as_of": as_of, "tickers": tickers_out,
+            "commentary": commentary, "walkforward": walkforward}
 
 
 @app.get("/api/commentary")

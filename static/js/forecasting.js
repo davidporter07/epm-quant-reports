@@ -461,6 +461,80 @@ function toggleModelLines(ticker) {
   }
 }
 
+// Walk-forward reality check: the production DL model retrained at each 21-trading-day
+// step on past-only data, scored over hundreds of INDEPENDENT non-overlapping windows.
+// This is the honest out-of-sample answer the short live log can't give yet.
+function renderWalkforward(wf) {
+  const section = document.getElementById('walkforwardSection');
+  if (!section) return;
+  if (!wf || !wf.n_independent_pooled || !Array.isArray(wf.per_ticker)) {
+    section.style.display = 'none';
+    return;
+  }
+  const muted = 'var(--text-muted)';
+  const border = 'var(--border-subtle, rgba(255,255,255,.10))';
+  const dir = (wf.pooled_directional_accuracy * 100).toFixed(1) + '%';
+  const ciLo = (wf.pooled_dir_ci[0] * 100).toFixed(0);
+  const ciHi = (wf.pooled_dir_ci[1] * 100).toFixed(0);
+  const sig = wf.pooled_significant;
+  const verdictColor = sig ? 'var(--accent-positive, #2ecc71)' : muted;
+  const verdictWord = sig ? 'a statistically significant edge' : 'no significant directional edge';
+
+  const rowsHTML = wf.per_ticker.map(r => {
+    const d = (Number(r.Directional_Accuracy) * 100).toFixed(0) + '%';
+    const lo = (Number(r.Dir_CI_Lower) * 100).toFixed(0);
+    const hi = (Number(r.Dir_CI_Upper) * 100).toFixed(0);
+    const corr = Number(r.Corr).toFixed(2);
+    const mark = Number(r.Significant) === 1 ? ' ✓' : ' ~';
+    return `<tr style="border-bottom:1px solid ${border};">
+      <td style="padding:5px 6px;font-weight:600;">${r.Ticker}</td>
+      <td style="text-align:right;padding:5px 6px;">${Number(r.N_Independent).toFixed(0)}</td>
+      <td style="text-align:right;padding:5px 6px;">${d}<small style="opacity:.55;">${mark}</small></td>
+      <td style="text-align:right;padding:5px 6px;color:${muted};">${lo}–${hi}%</td>
+      <td style="text-align:right;padding:5px 6px;">${corr}</td>
+    </tr>`;
+  }).join('');
+
+  section.innerHTML = `
+    <div class="ds-eyebrow">Reality Check</div>
+    <div class="ds-section-header" style="margin-top:var(--s-1);">
+      <h3 class="ds-title is-h3">Deep Learning — Walk-Forward Backtest</h3>
+      <span class="badge">${wf.n_independent_pooled} independent windows</span>
+    </div>
+    <p class="ds-subtitle">
+      The production Deep Learning model retrained at each 21-trading-day step on
+      <strong>only the data available at the time</strong>, then scored over hundreds of
+      <strong>independent, non-overlapping</strong> windows (2021–2026). Unlike the leaderboard
+      above — which ranks on recent error over a handful of overlapping windows — this is the
+      honest out-of-sample test of whether the direction calls are real.
+    </p>
+    <p style="font-size:15px;margin:10px 0 14px;color:var(--text-primary);">
+      Over <strong>${wf.n_independent_pooled}</strong> independent windows the model is
+      <strong>${dir}</strong> directional (95% CI ${ciLo}–${ciHi}%) —
+      <strong style="color:${verdictColor};">${verdictWord}</strong>.
+      A coin flip is 50%. Its leaderboard wins above come from low <em>magnitude</em> error
+      (cautious, small forecasts), not from calling direction.
+    </p>
+    <div style="overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:12px;color:var(--text-primary);">
+        <thead><tr style="color:${muted};border-bottom:1px solid ${border};">
+          <th style="text-align:left;padding:5px 6px;">Ticker</th>
+          <th style="text-align:right;padding:5px 6px;">Indep. N</th>
+          <th style="text-align:right;padding:5px 6px;">Directional</th>
+          <th style="text-align:right;padding:5px 6px;">95% CI</th>
+          <th style="text-align:right;padding:5px 6px;">Corr</th>
+        </tr></thead>
+        <tbody>${rowsHTML}</tbody>
+      </table>
+      <div style="font-size:11px;color:${muted};margin-top:6px;line-height:1.5;">
+        ✓ = CI excludes 50% (real edge); ~ = straddles 50% (coin flip). Corr = correlation of
+        forecast vs realized return (≈0 means no linear signal). Offline research backtest —
+        does not change the live consensus. Computed ${wf.computed || ''}.
+      </div>
+    </div>`;
+  section.style.display = '';
+}
+
 function renderPodiumLeaderboard(forecastTickers, chartDataMap) {
   const container = document.getElementById('rankingsContainer');
   if (!container) return;
@@ -972,6 +1046,7 @@ function _refreshForecastsInBackground() {
         renderCommentary(data.commentary);
         renderForecastCards(data.tickers || {}, data.as_of || '', chartData);
         renderPodiumLeaderboard(data.tickers || {}, chartData);
+        renderWalkforward(data.walkforward);
         if (typeof writeSessionJson === 'function') {
           writeSessionJson('api_cache_forecasts', data);
           if (chartData) writeSessionJson('api_cache_forecast_chart', { ok: true, tickers: chartData });
@@ -994,6 +1069,7 @@ async function loadForecasts() {
     renderCommentary(cachedForecast.commentary);
     renderForecastCards(cachedForecast.tickers || {}, cachedForecast.as_of || '', chartData);
     renderPodiumLeaderboard(cachedForecast.tickers || {}, chartData);
+    renderWalkforward(cachedForecast.walkforward);
     // Refresh in background so data stays current
     _refreshForecastsInBackground();
     return;
@@ -1027,6 +1103,7 @@ async function loadForecasts() {
     renderCommentary(data.commentary);
     renderForecastCards(data.tickers || {}, data.as_of || '', chartData);
     renderPodiumLeaderboard(data.tickers || {}, chartData);
+    renderWalkforward(data.walkforward);
     // Cache for next visit / other tabs
     if (typeof writeSessionJson === 'function') {
       writeSessionJson('api_cache_forecasts', data);
