@@ -11,6 +11,15 @@ import pytest
 wf = pytest.importorskip("dl_walkforward_backtest")
 
 
+@pytest.fixture(autouse=True)
+def _redirect_outputs(tmp_path, monkeypatch):
+    """score_walkforward writes the summary to module-level data/ paths. Redirect them
+    to a tmp dir so tests never clobber the real production walk-forward artifact."""
+    monkeypatch.setattr(wf, "SUMMARY_CSV", tmp_path / "dl_walkforward_summary.csv")
+    monkeypatch.setattr(wf, "SUMMARY_JSON", tmp_path / "dl_walkforward_summary.json")
+    monkeypatch.setattr(wf, "RESULTS_CSV", tmp_path / "dl_walkforward_results.csv")
+
+
 def _panel(n_dates=400, tickers=("AAPL", "MSFT"), seed=0):
     rng = np.random.default_rng(seed)
     dates = pd.bdate_range("2024-01-01", periods=n_dates)
