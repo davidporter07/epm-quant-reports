@@ -542,6 +542,53 @@ def test_dollar_direction_noop_on_empty_snapshot():
     assert gmc._correct_dollar_direction(data, {}) == 0
 
 
+# --- 2026-06-30: present-tense dollar verbs + euro inverse in asset-class boxes ----
+# DXY fell -0.25% on the day; the asset-class outlook boxes are written in present tense.
+_SNAP_DXY_DOWN = {
+    "U.S. Dollar (DXY)": {"pct_change": -0.25, "pct_change_1w": 0.1, "level": 101.11},
+}
+
+
+def test_present_tense_dollar_verb_flipped():
+    # "the dollar strengthens" while DXY fell — past-tense-only map missed this pre-fix.
+    data = {"asset_class_outlooks": {
+        "Commodities": {"label": "Neutral",
+                        "rationale": "Gold falls 1.35% as the dollar strengthens relative to demand."}}}
+    n = gmc._correct_dollar_direction(data, _SNAP_DXY_DOWN)
+    assert n == 1
+    rat = data["asset_class_outlooks"]["Commodities"]["rationale"]
+    assert "the dollar weakens" in rat
+    assert "strengthens" not in rat
+
+
+def test_weaker_euro_flipped_when_dollar_falls():
+    # euro is ~58% of DXY: a falling dollar means a STRONGER euro, so "a weaker euro" is wrong.
+    data = {"asset_class_outlooks": {
+        "US Dollar": {"label": "Bearish",
+                      "rationale": "The dollar index slips 0.25% as a weaker euro drives pairs higher."}}}
+    n = gmc._correct_dollar_direction(data, _SNAP_DXY_DOWN)
+    assert n == 1
+    rat = data["asset_class_outlooks"]["US Dollar"]["rationale"]
+    assert "stronger euro" in rat
+    assert "weaker euro" not in rat
+
+
+def test_present_tense_dollar_idempotent():
+    data = {"asset_class_outlooks": {
+        "Commodities": {"label": "Neutral", "rationale": "The dollar strengthens on the session."}}}
+    gmc._correct_dollar_direction(data, _SNAP_DXY_DOWN)
+    once = data["asset_class_outlooks"]["Commodities"]["rationale"]
+    gmc._correct_dollar_direction(data, _SNAP_DXY_DOWN)
+    assert data["asset_class_outlooks"]["Commodities"]["rationale"] == once
+
+
+def test_correct_present_tense_dollar_left_alone():
+    # DXY down + "the dollar weakens" is already correct — no change.
+    data = {"asset_class_outlooks": {
+        "US Dollar": {"label": "Bearish", "rationale": "The dollar weakens as risk appetite returns."}}}
+    assert gmc._correct_dollar_direction(data, _SNAP_DXY_DOWN) == 0
+
+
 # --- Fix #2: off-narrative geopolitical hallucination scrub ------------------
 _HEADLINES_US_IRAN = "US-Iran ceasefire talks resume; Israel Hezbollah; NVDA Computex AI chips"
 
@@ -880,6 +927,65 @@ def test_event_day_slip_weekday_is_forward_only():
     }
     assert gmc._correct_event_day_slip(data) == 0
     assert "Wednesday's CPI" in data["cross_asset_synthesis"]
+
+
+# --- 2026-06-30: "Friday's FHFA/JOLTS" when those print TODAY but scenario event is later
+def _write_econ_cal(tmp_path, events):
+    import json as _json
+    (tmp_path / "economic_calendar.json").write_text(
+        _json.dumps({"updated": "2026-06-30", "events": events}), encoding="utf-8")
+
+
+def test_today_event_weekday_corrected_when_scenario_event_is_later(tmp_path, monkeypatch):
+    monkeypatch.setattr(gmc, "DATA_DIR", tmp_path)
+    _write_econ_cal(tmp_path, [
+        {"date": "2026-06-30", "event": "FHFA House Price Index", "importance": "medium"},
+        {"date": "2026-06-30", "event": "JOLTS Job Openings", "importance": "medium"},
+        {"date": "2026-07-01", "event": "ADP Employment Report", "importance": "high"},
+    ])
+    data = {
+        "report_date": "2026-06-30",   # a Tuesday; FHFA/JOLTS print today, ADP is Wednesday
+        "scenario_event": "ADP Employment Report",
+        "scenario_event_day": "tomorrow",
+        "cross_asset_synthesis": ("Friday's FHFA House Price Index and JOLTS Job Openings "
+                                  "prints are the immediate catalysts to watch."),
+    }
+    n = gmc._correct_today_econ_event_weekday(data)
+    assert n >= 1
+    syn = data["cross_asset_synthesis"]
+    # capitalized at sentence start, lowercase mid-sentence — either way "today's"
+    assert "oday's FHFA House Price Index" in syn
+    assert "Friday's FHFA" not in syn
+
+
+def test_today_event_weekday_leaves_genuine_future_event(tmp_path, monkeypatch):
+    monkeypatch.setattr(gmc, "DATA_DIR", tmp_path)
+    _write_econ_cal(tmp_path, [
+        {"date": "2026-06-30", "event": "FHFA House Price Index", "importance": "medium"},
+        {"date": "2026-07-02", "event": "Nonfarm Payrolls", "importance": "high"},
+    ])
+    data = {
+        "report_date": "2026-06-30",
+        "cross_asset_synthesis": "Thursday's Nonfarm Payrolls print is the week's main catalyst.",
+    }
+    # NFP is genuinely Thursday and not a today-event — must not be rewritten.
+    assert gmc._correct_today_econ_event_weekday(data) == 0
+    assert "Thursday's Nonfarm Payrolls" in data["cross_asset_synthesis"]
+
+
+def test_today_event_weekday_idempotent_and_noops_without_calendar(tmp_path, monkeypatch):
+    monkeypatch.setattr(gmc, "DATA_DIR", tmp_path)   # empty dir → no calendar file
+    data = {
+        "report_date": "2026-06-30",
+        "cross_asset_synthesis": "Friday's FHFA House Price Index prints today.",
+    }
+    assert gmc._correct_today_econ_event_weekday(data) == 0   # no calendar → no-op
+    _write_econ_cal(tmp_path, [
+        {"date": "2026-06-30", "event": "FHFA House Price Index", "importance": "medium"}])
+    gmc._correct_today_econ_event_weekday(data)
+    once = data["cross_asset_synthesis"]
+    gmc._correct_today_econ_event_weekday(data)
+    assert data["cross_asset_synthesis"] == once
 
 
 # --- 2026-06-18 #6: US market-holiday awareness (NYSE calendar, not federal) ----------

@@ -5609,15 +5609,27 @@ _DOLLAR_ADJ_UP = {  # snapshot UP → flip these weak adjectives to strong
 }
 _DOLLAR_ADJ_DOWN = {v: k for k, v in _DOLLAR_ADJ_UP.items()}  # snapshot DOWN → inverse
 _DOLLAR_VERB_UP = {  # snapshot UP → flip these down-verbs to up
+    # past tense
     "weakened": "strengthened", "softened": "firmed", "slipped": "rose", "fell": "rose",
     "slid": "climbed", "eased": "firmed", "declined": "advanced", "dropped": "climbed",
     "lost": "gained", "sank": "surged",
+    # present tense — the asset-class outlook boxes are written in present tense
+    # ("the dollar strengthens"), which the past-tense-only map missed (2026-06-30).
+    "weakens": "strengthens", "softens": "firms", "slips": "rises", "falls": "rises",
+    "slides": "climbs", "eases": "firms", "declines": "advances", "drops": "climbs",
+    "loses": "gains", "sinks": "surges", "dips": "climbs", "retreats": "advances",
 }
 _DOLLAR_VERB_DOWN = {  # snapshot DOWN → flip these up-verbs to down
+    # past tense
     "strengthened": "weakened", "firmed": "softened", "rose": "fell", "climbed": "slid",
     "advanced": "declined", "gained": "lost", "rallied": "fell", "jumped": "dropped",
     "surged": "sank",
+    # present tense
+    "strengthens": "weakens", "firms": "softens", "rises": "falls", "climbs": "slides",
+    "advances": "declines", "gains": "loses", "rallies": "falls", "jumps": "drops",
+    "surges": "sinks",
 }
+_EURO_TOKEN_RE = re.compile(r"\beuro\b", re.IGNORECASE)
 _DOLLAR_GAIN_NOUNS = ("gains", "gain", "advance", "rally", "run", "strength")
 _DOLLAR_LOSS_NOUNS = ("losses", "loss", "decline", "weakness", "drop", "slide", "pullback")
 
@@ -5651,22 +5663,33 @@ def _correct_dollar_direction(data: dict, snapshot: dict) -> int:
         nouns = _DOLLAR_GAIN_NOUNS if wk < 0 else _DOLLAR_LOSS_NOUNS
         win_re = re.compile(r"\bweekly(\s+(?:" + "|".join(nouns) + r"))\b", re.IGNORECASE)
 
+    # Euro direction is the dollar's inverse (EUR is ~58% of the DXY basket), so a material
+    # DXY move pins the euro's sign: dollar DOWN ⇒ euro stronger, dollar UP ⇒ euro weaker.
+    # Catches "a weaker euro" sitting beside a falling dollar (2026-06-30 US-Dollar outlook).
+    # Keyed on the DXY sign we already trust, so it needs no separate EUR/USD snapshot key.
+    euro_adj = euro_re = None
+    if day is not None:
+        euro_adj = _DOLLAR_ADJ_UP if day < 0 else _DOLLAR_ADJ_DOWN
+        euro_re = re.compile(
+            r"\b(" + "|".join(map(re.escape, euro_adj)) + r")(\s+euro)\b", re.IGNORECASE)
+
     def _case(repl: str, orig: str) -> str:
         return repl[0].upper() + repl[1:] if orig[:1].isupper() else repl
 
     def _fix(text: str) -> str:
         out = []
         for sent in re.split(r"(?<=[.!?])\s+", text):
-            if not _DOLLAR_TOKEN_RE.search(sent):
-                out.append(sent)
-                continue
             new = sent
-            if adj_map:
-                new = adj_re.sub(lambda m: _case(adj_map[m.group(1).lower()], m.group(1)) + m.group(2), new)
-                new = verb_re.sub(lambda m: m.group(1) + _case(verb_map[m.group(2).lower()], m.group(2)), new)
-            if win_re is not None:
-                new = win_re.sub(
-                    lambda m: ("Daily" if m.group(0)[:1].isupper() else "daily") + m.group(1), new)
+            if _DOLLAR_TOKEN_RE.search(sent):
+                if adj_map:
+                    new = adj_re.sub(lambda m: _case(adj_map[m.group(1).lower()], m.group(1)) + m.group(2), new)
+                    new = verb_re.sub(lambda m: m.group(1) + _case(verb_map[m.group(2).lower()], m.group(2)), new)
+                if win_re is not None:
+                    new = win_re.sub(
+                        lambda m: ("Daily" if m.group(0)[:1].isupper() else "daily") + m.group(1), new)
+            if euro_re is not None and _EURO_TOKEN_RE.search(new):
+                new = euro_re.sub(
+                    lambda m: _case(euro_adj[m.group(1).lower()], m.group(1)) + m.group(2), new)
             out.append(new)
         return " ".join(out)
 
@@ -6090,6 +6113,77 @@ def _correct_event_day_slip(data: dict) -> int:
         if wd_rx is not None:
             _replace(wd_rx, "today", forward_only=True)    # "Friday's <event>" → "today's <event>"
         return text
+
+    return _map_all_prose(data, _fix)
+
+
+# --- TODAY-scheduled econ-event weekday corrector -----------------------------
+# _correct_event_day_slip only rewrites a wrong weekday possessive sitting next to the
+# SCENARIO event, and only fires when scenario_event_day is itself "today". So when the
+# scenario's primary catalyst is a LATER event (2026-06-30: ADP on Wednesday), a
+# "Friday's FHFA House Price Index and JOLTS Job Openings" slip in the synthesis /
+# Today's-Take went uncorrected — FHFA and JOLTS both printed THAT day (Tuesday). This
+# corrector is independent of the scenario event: it keys on the economic-calendar events
+# dated today and rewrites a wrong weekday possessive that DIRECTLY precedes one of those
+# event names to "today's". Best-effort and non-failing (silently no-ops on any error or
+# a missing/empty calendar); proximity-gated so a genuinely later "Thursday's NFP" is left
+# alone, and a possessive that is actually today's weekday is never a candidate.
+def _correct_today_econ_event_weekday(data: dict) -> int:
+    try:
+        from datetime import date as _date
+        _rd = str(data.get("report_date") or data.get("narrative_source_date") or "")[:10]
+        if not _rd:
+            _rd = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today_iso = _rd
+        today_wd = _date.fromisoformat(_rd).strftime("%A").lower()
+    except Exception:
+        return 0
+    wrong = [w for w in _WEEKDAY_NAMES if w != today_wd]
+    if not wrong:
+        return 0
+
+    names: list[str] = []
+    try:
+        cal_path = DATA_DIR / "economic_calendar.json"
+        if cal_path.exists():
+            with open(cal_path, "r", encoding="utf-8") as f:
+                cal = json.load(f)
+            for ev_obj in (cal.get("events") or []):
+                if str(ev_obj.get("date", ""))[:10] == today_iso:
+                    nm = str(ev_obj.get("event", "")).strip()
+                    if len(nm) >= 4:
+                        names.append(nm)
+    except Exception:
+        return 0
+    if not names:
+        return 0
+
+    wd_rx = re.compile(r"\b(" + "|".join(wrong) + r")(['’]s)\b", re.IGNORECASE)
+    ev_res = [re.compile(re.escape(nm), re.IGNORECASE) for nm in names]
+
+    def _fix(text: str) -> str:
+        if not wd_rx.search(text):
+            return text
+        spans = [m.span() for rx in ev_res for m in rx.finditer(text)]
+        if not spans:
+            return text
+
+        def _event_just_after(end: int) -> bool:
+            # The event name starts within ~25 chars AFTER the weekday token — i.e. the
+            # weekday is a day-label modifying THIS event ("Friday's FHFA …"), not a stray
+            # nearby weekday.
+            return any(end <= s <= end + 25 for s, _e in spans)
+
+        out, last = [], 0
+        for m in wd_rx.finditer(text):
+            if not _event_just_after(m.end()):
+                continue
+            repl = ("Today" if m.group(1)[:1].isupper() else "today") + m.group(2)
+            out.append(text[last:m.start()])
+            out.append(repl)
+            last = m.end()
+        out.append(text[last:])
+        return "".join(out)
 
     return _map_all_prose(data, _fix)
 
@@ -6686,6 +6780,7 @@ def sanitize_commentary(data: dict, snapshot: dict | None = None, source_text: s
     total += _scrub_offuniverse_currency(data)
     total += _scrub_offtopic_em_bonds(data)
     total += _correct_event_day_slip(data)
+    total += _correct_today_econ_event_weekday(data)
     total += _reconcile_tactical_stance_with_outlook(data)
     total += _scrub_unreleased_econ_prints(data)
     total += _scrub_unreleased_event_attribution(data)

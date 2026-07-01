@@ -37,6 +37,26 @@ TODAY_STR = datetime.today().strftime("%Y-%m-%d")
 # Acceptable staleness for YCharts data (if scrape ran today it's fresh)
 MAX_STALE_DAYS = 5
 
+# YCharts-key -> report label for the yield curve. Module-level so the degenerate-curve
+# repair guard and the arbitration step share one source of truth (no drift).
+_YIELD_LABEL_MAP = {
+    "1M":  "1-Month Yield",
+    "3M":  "3-Month Yield",
+    "6M":  "6-Month Yield",
+    "1Y":  "1-Year Yield",
+    "2Y":  "2-Year Yield",
+    "3Y":  "3-Year Yield",
+    "5Y":  "5-Year Yield",
+    "7Y":  "7-Year Yield",
+    "10Y": "10-Year Yield",
+    "20Y": "20-Year Yield",
+    "30Y": "30-Year Yield",
+    "10s2s":         "10s-2s Spread",
+    "Breakeven_10Y": "10Y Breakeven Inflation",
+    "Fed_Funds":     "Fed Funds Rate",
+    "SOFR":          "SOFR",
+}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -84,24 +104,8 @@ def _arbitrate_yields(yc_live: dict, yf_bonds: dict) -> dict:
     Merge YCharts full yield curve with yfinance bond data.
     Returns a dict keyed by human-readable label.
     """
-    # YCharts label  report label
-    label_map = {
-        "1M":  "1-Month Yield",
-        "3M":  "3-Month Yield",
-        "6M":  "6-Month Yield",
-        "1Y":  "1-Year Yield",
-        "2Y":  "2-Year Yield",
-        "3Y":  "3-Year Yield",
-        "5Y":  "5-Year Yield",
-        "7Y":  "7-Year Yield",
-        "10Y": "10-Year Yield",
-        "20Y": "20-Year Yield",
-        "30Y": "30-Year Yield",
-        "10s2s":         "10s-2s Spread",
-        "Breakeven_10Y": "10Y Breakeven Inflation",
-        "Fed_Funds":     "Fed Funds Rate",
-        "SOFR":          "SOFR",
-    }
+    # YCharts label  report label  (shared module constant — see _YIELD_LABEL_MAP)
+    label_map = _YIELD_LABEL_MAP
 
     result = {}
     for yc_key, report_label in label_map.items():
@@ -278,6 +282,90 @@ def _fetch_fred_yield_curve() -> dict[str, Any]:
     return result
 
 
+# Tenors that carry a meaningful daily change (exclude the spread row, which is a derived
+# difference, and breakeven/policy rates that legitimately sit unchanged for days).
+_CURVE_CHANGE_TENORS = (
+    "1-Month Yield", "3-Month Yield", "6-Month Yield", "1-Year Yield", "2-Year Yield",
+    "3-Year Yield", "5-Year Yield", "7-Year Yield", "10-Year Yield", "20-Year Yield",
+    "30-Year Yield",
+)
+# A change smaller than this (in yield points) rounds to "+0.000%" on the report and is
+# treated as "effectively flat" for degeneracy detection.
+_FLAT_EPS = 0.0005
+# Fraction of change-bearing tenors that must be flat-or-missing before we distrust the
+# whole change column and cross-check against FRED.
+_DEGENERATE_FRAC = 0.60
+# Sanity cap on a FRED-derived daily change (50 bp/day) — anything larger is a data
+# artefact (par-yield vs Treasury level mismatch, bad obs) and is not applied.
+_MAX_DAILY_YIELD_CHG = 0.50
+
+
+def _repair_degenerate_yield_curve(curve: dict) -> int:
+    """Cross-check a frozen/degenerate yield-curve change column against FRED.
+
+    Failure mode (2026-06-30): nearly every tenor printed "+0.000%" because the YCharts
+    'previous' point resolved to the SAME observation as the latest (prev_value == level),
+    fabricating a flat curve. A genuinely flat session looks identical on the surface, so
+    we disambiguate with an INDEPENDENT source: when a strong majority of change-bearing
+    tenors are flat-or-missing, fetch FRED's distinct two-point series. For each flat tenor
+    where FRED shows a real move, recompute the day-change from FRED's delta while KEEPING
+    the YCharts level (so displayed levels never drift). If FRED also shows ~0, the curve
+    really was flat and nothing changes. Best-effort and non-failing: any error leaves the
+    curve untouched. Returns the number of tenor changes repaired.
+    """
+    if not isinstance(curve, dict) or not curve:
+        return 0
+    present = [(lbl, curve[lbl]) for lbl in _CURVE_CHANGE_TENORS
+               if isinstance(curve.get(lbl), dict) and curve[lbl].get("level") is not None]
+    if len(present) < 5:
+        return 0
+
+    def _is_flat(entry: dict) -> bool:
+        chg = entry.get("change")
+        return chg is None or abs(float(chg)) < _FLAT_EPS
+
+    flat = [(lbl, e) for lbl, e in present if _is_flat(e)]
+    if len(flat) / len(present) < _DEGENERATE_FRAC:
+        return 0  # curve has healthy dispersion — trust it
+
+    print(f"[Arbiter] Degenerate yield-curve change column "
+          f"({len(flat)}/{len(present)} tenors flat/missing) — cross-checking FRED.")
+    fred = _fetch_fred_yield_curve()
+    if not fred:
+        print("[Arbiter] FRED unavailable — leaving curve as-is (cannot confirm staleness).")
+        return 0
+
+    yc_for_label = {report: yc for yc, report in _YIELD_LABEL_MAP.items()}
+    repaired = 0
+    for lbl, entry in flat:
+        fred_entry = fred.get(yc_for_label.get(lbl, ""))
+        if not fred_entry:
+            continue
+        fv, pv = fred_entry.get("value"), fred_entry.get("prev_value")
+        if fv is None or pv is None:
+            continue
+        try:
+            fred_chg = round(float(fv) - float(pv), 4)
+        except (TypeError, ValueError):
+            continue
+        # Only act when FRED disagrees (a real move) and the move is sane.
+        if abs(fred_chg) < _FLAT_EPS or abs(fred_chg) > _MAX_DAILY_YIELD_CHG:
+            continue
+        level = float(entry["level"])
+        entry["change"]     = fred_chg
+        entry["prev_value"] = round(level - fred_chg, 4)
+        entry["pct_change"] = round(fred_chg / level * 100, 2) if level else None
+        entry["change_source"] = "fred_recompute"
+        repaired += 1
+
+    if repaired:
+        print(f"[Arbiter] Recomputed {repaired} stale tenor change(s) from FRED "
+              f"(YCharts prev was a non-distinct observation).")
+    else:
+        print("[Arbiter] FRED agrees the curve was flat — no repair needed.")
+    return repaired
+
+
 def _fetch_fred_economics() -> dict[str, Any]:
     api_key = _fred_api_key()
     if not api_key:
@@ -415,6 +503,12 @@ def run_arbitration(yf_commentary: dict | None = None) -> dict:
         "yield_curve":       _arbitrate_yields(merged_yields, yf_bonds),
         "economics":         _arbitrate_economics(merged_econ),
     }
+
+    # Guard: a yield curve where almost every tenor shows a 0.000 change is the signature
+    # of a stale 'previous' point (prev_value == level), which fabricates a flat curve and
+    # drives a bogus "yields held 0 bp" narrative. Cross-check against FRED's distinct
+    # two-point series; recompute only the changes FRED proves are real (levels untouched).
+    _repair_degenerate_yield_curve(arbitrated["yield_curve"])
 
     # Build features CSV from scraper funds data. Fund risk metrics (Sharpe/alpha/beta/
     # MaxDD) come ONLY from YCharts, so there is no fallback — but if the scrape is stale
