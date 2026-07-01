@@ -1028,6 +1028,100 @@ def test_future_event_weekday_ignores_distant_event(tmp_path, monkeypatch):
     assert gmc._correct_future_econ_event_weekday(data) == 0
 
 
+# --- 2026-07-01: garbled harvested Fed-speaker topic (duplicated name + joined headline) ----
+def test_clean_fed_topic_strips_name_and_second_headline():
+    raw = "Fed's Hammack says rate hikes possible if inflation persists Stocks rise on Q2"
+    out = gmc._clean_fed_topic(raw, "Hammack")
+    assert out == "rate hikes possible if inflation persists"
+    assert "Hammack" not in out          # redundant speaker name stripped
+    assert "Stocks" not in out           # concatenated second headline cut
+
+
+def test_clean_fed_topic_cuts_at_sentence():
+    out = gmc._clean_fed_topic("Fed's Barkin warned inflation remains sticky. Oil slid 2%.", "Barkin")
+    assert out == "inflation remains sticky"
+
+
+def test_clean_fed_topic_leaves_clean_detail():
+    out = gmc._clean_fed_topic("discusses the economic outlook at a policy panel", "Warsh")
+    assert out == "discusses the economic outlook at a policy panel"
+
+
+# --- 2026-07-01: Names-to-Watch backfill when the model omits the panel -----------------
+def test_backfill_watch_fills_from_input_laggards():
+    data = {"portfolio_spotlight_watch": []}
+    watch_in = [
+        {"ticker": "RLY", "metric_label": "-6.0% (1M)", "description": "Real-return multi-asset fund"},
+        {"ticker": "XLG", "metric_label": "-4.7% (1M)", "description": "Mega-cap S&P 500 top-50"},
+    ]
+    n = gmc._backfill_watch_panel(data, watch_in, known_tickers={"RLY", "XLG"})
+    assert n == 2
+    tickers = [e["ticker"] for e in data["portfolio_spotlight_watch"]]
+    assert tickers == ["RLY", "XLG"]
+    assert "Real-return" in data["portfolio_spotlight_watch"][0]["commentary"]
+
+
+def test_backfill_watch_noop_when_panel_present():
+    data = {"portfolio_spotlight_watch": [{"ticker": "RLY", "metric_label": "-6.0% (1M)", "commentary": "x"}]}
+    assert gmc._backfill_watch_panel(data, [{"ticker": "XLG"}], known_tickers=None) == 0
+    assert len(data["portfolio_spotlight_watch"]) == 1
+
+
+def test_backfill_watch_filters_off_universe():
+    data = {"portfolio_spotlight_watch": []}
+    n = gmc._backfill_watch_panel(data, [{"ticker": "BOGUS", "metric_label": "-9% (1M)"}],
+                                  known_tickers={"RLY", "XLG"})
+    assert n == 0
+    assert data["portfolio_spotlight_watch"] == []
+
+
+# --- 2026-07-01: peace/ceasefire narrative-coherence guard --------------------------------
+def test_peace_coherence_flags_both_framings():
+    data = {
+        "equities_commentary": "The S&P rose as peace deal hopes lifted risk appetite across sectors.",
+        "economics_commentary": "Fading hopes for a U.S.-Iran peace deal fuelled inflation worries.",
+    }
+    v = gmc._check_peace_narrative_coherence(data)
+    assert v and "both fading" in v[0]
+
+
+def test_peace_coherence_clean_when_only_one_framing():
+    only_fading = {"equities_commentary": "Fading hopes for a peace deal weighed on sentiment.",
+                   "economics_commentary": "The receding ceasefire kept inflation risk elevated."}
+    assert gmc._check_peace_narrative_coherence(only_fading) == []
+    only_rising = {"equities_commentary": "Ceasefire optimism lifted equities.",
+                   "commodities_commentary": "Peace deal hopes drove oil lower."}
+    assert gmc._check_peace_narrative_coherence(only_rising) == []
+
+
+def test_peace_coherence_ignores_absent_theme():
+    data = {"equities_commentary": "Tech led on AI capex; industrials followed."}
+    assert gmc._check_peace_narrative_coherence(data) == []
+
+
+# --- 2026-07-01: macro release-date awareness (JOLTS surfaces on release day) --------------
+def test_significant_tokens_drops_stopwords():
+    assert gmc._significant_tokens("JOLTS Job Openings") == {"jolts", "openings"}
+    assert "rate" not in gmc._significant_tokens("Fed Funds Rate")
+
+
+def test_jolts_marked_recent_by_calendar_release(tmp_path, monkeypatch):
+    import json as _json
+    monkeypatch.setattr(gmc, "DATA_DIR", tmp_path)
+    # JOLTS observation is the May reference month (stale by observation date) ...
+    arb = {"economics": {"JOLTS Job Openings": {"value": 7590.0, "prev_value": 7300.0,
+                                                "date": "2026-05-31"}}}
+    (tmp_path / "market_data_arbitrated.json").write_text(_json.dumps(arb), encoding="utf-8")
+    # ... but the calendar shows it was RELEASED today, so it must count as recent.
+    today = gmc.datetime.today().strftime("%Y-%m-%d")
+    (tmp_path / "economic_calendar.json").write_text(
+        _json.dumps({"events": [{"date": today, "event": "JOLTS Job Openings"}]}), encoding="utf-8")
+    prints = gmc.load_recent_macro_prints()
+    jolts = [p for p in prints if "JOLTS" in p["indicator"]]
+    assert jolts and jolts[0]["actual"] == "7.59M"
+    assert jolts[0]["recent"] is True
+
+
 # --- 2026-06-18 #6: US market-holiday awareness (NYSE calendar, not federal) ----------
 def test_is_us_market_holiday_juneteenth():
     assert gmc._is_us_market_holiday("2026-06-19") is True       # Juneteenth — NYSE closed

@@ -2468,6 +2468,46 @@ _MACRO_PRINT_SPEC = [
 ]
 
 
+# Words too common to distinguish one macro indicator from another — excluded when
+# matching a calendar event name against a macro-print label.
+_MACRO_STOPWORDS = frozenset({
+    "the", "of", "and", "index", "rate", "report", "data", "yoy", "qoq", "mom",
+    "job", "jobs", "monthly", "annual", "us", "u.s", "final", "prelim", "preliminary",
+})
+
+
+def _significant_tokens(name: str) -> set:
+    """Distinctive lowercased word tokens of a macro name (e.g. 'JOLTS Job Openings' ->
+    {'jolts','openings'}). Used to match a calendar event to a macro-print label."""
+    toks = re.findall(r"[a-z]{3,}", str(name or "").lower())
+    return {t for t in toks if t not in _MACRO_STOPWORDS}
+
+
+def _recent_calendar_release_names(cutoff) -> list[str]:
+    """Event names from economic_calendar.json whose RELEASE date is within [cutoff, today].
+    Best-effort; returns [] on any error or missing file."""
+    try:
+        cal_path = DATA_DIR / "economic_calendar.json"
+        if not cal_path.exists():
+            return []
+        cal = json.loads(cal_path.read_text(encoding="utf-8"))
+        today = datetime.today().date()
+        names = []
+        for ev in (cal.get("events") or []):
+            d = str(ev.get("date", ""))[:10]
+            try:
+                dd = datetime.strptime(d, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if cutoff <= dd <= today:
+                nm = str(ev.get("event", "")).strip()
+                if nm:
+                    names.append(nm)
+        return names
+    except Exception:
+        return []
+
+
 def load_recent_macro_prints(lookback_days: int = 10) -> list[dict]:
     """Return recently-released macro prints with actual + prior values for the
     economics recap. Reads data/market_data_arbitrated.json (written by
@@ -2510,6 +2550,19 @@ def load_recent_macro_prints(lookback_days: int = 10) -> list[dict]:
         return f"{v:.1f}"
 
     cutoff = (datetime.today() - timedelta(days=lookback_days)).date()
+
+    # Release-date awareness: a monthly series is RELEASED ~1 month after its reference
+    # month, so its observation date lags (JOLTS for May prints end of June). Keying
+    # "recent" purely on the observation date drops a freshly-RELEASED print on its release
+    # day (2026-07-01: May JOLTS, the day's headline release, looked "stale"). Cross-check
+    # the economic calendar: an indicator whose release is dated within the lookback window
+    # counts as recent even when its reference-month observation is older.
+    _released_names = _recent_calendar_release_names(cutoff)
+
+    def _released_recently(label: str) -> bool:
+        toks = _significant_tokens(label)
+        return any(toks & _significant_tokens(nm) for nm in _released_names)
+
     out: list[dict] = []
     for src_key, label, kind in _MACRO_PRINT_SPEC:
         rec = econ.get(src_key)
@@ -2524,9 +2577,10 @@ def load_recent_macro_prints(lookback_days: int = 10) -> list[dict]:
             obs_date = datetime.strptime(date_str, "%Y-%m-%d").date()
         except ValueError:
             obs_date = None
-        # Weekly series (claims) carry a recent observation date; monthly/quarterly
-        # series lag — keep the latter only if their observation is within lookback.
-        is_recent = obs_date is not None and obs_date >= cutoff
+        # Weekly series (claims) carry a recent observation date; monthly/quarterly series
+        # lag — keep the latter as "recent" if the observation is within lookback OR the
+        # calendar shows it was released within the window.
+        is_recent = (obs_date is not None and obs_date >= cutoff) or _released_recently(label)
         out.append({
             "indicator": label,
             "actual":    actual,
@@ -3568,9 +3622,10 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
             move_sig = _check_move_significance(part1, snapshot)
             superlatives = _check_unsourced_superlatives(part1, flat_headlines)
             editorial = _check_editorial_contradictions(part1, snapshot)
+            peace_coh = _check_peace_narrative_coherence(part1)
             if (not banned and not leaks and not numeric and not causal and not gm_inv and not dating
                     and not move_sig and not superlatives and not direction and not corp_actions
-                    and not editorial and not risk_pol):
+                    and not editorial and not risk_pol and not peace_coh):
                 break
             if banned:
                 print(f"  [RETRY] Attempt {attempt + 1} still contained banned phrases after scrub: {banned}. Retrying...")
@@ -3596,6 +3651,8 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
                 print(f"  [RETRY] Attempt {attempt + 1} made fabricated corporate-action claims: {corp_actions}. Retrying...")
             if editorial:
                 print(f"  [RETRY] Attempt {attempt + 1} had editorial contradictions vs snapshot: {editorial}. Retrying...")
+            if peace_coh:
+                print(f"  [RETRY] Attempt {attempt + 1} framed the peace/ceasefire storyline incoherently: {peace_coh}. Retrying...")
         except Exception as exc:
             print(f"  [WARN] Narrative call failed (attempt {attempt + 1}): {exc}")
             part1 = {}
@@ -4501,6 +4558,57 @@ def _check_risk_polarity_inversion(data: dict, snapshot: dict) -> list[str]:
         if len(violations) >= 4:
             break
     return violations[:4]
+
+
+# --- peace/ceasefire narrative-coherence guard --------------------------------
+# 2026-07-01: the report framed the SAME US-Iran situation two opposite ways at once —
+# "peace deal hopes lifted markets" (recap/synthesis/spotlight) beside "fading hopes for a
+# peace deal fuelled inflation worries" (bullet/gold/economics). The WRITING_RULES
+# NARRATIVE-COHERENCE clause is meant to prevent this but the model leaked it. Detect a
+# report that contains BOTH a RISING-peace framing and a FADING-peace framing for the same
+# de-escalation storyline and force a regeneration (retry-feedback, like the risk-polarity
+# guard — rewriting the semantics in place is unsafe). Conservative: a sentence must pair a
+# peace/ceasefire NOUN with a polarity verb, and a sentence carrying BOTH polarities (e.g.
+# "fading peace hopes lifted gold") is skipped as ambiguous.
+_PEACE_NOUN_RE = re.compile(
+    r"\b(?:peace\s+deal|peace\s+talks?|peace\s+hopes?|cease[\s-]?fire|truce|"
+    r"de[\s-]?escalation|diplomatic\s+(?:breakthrough|progress))\b", re.IGNORECASE)
+_PEACE_FADING_RE = re.compile(
+    r"\b(?:fad\w+|reced\w+|receded|dwindl\w+|dimm\w+|dim|evaporat\w+|collaps\w+|"
+    r"unravel\w+|denied|stall\w+|faltered|crumbl\w+|off\s+the\s+table)\b", re.IGNORECASE)
+# Only UNAMBIGUOUSLY-positive framing counts as "rising". Neutral words that co-occur with
+# a fading storyline ("fading HOPES", "FUELLED inflation worries") are excluded so a fading
+# sentence isn't misread as carrying both polarities.
+_PEACE_RISING_RE = re.compile(
+    r"\b(?:optimis\w+|lift\w+|lifted|drove|driven|buoy\w+|rally\w+|rallied|rising|"
+    r"grow\w+|renew\w+|revive\w+|gain\w+\s+traction)\b", re.IGNORECASE)
+
+
+def _check_peace_narrative_coherence(data: dict) -> list[str]:
+    """Return a violation when the report frames the peace/ceasefire storyline as BOTH rising
+    and fading. Empty list = coherent (or the theme is absent)."""
+    fading_hit = rising_hit = None
+    for field in _ALL_PROSE_FIELDS:
+        v = data.get(field)
+        texts = []
+        if isinstance(v, str) and v:
+            texts = re.split(r"(?<=[.!?])\s+", v)
+        elif isinstance(v, list):
+            texts = [s for s in v if isinstance(s, str)]
+        for sent in texts:
+            if not _PEACE_NOUN_RE.search(sent):
+                continue
+            fad = bool(_PEACE_FADING_RE.search(sent))
+            ris = bool(_PEACE_RISING_RE.search(sent))
+            if fad == ris:
+                continue  # neither, or ambiguous (both) — not a clean polarity signal
+            if fad and fading_hit is None:
+                fading_hit = f"{field}: \"{sent.strip()[:90]}\""
+            elif ris and rising_hit is None:
+                rising_hit = f"{field}: \"{sent.strip()[:90]}\""
+    if fading_hit and rising_hit:
+        return [f"peace/ceasefire framed both fading [{fading_hit}] and rising [{rising_hit}]"]
+    return []
 
 
 def _check_synthesis_yield_direction(part4: dict, snapshot: dict) -> str | None:
@@ -6440,6 +6548,40 @@ def _surname_is_speaker(text: str, surname: str) -> bool:
     return bool(subj_before.search(text) or colon_attrib.search(text) or verb_before.search(text))
 
 
+# Common market-headline lead subjects. When one of these appears mid-topic (a lowercase
+# word directly before it), it almost always marks where a SECOND wire headline was
+# concatenated onto the first (2026-07-01: "...if inflation persists Stocks rise on Q2").
+_HEADLINE_JOIN_RE = re.compile(
+    r"\s+(?=(?:Stocks|Shares|Markets|Wall\s+Street|Wall\s+St|Dow|Nasdaq|S&P|Futures|"
+    r"Oil|Crude|Gold|Silver|Copper|Bitcoin|Treasur\w+|Yields|Bonds|Dollar|Euro|"
+    r"Asian|European|Equit\w+)\b)")
+
+
+def _clean_fed_topic(text: str, surname: str) -> str:
+    """Normalise a harvested Fed-speaker topic (a raw news headline) into a short, clean
+    detail. Strips a redundant leading "Fed's <Surname> <verb>" (the row already labels the
+    speaker), cuts a concatenated second headline, then a trailing sentence, then word-caps.
+    Returns "" when nothing meaningful survives (caller drops the detail gracefully)."""
+    t = re.sub(r"\s+", " ", str(text or "")).strip()
+    # Drop a leading "the Fed's <Surname>" / "Fed <Surname>" plus an optional speaking verb.
+    t = re.sub(rf"^(?:the\s+)?fed(?:'s|’s)?\s+{re.escape(surname)}\b[:,]?\s*", "", t, flags=re.I)
+    t = re.sub(r"^(?:says?|said|speaks?|spoke|warns?|warned|notes?|noted|tells?|told|"
+               r"signals?|signall?ed|comments?|adds?|added|states?|stated)\b[:,]?\s*",
+               "", t, flags=re.I)
+    # Cut a concatenated second headline ("...persists Stocks rise on Q2" -> "...persists").
+    m = _HEADLINE_JOIN_RE.search(t)
+    if m and m.start() > 0:
+        t = t[:m.start()]
+    # Cut at the first sentence boundary if one exists.
+    ms = re.search(r"[.!?]", t)
+    if ms:
+        t = t[:ms.start()]
+    words = t.split()
+    if len(words) > 16:                       # backstop against a punctuation-less run-on
+        t = " ".join(words[:16])
+    return t.strip()
+
+
 def _harvest_fed_speakers_from_news(headlines, existing_speakers=None) -> list[dict]:
     """Supplement the Governors-only calendar feed with regional reserve-bank presidents
     named in today's news wire.
@@ -6486,7 +6628,7 @@ def _harvest_fed_speakers_from_news(headlines, existing_speakers=None) -> list[d
                     "speaker": f"Fed's {surname}",
                     "time_et": (_m.group(1).strip() if _m else ""),
                     "venue":   "",
-                    "topic":   text[:200],
+                    "topic":   _clean_fed_topic(text, surname),
                 })
                 seen.add(sl)
     return rows
@@ -7023,7 +7165,37 @@ def _build_deterministic_market_commentary(
     }
 
 
-def validate_commentary(data: dict, known_tickers: set = None, snapshot: dict = None) -> bool:
+def _backfill_watch_panel(data: dict, watch_fallback: list | None,
+                          known_tickers: set | None) -> int:
+    """Fill portfolio_spotlight_watch from the authoritative input laggards when it is empty,
+    so the panel never renders "No data available". Deterministic; returns entries added."""
+    if data.get("portfolio_spotlight_watch") or not watch_fallback:
+        return 0
+    filled = []
+    for entry in watch_fallback:
+        if not isinstance(entry, dict) or not entry.get("ticker"):
+            continue
+        tk = str(entry["ticker"]).upper()
+        if known_tickers and tk not in known_tickers:
+            continue
+        desc = str(entry.get("description") or "").strip().rstrip(".")
+        metric = str(entry.get("metric_label") or "recent 1-month return").strip()
+        note = (f"Lagging the portfolio on {metric}; monitor whether the "
+                f"underperformance stabilizes or extends.")
+        filled.append({
+            "ticker": tk,
+            "metric_label": entry.get("metric_label") or "",
+            "commentary": (f"{desc}. {note}" if desc else note)[:400],
+        })
+    if filled:
+        data["portfolio_spotlight_watch"] = filled
+        print(f"[VALIDATE] Backfilled {len(filled)} watch entr(ies) from input laggards "
+              f"(model omitted or off-universe).")
+    return len(filled)
+
+
+def validate_commentary(data: dict, known_tickers: set = None, snapshot: dict = None,
+                        watch_fallback: list | None = None) -> bool:
     if not isinstance(data, dict):
         return False
     # commodities_commentary and economics_commentary are optional  model reliably omits them when
@@ -7128,6 +7300,12 @@ def validate_commentary(data: dict, known_tickers: set = None, snapshot: dict = 
         removed_wt = before_wt - len(data["portfolio_spotlight_watch"])
         if removed_w or removed_wt:
             print(f"[VALIDATE] Removed {removed_w} winner(s), {removed_wt} watch(es) outside known universe.")
+
+    # Backfill the watch panel deterministically when the LLM omitted it or all of its
+    # entries were stripped above (2026-07-01: "Names to Watch: No data available" while real
+    # laggards — XLG -4.7%, RLY -6.0% — sat right there in the fund metrics). Runs AFTER the
+    # strip so it also recovers the case where the model returned off-universe tickers.
+    _backfill_watch_panel(data, watch_fallback, known_tickers)
 
     # Remove bearish tickers from spotlight winners (contradiction guard)
     bearish_tickers: set[str] = set()
@@ -8332,7 +8510,8 @@ def main() -> int:
     try:
         commentary, known_tickers = call_ollama(payload, snapshot)
         commentary = scrub_banned_phrases(commentary)
-        if validate_commentary(commentary, known_tickers=known_tickers, snapshot=snapshot):
+        if validate_commentary(commentary, known_tickers=known_tickers, snapshot=snapshot,
+                               watch_fallback=watch):
             banned = find_banned_phrases(commentary)
             if banned:
                 print(f"[WARN] Commentary still contains banned phrases after scrub: {banned}")

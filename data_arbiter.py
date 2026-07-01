@@ -366,19 +366,24 @@ def _repair_degenerate_yield_curve(curve: dict) -> int:
     return repaired
 
 
-def _fetch_fred_economics() -> dict[str, Any]:
+def _fetch_fred_economics(only: set | None = None) -> dict[str, Any]:
+    """Fetch economic indicators from FRED. When `only` is given, fetch just those keys
+    (used to backfill FRED-only series — e.g. JOLTS — that the YCharts econ feed lacks,
+    without re-pulling the full set every run)."""
     api_key = _fred_api_key()
     if not api_key:
         return {}
     result: dict[str, Any] = {}
-    for label, (series_id, extra) in _FRED_ECON_SERIES.items():
+    items = ((k, _FRED_ECON_SERIES[k]) for k in only if k in _FRED_ECON_SERIES) \
+        if only else _FRED_ECON_SERIES.items()
+    for label, (series_id, extra) in items:
         try:
             entry = _fred_fetch_series(series_id, extra, api_key)
             if entry:
                 result[label] = entry
         except Exception as exc:
             print(f"  [FRED econ] {series_id}: {exc}")
-    print(f"[Arbiter/FRED] Economics: {len(result)}/{len(_FRED_ECON_SERIES)} indicators")
+    print(f"[Arbiter/FRED] Economics: {len(result)}/{len(only) if only else len(_FRED_ECON_SERIES)} indicators")
     return result
 
 
@@ -495,7 +500,16 @@ def run_arbitration(yf_commentary: dict | None = None) -> dict:
         fred_econ = _fetch_fred_economics()
         merged_econ = {**fred_econ, **{k: v for k, v in yc_econ.items() if v}}
     else:
-        merged_econ = yc_econ
+        # YCharts econ is populated, but it does NOT carry every series — JOLTS in particular
+        # is FRED-only, so it silently vanished from the recap (2026-07-01: the day's key
+        # release, 7.59M openings, never reached the model). Backfill just the missing series
+        # from FRED rather than re-pulling the full set.
+        merged_econ = dict(yc_econ)
+        _missing = {k for k in _FRED_ECON_SERIES if not merged_econ.get(k)}
+        if _missing:
+            for k, v in _fetch_fred_economics(only=_missing).items():
+                if v and not merged_econ.get(k):
+                    merged_econ[k] = v
 
     arbitrated: dict[str, Any] = {
         "arbitrated_date":   TODAY_STR,
