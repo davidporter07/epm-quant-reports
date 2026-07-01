@@ -775,6 +775,72 @@ def fetch_bonds_table() -> dict[str, dict]:
     return result
 
 
+# Treasury.gov publishes the daily curve with a lag: on some mornings its latest XML row is
+# still the PRIOR session. 2026-07-01: it carried 6/29's 10Y=4.372 as "latest" while the 6/30
+# close was ~4.44, and _fetch_treasury_gov_yields blindly takes sorted_dates[-1] as today. That
+# stale row was synced into the snapshot + narrative and INVERTED the rates story ("yield fell
+# 2 bp" when it actually rose ~6 bp). The arbitrated curve (YCharts primary, written by
+# data_arbiter) had the fresh level, so cross-check against it: when the arbitrated level is
+# fresh and materially diverges from Treasury.gov's, adopt the arbitrated level and treat the
+# stale Treasury.gov value as the prior session (its lag is exactly one session), which recovers
+# the correct daily change. Same "prefer the fresh source, reconcile the laggard" philosophy as
+# _reconcile_asian_index_close.
+_YIELD_RECON_TENORS = ("2-Year Yield", "10-Year Yield", "30-Year Yield")
+_YIELD_DIVERGE_BP = 0.02      # >2 bp gap ⇒ Treasury.gov is stale, not rounding noise
+_YIELD_MAX_DAILY  = 0.50      # >50 bp/day ⇒ artefact, don't apply
+
+
+def _reconcile_bonds_with_arbitrated(bonds_tbl: dict, arb_curve: dict) -> int:
+    """Prefer the fresh arbitrated (YCharts/FRED) yield level over a lagging Treasury.gov row
+    for 2Y/10Y/30Y. Mutates bonds_tbl in place; returns the count of tenors corrected. Only the
+    caller (which gates on arbitrated freshness) decides whether to invoke this. Never raises."""
+    if not isinstance(bonds_tbl, dict) or not isinstance(arb_curve, dict) or not arb_curve:
+        return 0
+    fixed = 0
+    for name in _YIELD_RECON_TENORS:
+        arb = arb_curve.get(name)
+        if not isinstance(arb, dict) or arb.get("level") is None:
+            continue
+        try:
+            arb_lvl = float(arb["level"])
+        except (TypeError, ValueError):
+            continue
+        tsy = bonds_tbl.get(name)
+        if not isinstance(tsy, dict) or tsy.get("level") is None:
+            # No Treasury.gov value at all — adopt the arbitrated level/change wholesale.
+            bonds_tbl[name] = {"level": round(arb_lvl, 3), "change": arb.get("change"),
+                               "pct_change": arb.get("pct_change"), "_reconciled": "arbitrated_curve"}
+            fixed += 1
+            continue
+        try:
+            tsy_lvl = float(tsy["level"])
+        except (TypeError, ValueError):
+            continue
+        if abs(arb_lvl - tsy_lvl) <= _YIELD_DIVERGE_BP:
+            continue  # agree within rounding — Treasury.gov is fresh, keep it
+        chg = round(arb_lvl - tsy_lvl, 3)
+        if abs(chg) > _YIELD_MAX_DAILY:
+            continue  # implausible daily move — likely bad data, don't apply
+        new = dict(tsy)
+        new["level"]      = round(arb_lvl, 3)
+        new["change"]     = chg
+        new["pct_change"] = round(chg / tsy_lvl * 100, 2) if tsy_lvl else None
+        new["_reconciled"] = "arbitrated_curve"
+        bonds_tbl[name] = new
+        fixed += 1
+
+    if fixed:  # rebuild the 10s-2s spread off the reconciled 2Y/10Y so it can't disagree
+        y10 = bonds_tbl.get("10-Year Yield", {})
+        y2  = bonds_tbl.get("2-Year Yield", {})
+        if y10.get("level") is not None and y2.get("level") is not None:
+            sp = dict(bonds_tbl.get("10s-2s Spread") or {})
+            sp["level"] = round((float(y10["level"]) - float(y2["level"])) * 100, 1)
+            if y10.get("change") is not None and y2.get("change") is not None:
+                sp["change"] = round((float(y10["change"]) - float(y2["change"])) * 100, 1)
+            bonds_tbl["10s-2s Spread"] = sp
+    return fixed
+
+
 def fetch_technical_levels(current_overrides: dict | None = None) -> dict[str, dict]:
     """Compute 20d/50d/200d MAs, 52-wk high/low for key assets.
 
@@ -6188,6 +6254,76 @@ def _correct_today_econ_event_weekday(data: dict) -> int:
     return _map_all_prose(data, _fix)
 
 
+# --- FUTURE econ-event weekday corrector --------------------------------------
+# _correct_today_econ_event_weekday fixes a wrong weekday on events dated TODAY. A wrong
+# weekday on a FUTURE event slips both it and _correct_event_day_slip (2026-07-01: prose
+# said "Friday's Non-Farm Payrolls" but NFP was Thursday 7/2 — a holiday-shortened week
+# moved it off the usual Friday; the calendar had it right, the prose didn't). This corrector
+# keys on economic-calendar events dated in the near future (within ~7 days) and rewrites a
+# weekday possessive that DIRECTLY precedes the event name to the event's ACTUAL weekday when
+# they disagree. Leaves a correct weekday alone; proximity-gated so an unrelated nearby weekday
+# is untouched. Best-effort and non-failing.
+def _correct_future_econ_event_weekday(data: dict) -> int:
+    try:
+        from datetime import date as _date
+        _rd = str(data.get("report_date") or data.get("narrative_source_date") or "")[:10]
+        if not _rd:
+            _rd = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today_dt = _date.fromisoformat(_rd)
+    except Exception:
+        return 0
+
+    # event name (lowercased) -> (correct weekday lowercase, original-cased name)
+    ev_correct: dict[str, tuple[str, str]] = {}
+    try:
+        cal_path = DATA_DIR / "economic_calendar.json"
+        if not cal_path.exists():
+            return 0
+        cal = json.loads(cal_path.read_text(encoding="utf-8"))
+        rows = []
+        for ev_obj in (cal.get("events") or []):
+            d = str(ev_obj.get("date", ""))[:10]
+            nm = str(ev_obj.get("event", "")).strip()
+            if len(nm) < 4 or not d:
+                continue
+            try:
+                dd = _date.fromisoformat(d)
+            except ValueError:
+                continue
+            if dd <= today_dt or (dd - today_dt).days > 7:
+                continue  # today/past → other corrector; >1 week out → don't hijack the label
+            rows.append((dd, nm))
+        for dd, nm in sorted(rows):        # nearest future occurrence per event name wins
+            ev_correct.setdefault(nm.lower(), (dd.strftime("%A").lower(), nm))
+    except Exception:
+        return 0
+    if not ev_correct:
+        return 0
+
+    wd_rx = re.compile(r"\b(" + "|".join(_WEEKDAY_NAMES) + r")(['’]s)\b", re.IGNORECASE)
+    ev_items = [(re.compile(re.escape(nm), re.IGNORECASE), cwd) for (cwd, nm) in ev_correct.values()]
+
+    def _fix(text: str) -> str:
+        if not wd_rx.search(text):
+            return text
+        targets = [(m.start(), cwd) for rx, cwd in ev_items for m in rx.finditer(text)]
+        if not targets:
+            return text
+        out, last = [], 0
+        for m in wd_rx.finditer(text):
+            correct = next((cwd for (s, cwd) in targets if m.end() <= s <= m.end() + 25), None)
+            if correct is None or m.group(1).lower() == correct:
+                continue
+            repl = (correct.capitalize() if m.group(1)[:1].isupper() else correct) + m.group(2)
+            out.append(text[last:m.start()])
+            out.append(repl)
+            last = m.end()
+        out.append(text[last:])
+        return "".join(out)
+
+    return _map_all_prose(data, _fix)
+
+
 # --- #3 belt-and-suspenders: same-day tactical stance vs multi-week outlook ----
 # The deterministic Quant Tactical Read (tactical_positioning.stance) is a SAME-DAY
 # sector-tilt read; market_outlook_label is the LLM's 4-6 week equity view. They can
@@ -6781,6 +6917,7 @@ def sanitize_commentary(data: dict, snapshot: dict | None = None, source_text: s
     total += _scrub_offtopic_em_bonds(data)
     total += _correct_event_day_slip(data)
     total += _correct_today_econ_event_weekday(data)
+    total += _correct_future_econ_event_weekday(data)
     total += _reconcile_tactical_stance_with_outlook(data)
     total += _scrub_unreleased_econ_prints(data)
     total += _scrub_unreleased_event_attribution(data)
@@ -7787,6 +7924,21 @@ def main() -> int:
 
     bonds_tbl        = fetch_bonds_table()
     print(f"  [OK] Bonds: {len(bonds_tbl)} instruments")
+
+    # Cross-check Treasury.gov 2Y/10Y/30Y against the fresh arbitrated (YCharts) curve.
+    # Treasury.gov's XML lags a session on some mornings and would otherwise invert the rates
+    # narrative (2026-07-01: 10Y shown as -2 bp when it rose ~6 bp). See
+    # _reconcile_bonds_with_arbitrated. Gated on the arbitration being TODAY's, so we only
+    # override Treasury.gov when the alternative source is itself fresh.
+    try:
+        _arb = json.loads((DATA_DIR / "market_data_arbitrated.json").read_text(encoding="utf-8"))
+        if str((_arb or {}).get("arbitrated_date", ""))[:10] == datetime.today().strftime("%Y-%m-%d"):
+            _n = _reconcile_bonds_with_arbitrated(bonds_tbl, (_arb or {}).get("yield_curve") or {})
+            if _n:
+                print(f"  [OK] Reconciled {_n} Treasury tenor(s) to the fresh arbitrated curve "
+                      f"(Treasury.gov row lagged a session).")
+    except Exception as _rex:
+        print(f"  [WARN] Bonds↔arbitrated reconciliation skipped: {_rex}")
 
     # Sync the 10-Yr Yield in the snapshot to the authoritative Treasury.gov value
     # so the market snapshot table and the yield table always agree on level/direction.

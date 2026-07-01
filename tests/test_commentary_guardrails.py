@@ -988,6 +988,46 @@ def test_today_event_weekday_idempotent_and_noops_without_calendar(tmp_path, mon
     assert data["cross_asset_synthesis"] == once
 
 
+# --- 2026-07-01: wrong weekday on a FUTURE event ("Friday's NFP" when NFP is Thursday) ----
+def test_future_event_weekday_corrected_to_actual_day(tmp_path, monkeypatch):
+    monkeypatch.setattr(gmc, "DATA_DIR", tmp_path)
+    _write_econ_cal(tmp_path, [
+        {"date": "2026-07-02", "event": "Non-Farm Payrolls", "importance": "high"},   # Thursday
+    ])
+    data = {
+        "report_date": "2026-07-01",   # Wednesday
+        "cross_asset_synthesis": "Friday's Non-Farm Payrolls report is the key catalyst.",
+        "economics_commentary": "Traders await Friday's Non-Farm Payrolls report.",
+    }
+    n = gmc._correct_future_econ_event_weekday(data)
+    assert n >= 1
+    assert "Thursday's Non-Farm Payrolls" in data["cross_asset_synthesis"]
+    assert "Friday's Non-Farm Payrolls" not in data["cross_asset_synthesis"]
+    assert "Thursday's Non-Farm Payrolls" in data["economics_commentary"]
+
+
+def test_future_event_weekday_leaves_correct_day(tmp_path, monkeypatch):
+    monkeypatch.setattr(gmc, "DATA_DIR", tmp_path)
+    _write_econ_cal(tmp_path, [
+        {"date": "2026-07-02", "event": "Non-Farm Payrolls", "importance": "high"}])
+    data = {
+        "report_date": "2026-07-01",
+        "cross_asset_synthesis": "Thursday's Non-Farm Payrolls print is the key catalyst.",
+    }
+    assert gmc._correct_future_econ_event_weekday(data) == 0
+    assert "Thursday's Non-Farm Payrolls" in data["cross_asset_synthesis"]
+
+
+def test_future_event_weekday_ignores_distant_event(tmp_path, monkeypatch):
+    monkeypatch.setattr(gmc, "DATA_DIR", tmp_path)
+    # CPI is 3 weeks out — a stray "Friday's CPI" should not be relabelled off a far date.
+    _write_econ_cal(tmp_path, [
+        {"date": "2026-07-22", "event": "CPI (YoY)", "importance": "high"}])
+    data = {"report_date": "2026-07-01",
+            "cross_asset_synthesis": "Friday's CPI (YoY) is the next inflation test."}
+    assert gmc._correct_future_econ_event_weekday(data) == 0
+
+
 # --- 2026-06-18 #6: US market-holiday awareness (NYSE calendar, not federal) ----------
 def test_is_us_market_holiday_juneteenth():
     assert gmc._is_us_market_holiday("2026-06-19") is True       # Juneteenth — NYSE closed
