@@ -1730,6 +1730,155 @@ def fetch_world_news() -> list[dict]:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Geopolitical grounding — an always-on direction signal for the narrative
+# ---------------------------------------------------------------------------
+# 2026-07-02: the rates/FX/gold sections invoked a US-Iran storyline with the WRONG
+# direction ("fading hopes for a peace deal fuelled inflation worries") while the real
+# tape was de-escalation (peace progressing, Hormuz reopening, oil down). Root cause:
+# the model grounded on STALE headlines already in the corpus ("Iran war caution",
+# "US-Iran tensions") because no FRESH Iran source was consulted — the spotlight crawler
+# only fetches Iran when it is the day's DOMINANT topic, and on 7/2 that was tech. This
+# pass ALWAYS fetches fresh Google-News headlines for the storyline and classifies the
+# CURRENT direction, so the narrative uses the right sign or — when the fresh read is
+# ambiguous — drops geopolitical causation entirely instead of guessing.
+
+# Storyline appears in the day's own corpus → worth grounding (so we don't fetch on quiet days).
+_GEO_TRIGGER_RE = re.compile(
+    r"\b(iran|iranian|tehran|hormuz|israel\w*|gaza|houthi|ceasefire|cease-fire|"
+    r"middle\s+east|persian\s+gulf)\b", re.IGNORECASE)
+
+# Google-News RSS search queries, tight to the market-moving storyline.
+_GEO_NEWS_QUERIES = ("US Iran", "Iran ceasefire Hormuz")
+
+_GEO_ESCALATION_RE = re.compile(
+    r"\b(strikes?|struck|attack\w*|missile\w*|retaliat\w*|escalat\w+|war\b|threat\w*|"
+    r"seiz\w+|blockad\w+|denies?|denied|reject\w+|stall\w*|collaps\w+|breaks?\s+down|"
+    r"walk\w+\s+out|enrich\w+|sanction\w*)\b", re.IGNORECASE)
+
+_GEO_EASING_RE = re.compile(
+    r"\b(ceasefire|cease-fire|truce|peace|de-?escalat\w+|eas(?:e|es|ing|ed)|reopen\w*|"
+    r"resum\w+|diplomat\w+|negotiat\w+|agreement|accord|withdraw\w+|progress\w*|"
+    r"talks?\s+advanc\w*|deal\b)\b", re.IGNORECASE)
+
+
+def _fetch_geopolitical_headlines(queries=_GEO_NEWS_QUERIES, max_items: int = 20,
+                                  max_age_days: int = 3) -> list[dict]:
+    """FRESH Google-News RSS search results for the geopolitical storyline. No key,
+    fails soft (returns []). Returns [{'title','published'}] within max_age_days."""
+    import urllib.request as _ur
+    import urllib.parse as _up
+    import xml.etree.ElementTree as _ET
+    from email.utils import parsedate_to_datetime
+    out: list[dict] = []
+    seen: set[str] = set()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    for q in queries:
+        url = ("https://news.google.com/rss/search?q=" + _up.quote(q)
+               + "&hl=en-US&gl=US&ceid=US:en")
+        try:
+            req = _ur.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with _ur.urlopen(req, timeout=12) as resp:
+                root = _ET.fromstring(resp.read())
+        except Exception as exc:
+            print(f"[WARN] geo news fetch failed for {q!r}: {exc}")
+            continue
+        for item in root.iter("item"):
+            title = (item.findtext("title") or "").strip()
+            key = title.lower()
+            if not title or key in seen:
+                continue
+            pub = None
+            try:
+                pub = parsedate_to_datetime(item.findtext("pubDate") or "")
+                if pub is not None and pub.tzinfo is None:
+                    pub = pub.replace(tzinfo=timezone.utc)
+            except Exception:
+                pub = None
+            if pub is not None and pub < cutoff:
+                continue
+            seen.add(key)
+            out.append({"title": title, "published": pub.isoformat() if pub else ""})
+            if len(out) >= max_items:
+                return out
+    return out
+
+
+def _classify_geo_direction(headlines: list[dict]) -> dict:
+    """Score fresh geopolitical headlines: escalating vs easing. Deterministic + testable.
+    Requires a clear margin (dominant side >=1.5x the other AND ahead by >=2 hits); anything
+    mixed/thin is 'unclear' so the narrative drops geo causation rather than guess."""
+    esc = ease = 0
+    basis: list[str] = []
+    for h in headlines:
+        t = str(h.get("title") or "")
+        e = len(_GEO_ESCALATION_RE.findall(t))
+        s = len(_GEO_EASING_RE.findall(t))
+        if e or s:
+            basis.append(t)
+        esc += e
+        ease += s
+    # A directional call requires a CLEAN signal: a clear margin AND the minority side no more
+    # than ~25% of the total. A genuinely contested picture (both sides substantial, e.g. "Iran
+    # war" headlines beside "talks progress") resolves to 'unclear' — the safe outcome that drops
+    # geopolitical causation and leans on the data-grounded drivers, rather than guessing a sign.
+    total = esc + ease
+    if total < 2:
+        direction = "unclear"
+    elif ease > esc and esc <= 0.25 * total and (ease - esc) >= 2:
+        direction = "easing"
+    elif esc > ease and ease <= 0.25 * total and (esc - ease) >= 2:
+        direction = "escalating"
+    else:
+        direction = "unclear"
+    return {"direction": direction, "escalate": esc, "ease": ease, "basis": basis[:5]}
+
+
+def build_geopolitical_context(existing_headlines: list[str] | None = None,
+                               fetch_fn=None) -> dict | None:
+    """Always-on geopolitical grounding for the narrative payload. Gates on the day's own
+    corpus mentioning the storyline (skip the fetch on quiet days), pulls a FRESH read, and
+    classifies the current direction. Non-fatal. Returns None to mean 'no grounded
+    geopolitical driver' — i.e. the narrative must not attribute market moves to it.
+
+    fetch_fn is injectable for tests (defaults to the live Google-News fetch)."""
+    corpus_txt = " ".join(h for h in (existing_headlines or []) if isinstance(h, str))
+    if existing_headlines is not None and not _GEO_TRIGGER_RE.search(corpus_txt):
+        return None  # storyline not in play today
+    try:
+        fresh = (fetch_fn or _fetch_geopolitical_headlines)()
+    except Exception as exc:
+        print(f"[WARN] geopolitical grounding failed: {exc}")
+        return None
+    if not fresh:
+        return None
+    cls = _classify_geo_direction(fresh)
+    as_of = datetime.now(timezone.utc).date().isoformat()
+    if cls["direction"] == "unclear":
+        print(f"  [GEO] fresh read ambiguous (esc={cls['escalate']} ease={cls['ease']}) "
+              f"— instructing narrative to drop geopolitical causation.")
+        return {
+            "topic": "US-Iran / Middle East", "direction": "unclear",
+            "instruction": ("Do NOT attribute any market move to Iran / the Middle East / a "
+                            "ceasefire — the current state is unclear. Use the data-grounded "
+                            "drivers (sector rotation, the day's macro releases, Fed/rate expectations)."),
+            "basis": cls["basis"], "as_of": as_of,
+        }
+    phrase = ("de-escalating — peace/ceasefire talks progressing; the risk and oil-supply "
+              "premium is DRAINING (supportive of lower oil and a softer safe-haven bid)"
+              if cls["direction"] == "easing" else
+              "escalating — rising conflict risk; the risk and oil-supply premium is RISING")
+    print(f"  [GEO] fresh read: {cls['direction'].upper()} "
+          f"(esc={cls['escalate']} ease={cls['ease']}, {len(cls['basis'])} basis headlines).")
+    return {
+        "topic": "US-Iran / Middle East", "direction": cls["direction"],
+        "instruction": (f"The Iran / Middle-East storyline is {phrase}. Every geopolitical "
+                        f"causal clause MUST match this direction; never ground one on a stale "
+                        f"headline that contradicts it."),
+        "basis": cls["basis"], "as_of": as_of,
+    }
+
+
 # --- global central-bank decision feeds (official RSS) ------------------------
 # Authoritative, free, no-key source for foreign CB DECISIONS — the timely layer the
 # news wire and the US-only econ calendar both miss (EPM missed the BOJ hike on 6/18 &
@@ -2647,6 +2796,7 @@ Do not invent figures or events not in the payload.
 Do NOT attribute geopolitical actions, policy proposals, or peace initiatives to specific companies or financial institutions — if a headline mentions a bank alongside a geopolitical event, the bank is a commentator or stakeholder, not the actor proposing the policy.
 Do NOT escalate the severity of geopolitical events beyond the exact language in the payload — if headlines say "tensions" or "conflict", do not write "war"; if they say "negotiations", do not write "deal reached".
 NARRATIVE COHERENCE: All sections must describe the same geopolitical reality. If one section cites escalating risk ("expanded strikes", "rising tensions"), no other section may simultaneously frame the same situation as de-escalating ("easing tensions", "peace deal hopes", "ceasefire optimism"). Pick the dominant tone from the headlines payload and apply it consistently across every section.
+GEOPOLITICAL GROUNDING (critical): The payload's geopolitical_context is the AUTHORITATIVE current state of the Iran / Middle-East storyline — it is FRESHLY sourced and overrides any older headline elsewhere in the payload. Obey it exactly: (a) when geopolitical_context.direction is "easing", the storyline is de-escalating and any geopolitical clause must reflect that a DRAINING risk/oil-supply premium pushes oil LOWER and softens the safe-haven bid (this is risk-ON) — you may NOT write "fading peace hopes", "rising tensions", or "supply fears" as a driver; (b) when it is "escalating", the risk premium is RISING (higher oil, firmer safe-havens); (c) when geopolitical_context.direction is "unclear", OR geopolitical_context is absent/null, do NOT attribute ANY market move to Iran / the Middle East / a ceasefire in ANY section — drop the geopolitical causal clause entirely and lead with the data-grounded drivers (sector rotation, the day's macro releases from recent_macro_prints, Fed/rate expectations). NEVER contradict geopolitical_context.direction, and NEVER resurrect a stale Iran headline that conflicts with it.
 LEAD WITH THE MARKET DRIVER, NOT ONE HEADLINE: identify what actually moved the tape from the DATA — the leading/lagging sectors (sector_top3/sector_bottom3) and the biggest single-name movers — and lead with that. Do NOT frame the entire session around one geopolitical storyline (e.g., a ceasefire) when sector and price action point elsewhere: if Technology leads on AI/earnings while geopolitics is a side note, the lead is the tech/AI move and geopolitics is secondary context — not the headline. Avoid monothematic commentary where every section repeats the same single theme; each section should add a distinct, data-grounded angle. STORYLINE DE-DUPLICATION: a single geopolitical storyline (e.g. a "pause in strikes" / ceasefire / Middle East de-escalation) may be the explicit causal driver in AT MOST two sections. Where it is genuinely relevant elsewhere, reference it once and briefly (a clause, not a re-explanation) or vary the framing — do NOT repeat the same "pause in [Middle East hostilities/strikes]" clause verbatim in the recap, rates, commodities, FX, synthesis, AND outlook. Each section's causal clause should foreground that section's OWN dominant driver.
 ONE-SHOT CALIBRATION — geopolitical tone (follow this pattern exactly):
   Headline in payload: "U.S. and Israel expand strikes near Iranian facilities; diplomatic talks stall"
@@ -3589,8 +3739,13 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
         f"Nasdaq 100 {_ndx_str}; {{catalyst}}"
     )
 
+    # Always-on geopolitical grounding: fetch a FRESH read of the Iran/Middle-East storyline
+    # and pin its direction so the narrative can't invert it off a stale headline (2026-07-02).
+    _geo_ctx = build_geopolitical_context(flat_headlines)
+
     narrative_payload = {
         "date":                     payload.get("date"),
+        "geopolitical_context":     _geo_ctx,
         "market_levels":            levels,
         "bonds":                    bonds,
         "global_markets_top5":      gm,
