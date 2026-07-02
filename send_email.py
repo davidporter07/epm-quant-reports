@@ -1337,17 +1337,18 @@ def main(argv=None) -> int:
 
         logging.info(f" Sending to {len(_pending)} pending recipient(s)...")
         for rec in _pending:
-            # Route the INTERNAL recipient via Gmail, not Resend. On 2026-06-22 a Resend
-            # send to the internal address was accepted (SMTP 250) but never delivered —
-            # a silent drop the ledger cannot see. Gmail (legacy sender) is the proven
-            # path for the internal ops copy; subscribers keep the Resend domain sender
-            # (outward-facing product mail). Mirrors the internal-alerts routing. Only
-            # forced when Gmail creds exist, so it can never regress to a hard failure.
-            _is_internal = rec["email"].strip().lower() == TO.strip().lower()
-            _provider_pref = "gmail" if (_is_internal and email_service.gmail_configured()) else None
+            # Every recipient — the internal ops copy included — goes via the default
+            # provider (Resend on the branded epm-market-intelligence.com domain) with
+            # send_raw's automatic Resend->Gmail fallback on SMTP failure. Before
+            # 2026-07-02 the internal recipient was force-routed through Gmail (the 6/22
+            # anti-silent-drop fix), which meant that copy always showed the raw
+            # davidporter0731@gmail.com sender instead of the branded reports@ domain.
+            # Delivery is now covered by the ledger + the fallback: if Resend silently
+            # accepts-then-drops again, the ledger surfaces the miss on the next run, and
+            # any hard SMTP failure re-sends via Gmail (From rewritten only on fallback).
             try:
                 msg = build_email(to_addr=rec["email"], unsubscribe_url=rec.get("unsubscribe_url"))
-                _provider = email_service.send_raw(msg, [rec["email"]], provider=_provider_pref)
+                _provider = email_service.send_raw(msg, [rec["email"]])
                 _ledger = _sl.record_result(_ledger, rec["email"], ok=True, provider=_provider, error=None)
             except Exception as send_exc:
                 _err = str(send_exc)

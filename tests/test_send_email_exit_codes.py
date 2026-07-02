@@ -379,12 +379,20 @@ def test_pdf_missing_default_warn_sends_anyway(monkeypatch):
 # 2026-06-22: internal recipient routes via Gmail (Resend silent-drop fix)
 # ---------------------------------------------------------------------------
 
-def test_internal_recipient_routes_via_gmail_subscriber_via_default(monkeypatch):
+def test_all_recipients_route_via_default_provider(monkeypatch):
+    # As of 2026-07-02 the internal ops copy is NO LONGER force-routed via Gmail. Every
+    # recipient — internal and subscriber — goes through the default provider (Resend on
+    # the branded epm-market-intelligence.com domain) with send_raw's automatic
+    # Resend->Gmail fallback on SMTP failure. This restores the branded sender on the
+    # internal copy (previously it showed the raw davidporter0731@gmail.com Gmail sender),
+    # with delivery still covered by the ledger + the fallback. Supersedes the old
+    # internal-forced-to-Gmail routing from the 6/22 anti-silent-drop fix.
     monkeypatch.setattr(se, "already_sent_today", lambda: False)
     monkeypatch.setattr(se, "is_market_open", lambda: True)
     monkeypatch.setattr(se.subprocess, "run", _ok_run)
     monkeypatch.setattr(se, "_check_commentary_fresh", lambda today: None)
     monkeypatch.setattr(se, "fetch_daily_recipients", lambda: _two_recipients())
+    # Even with Gmail creds present, the internal recipient must NOT be forced to Gmail.
     monkeypatch.setattr(se.email_service, "gmail_configured", lambda: True)
 
     seen = {}
@@ -395,25 +403,5 @@ def test_internal_recipient_routes_via_gmail_subscriber_via_default(monkeypatch)
 
     monkeypatch.setattr(se.email_service, "send_raw", _capture)
     assert se.main([]) == 0
-    assert seen[se.TO.strip().lower()] == "gmail"        # internal → Gmail
+    assert seen[se.TO.strip().lower()] is None           # internal → default (Resend), not Gmail
     assert seen["sub@example.com"] is None               # subscriber → default (Resend)
-
-
-def test_internal_via_default_when_gmail_unconfigured(monkeypatch):
-    # If Gmail creds are absent the internal send must NOT be forced to gmail (no hard
-    # failure) — it falls back to the default provider path.
-    monkeypatch.setattr(se, "already_sent_today", lambda: False)
-    monkeypatch.setattr(se, "is_market_open", lambda: True)
-    monkeypatch.setattr(se.subprocess, "run", _ok_run)
-    monkeypatch.setattr(se, "_check_commentary_fresh", lambda today: None)
-    monkeypatch.setattr(se.email_service, "gmail_configured", lambda: False)
-
-    seen = {}
-
-    def _capture(msg, to_addrs, *a, **k):
-        seen[to_addrs[0].strip().lower()] = k.get("provider")
-        return "resend"
-
-    monkeypatch.setattr(se.email_service, "send_raw", _capture)
-    assert se.main([]) == 0
-    assert seen[se.TO.strip().lower()] is None           # not forced to gmail

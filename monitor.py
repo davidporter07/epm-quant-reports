@@ -2435,9 +2435,30 @@ models_overview_html = """
 """
 
 # --- Build charts + PDF ---
+# Charts are site/PDF visuals, NOT part of the email body. A transient chart
+# failure (e.g. a yfinance hiccup on one of the 44 downloads) must never abort
+# the run before the LLM commentary + PDF are generated. On 2026-07-02 a chart
+# crash under check=True did exactly that: monitor died at this step, commentary
+# never regenerated, and the freshness gate then correctly blocked the daily
+# email (report_date stuck a day behind). Run the chart scripts NON-FATALLY,
+# force UTF-8 so an emoji print can't crash the child under a cp1252 pipe, and
+# capture stdout so the next failure is diagnosable (the scheduler discards it).
 if not DEV_MODE:
-    subprocess.run([VENV_PYTHON, "generate_toggle_chart.py"], check=True)
-    subprocess.run([VENV_PYTHON, "generate_charts.py"], check=True)
+    _charts_env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+    _charts_log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "generate_charts.log")
+    for _chart_script in ("generate_toggle_chart.py", "generate_charts.py"):
+        _chart_result = subprocess.run(
+            [VENV_PYTHON, _chart_script], env=_charts_env,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace",
+        )
+        sys.stdout.write(_chart_result.stdout)
+        with open(_charts_log_path, "a", encoding="utf-8") as _clf:
+            _clf.write(f"\n--- {datetime.now().isoformat()} {_chart_script} rc={_chart_result.returncode} ---\n")
+            _clf.write(_chart_result.stdout)
+        if _chart_result.returncode != 0:
+            print(f"[WARN] {_chart_script} exited {_chart_result.returncode} — chart may be stale; "
+                  f"continuing so commentary + PDF + email still ship. See logs/generate_charts.log.")
 stage_mark("charts")
 # Generate market-level LLM commentary; non-zero exit means narrative unavailable.
 os.makedirs("logs", exist_ok=True)
