@@ -4729,7 +4729,10 @@ def _check_risk_polarity_inversion(data: dict, snapshot: dict) -> list[str]:
                     # risk regime. 2026-07-02: currencies asserted a "risk-off regime" on a -0.22%
                     # S&P while the report's own spotlight framed a risk-ON rotation — the label
                     # contradicts the session's own characterization. Flag either regime on a flat day.
-                    if spx is not None and abs(spx) < 0.3:
+                    # EXEMPT international_section: it describes FOREIGN indices with their own
+                    # direction, so "global risk-off" when Europe/Asia fell is legitimate even when
+                    # the US S&P was flat (2026-07-02: Europe -0.72%, Nikkei -2.47%).
+                    if spx is not None and abs(spx) < 0.3 and field != "international_section":
                         violations.append(f"{field}: a hard 'risk-{regime} environment/regime' asserted on a "
                                           f"FLAT/mixed tape (S&P {spx:+.2f}% — call it a mixed session, not a "
                                           f"regime) — \"{sent.strip()[:90]}\"")

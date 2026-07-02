@@ -2128,6 +2128,16 @@ def test_flat_tape_without_regime_label_is_clean():
     assert gmc._check_risk_polarity_inversion(data, _FLAT_SNAP) == []
 
 
+def test_international_section_global_riskoff_on_flat_us_tape_is_clean():
+    # international_section describes FOREIGN markets with their own direction: "global risk-off"
+    # when Europe/Asia fell is legitimate even when the US S&P was flat. The flat-tape rule must
+    # NOT fire here (2026-07-02 false positive that burned all 4 recap retries).
+    data = {"international_section": (
+        "European equities fell 0.72% while the Nikkei dropped 2.47%, reflecting a global "
+        "risk-off tone as semiconductor names extended their slide.")}
+    assert gmc._check_risk_polarity_inversion(data, _FLAT_SNAP) == []
+
+
 # --- 2026-06-23: "interest rate hike" compound must reframe grammatically -----
 # The bare `rate hikes?` rule stripped only "rate hike" and orphaned "interest", shipping the
 # ungrammatical "...Federal Reserve interest higher-for-longer rates in December".
