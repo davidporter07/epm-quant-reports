@@ -2435,30 +2435,45 @@ models_overview_html = """
 """
 
 # --- Build charts + PDF ---
-# Charts are site/PDF visuals, NOT part of the email body. A transient chart
-# failure (e.g. a yfinance hiccup on one of the 44 downloads) must never abort
-# the run before the LLM commentary + PDF are generated. On 2026-07-02 a chart
-# crash under check=True did exactly that: monitor died at this step, commentary
-# never regenerated, and the freshness gate then correctly blocked the daily
-# email (report_date stuck a day behind). Run the chart scripts NON-FATALLY,
-# force UTF-8 so an emoji print can't crash the child under a cp1252 pipe, and
-# capture stdout so the next failure is diagnosable (the scheduler discards it).
+# Charts pull live yfinance data for ~54 tickers, which fails transiently (rate
+# limits, partial multi-index frames -> KeyError). On 2026-07-02 one such hiccup
+# under check=True aborted monitor before commentary/PDF and the daily email was
+# blocked. We want the COMPLETE chart set, so retry the whole script a few times
+# (a fresh download each attempt clears a transient miss); only a persistent
+# failure across all attempts aborts the run, which is preferable to shipping a
+# report with missing charts. Force UTF-8 so an emoji print can't crash the child
+# under a cp1252 pipe, and capture stdout (the scheduler discards it) so a real
+# failure leaves a traceback in logs/generate_charts.log.
 if not DEV_MODE:
     _charts_env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
     _charts_log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "generate_charts.log")
+    _CHART_ATTEMPTS = 3
+    _CHART_RETRY_BACKOFF_S = 8
     for _chart_script in ("generate_toggle_chart.py", "generate_charts.py"):
-        _chart_result = subprocess.run(
-            [VENV_PYTHON, _chart_script], env=_charts_env,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, encoding="utf-8", errors="replace",
-        )
-        sys.stdout.write(_chart_result.stdout)
-        with open(_charts_log_path, "a", encoding="utf-8") as _clf:
-            _clf.write(f"\n--- {datetime.now().isoformat()} {_chart_script} rc={_chart_result.returncode} ---\n")
-            _clf.write(_chart_result.stdout)
-        if _chart_result.returncode != 0:
-            print(f"[WARN] {_chart_script} exited {_chart_result.returncode} — chart may be stale; "
-                  f"continuing so commentary + PDF + email still ship. See logs/generate_charts.log.")
+        for _attempt in range(1, _CHART_ATTEMPTS + 1):
+            _chart_result = subprocess.run(
+                [VENV_PYTHON, _chart_script], env=_charts_env,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", errors="replace",
+            )
+            sys.stdout.write(_chart_result.stdout)
+            with open(_charts_log_path, "a", encoding="utf-8") as _clf:
+                _clf.write(f"\n--- {datetime.now().isoformat()} {_chart_script} "
+                           f"attempt {_attempt}/{_CHART_ATTEMPTS} rc={_chart_result.returncode} ---\n")
+                _clf.write(_chart_result.stdout)
+            if _chart_result.returncode == 0:
+                break
+            print(f"[WARN] {_chart_script} attempt {_attempt}/{_CHART_ATTEMPTS} exited "
+                  f"{_chart_result.returncode} (likely a transient live-data hiccup).")
+            if _attempt < _CHART_ATTEMPTS:
+                print(f"       retrying in {_CHART_RETRY_BACKOFF_S}s to rebuild the full chart set...")
+                time.sleep(_CHART_RETRY_BACKOFF_S)
+        else:
+            # Exhausted all attempts — fail the run rather than ship missing charts.
+            raise RuntimeError(
+                f"{_chart_script} failed after {_CHART_ATTEMPTS} attempts. Aborting so the "
+                f"report is not published with incomplete charts. See logs/generate_charts.log."
+            )
 stage_mark("charts")
 # Generate market-level LLM commentary; non-zero exit means narrative unavailable.
 os.makedirs("logs", exist_ok=True)
