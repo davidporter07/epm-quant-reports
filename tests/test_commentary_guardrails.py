@@ -2101,6 +2101,33 @@ def test_risk_on_environment_on_up_day_is_clean():
     assert gmc._check_risk_polarity_inversion(data, _RISKON_SNAP) == []
 
 
+# --- 2026-07-02: hard risk-regime label on a FLAT tape (family D, flat-session case) ----------
+# Currencies asserted a "risk-off regime" on a -0.22% S&P while the report's own spotlight framed
+# a risk-ON rotation. Neither risk_on_session (>0.3%) nor risk_off_session (<-0.3%) was true, so
+# the old family D let it through. A flat tape must be called a "mixed session", not given a hard
+# regime label, so family D now flags EITHER regime when |S&P| < 0.3%.
+_FLAT_SNAP = {"S&P 500": {"pct_change": -0.22}}
+
+
+def test_hard_risk_off_regime_on_flat_tape_flagged():
+    data = {"currencies_commentary": (
+        "The dollar's strength reflects a risk-off regime where safe-haven flows support "
+        "the currency despite mixed equity performance.")}
+    assert gmc._check_risk_polarity_inversion(data, _FLAT_SNAP)
+
+
+def test_hard_risk_on_regime_on_flat_tape_flagged():
+    data = {"cross_asset_synthesis": "A risk-on environment dominated as cyclicals quietly firmed."}
+    assert gmc._check_risk_polarity_inversion(data, {"S&P 500": {"pct_change": 0.12}})
+
+
+def test_flat_tape_without_regime_label_is_clean():
+    # No hard regime assertion → nothing to flag, even on a flat tape.
+    data = {"currencies_commentary": (
+        "The dollar rose 0.2% to 101.39 as firmer US data supported the greenback.")}
+    assert gmc._check_risk_polarity_inversion(data, _FLAT_SNAP) == []
+
+
 # --- 2026-06-23: "interest rate hike" compound must reframe grammatically -----
 # The bare `rate hikes?` rule stripped only "rate hike" and orphaned "interest", shipping the
 # ungrammatical "...Federal Reserve interest higher-for-longer rates in December".

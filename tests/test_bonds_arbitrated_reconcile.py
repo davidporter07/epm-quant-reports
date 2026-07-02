@@ -38,6 +38,7 @@ def test_lagging_treasury_10y_reconciled_to_arbitrated():
 
 def test_fresh_treasury_left_alone():
     # Treasury.gov agrees with the arbitrated curve within rounding → keep it (don't churn).
+    # (_arb_curve carries no change values, so the change-alignment branch is a no-op here.)
     bonds = {
         "2-Year Yield":  {"level": 4.14, "change": 0.03},
         "10-Year Yield": {"level": 4.44, "change": 0.06},
@@ -46,6 +47,37 @@ def test_fresh_treasury_left_alone():
     before = {k: dict(v) for k, v in bonds.items()}
     assert gmc._reconcile_bonds_with_arbitrated(bonds, _arb_curve()) == 0
     assert bonds == before
+
+
+def test_change_aligned_when_levels_agree():
+    # 2026-07-02 regression: 30Y level agrees (~4.97) but bonds_tbl's daily change (+11 bp, off a
+    # stale yfinance prior close) diverges from the authoritative arbitrated +5 bp. Adopt the
+    # arbitrated change so the recap's "rose N bp" matches our curve; level stays put.
+    bonds = {"30-Year Yield": {"level": 4.97, "change": 0.11, "pct_change": 2.27}}
+    arb   = {"30-Year Yield": {"level": 4.97, "change": 0.05, "pct_change": 1.01}}
+    assert gmc._reconcile_bonds_with_arbitrated(bonds, arb) == 1
+    y30 = bonds["30-Year Yield"]
+    assert y30["level"] == 4.97                    # unchanged — levels already agreed
+    assert y30["change"] == 0.05                   # aligned to the authoritative curve
+    assert y30["pct_change"] == 1.01
+    assert y30["_reconciled"] == "arbitrated_change"
+
+
+def test_change_not_touched_when_already_agrees():
+    # Levels agree AND daily changes agree within rounding → no churn.
+    bonds = {"10-Year Yield": {"level": 4.48, "change": 0.06, "pct_change": 1.34}}
+    arb   = {"10-Year Yield": {"level": 4.48, "change": 0.061, "pct_change": 1.35}}
+    before = {k: dict(v) for k, v in bonds.items()}
+    assert gmc._reconcile_bonds_with_arbitrated(bonds, arb) == 0
+    assert bonds == before
+
+
+def test_change_alignment_skips_insane_arb_change():
+    # A >50 bp arbitrated daily change is an artefact — don't adopt it even if levels agree.
+    bonds = {"10-Year Yield": {"level": 4.48, "change": 0.06}}
+    arb   = {"10-Year Yield": {"level": 4.48, "change": 0.90}}
+    assert gmc._reconcile_bonds_with_arbitrated(bonds, arb) == 0
+    assert bonds["10-Year Yield"]["change"] == 0.06
 
 
 def test_insane_divergence_not_applied():

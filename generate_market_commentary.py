@@ -790,6 +790,37 @@ _YIELD_DIVERGE_BP = 0.02      # >2 bp gap ⇒ Treasury.gov is stale, not roundin
 _YIELD_MAX_DAILY  = 0.50      # >50 bp/day ⇒ artefact, don't apply
 
 
+def _adopt_arbitrated_change(bonds_tbl: dict, name: str, tsy: dict, arb: dict) -> bool:
+    """Levels agree but the reported DAILY bp CHANGE diverges (each source computes it off
+    its own prior close). Adopt the authoritative arbitrated (YCharts) change + pct_change so
+    the recap's "rose N bp" matches our curve. Mutates bonds_tbl; returns True if it changed."""
+    try:
+        arb_chg = float(arb.get("change"))
+    except (TypeError, ValueError):
+        return False
+    if abs(arb_chg) > _YIELD_MAX_DAILY:
+        return False
+    try:
+        tsy_chg = float(tsy.get("change"))
+    except (TypeError, ValueError):
+        tsy_chg = None
+    if tsy_chg is not None and abs(arb_chg - tsy_chg) <= _YIELD_DIVERGE_BP:
+        return False  # changes already agree within rounding — leave it
+    new = dict(tsy)
+    new["change"] = round(arb_chg, 3)
+    try:
+        new["pct_change"] = round(float(arb.get("pct_change")), 2)
+    except (TypeError, ValueError):
+        try:
+            prev = float(new.get("level")) - arb_chg
+            new["pct_change"] = round(arb_chg / prev * 100, 2) if prev else None
+        except (TypeError, ValueError):
+            new["pct_change"] = None
+    new["_reconciled"] = "arbitrated_change"
+    bonds_tbl[name] = new
+    return True
+
+
 def _reconcile_bonds_with_arbitrated(bonds_tbl: dict, arb_curve: dict) -> int:
     """Prefer the fresh arbitrated (YCharts/FRED) yield level over a lagging Treasury.gov row
     for 2Y/10Y/30Y. Mutates bonds_tbl in place; returns the count of tenors corrected. Only the
@@ -817,7 +848,12 @@ def _reconcile_bonds_with_arbitrated(bonds_tbl: dict, arb_curve: dict) -> int:
         except (TypeError, ValueError):
             continue
         if abs(arb_lvl - tsy_lvl) <= _YIELD_DIVERGE_BP:
-            continue  # agree within rounding — Treasury.gov is fresh, keep it
+            # Levels agree (Treasury.gov/yfinance fresh) — but the daily bp CHANGE can still
+            # diverge off differing prior closes (2026-07-02: 30Y showed +11 bp vs the
+            # authoritative +5 bp). Align the change to the arbitrated curve when it does.
+            if _adopt_arbitrated_change(bonds_tbl, name, tsy, arb):
+                fixed += 1
+            continue
         chg = round(arb_lvl - tsy_lvl, 3)
         if abs(chg) > _YIELD_MAX_DAILY:
             continue  # implausible daily move — likely bad data, don't apply
@@ -2458,6 +2494,11 @@ _MACRO_PRINT_SPEC = [
     ("Core CPI (YoY)",         "Core CPI (YoY)",            "pct"),
     ("CPI (YoY)",              "CPI (YoY)",                 "pct"),
     ("GDP Growth (QoQ)",       "GDP Growth (QoQ, ann.)",    "pct"),
+    # ISM Manufacturing is a top-tier market mover (YCharts-sourced; FRED omits it —
+    # see the Finnhub calendar backfill). It was in arbitrated econ but absent from
+    # this spec, so it never reached the recap: on 2026-07-02 the day's headline ISM
+    # print (53.3 vs 54.0) was missed and the model led with stale Consumer Sentiment.
+    ("ISM Manufacturing PMI",  "ISM Manufacturing PMI",     "raw"),
     ("Initial Jobless Claims", "Initial Jobless Claims",    "k"),
     ("Nonfarm Payrolls",       "Nonfarm Payrolls",          "kth"),
     ("JOLTS Job Openings",     "JOLTS Job Openings",        "m"),
@@ -2683,7 +2724,7 @@ commodities_commentary: 5-6 sentences. WTI direction and level first, then gold.
 
 currencies_commentary: 4-5 sentences. DXY direction and level. Rate differential or trade-flow driver. EUR/USD and JPY if notable. EM implication. SCOPE: name only currencies in the report's currency table — the US dollar (DXY), euro, sterling, yen, Canadian dollar, Australian dollar, Brazilian real, and Bitcoin. Do NOT introduce off-universe currencies (ringgit, peso, rupee, lira, won, rand, etc.) pulled from a headline; the EM implication should be expressed through the dollar or the in-table pairs.
 
-economics_commentary: 4-5 sentences. RECAP LATEST READINGS FIRST: recent_macro_prints is a list of {indicator, actual, prior, as_of} carrying the ACTUAL figures — open by recapping the 1-2 most important entries (prioritise Core PCE, GDP, jobless claims, CPI, payrolls), citing indicator + actual + prior and interpreting the beat/miss vs prior. PREVIEW→RECAP LINKAGE: if prior_scenario_event names the catalyst the prior session flagged (e.g. "CPI Inflation Report") and a matching entry now appears in recent_macro_prints, LEAD with that release — the reader was told to watch it, so do not skip it; cite its actual vs prior and the market's read. A fresh JOLTS Job Openings print (a labor-demand gauge) is market-relevant — feature it when present. PHRASING: weekly jobless claims may be called "the latest weekly jobless claims (215k vs 210k prior)"; monthly/quarterly series MUST be referred to as "the latest [indicator] reading" (e.g. "the latest Core PCE reading at 3.3% YoY vs 3.2% prior") — do NOT assert a specific release weekday for them, because the payload gives the observation period, not the publication date. NUMBER SOURCE (non-negotiable): cite macro figures ONLY from recent_macro_prints — NEVER invent or round a number outside that list (the prior report fabricated "211k in line with 211k prior"; the real value was 215k vs 210k). If recent_macro_prints is empty, cite no specific macro figure. Never frame a past reading as an upcoming release. After the recap, give macro-cycle context (soft landing, slowdown, re-acceleration) and the Fed rate-trajectory implication. Do NOT reproduce the example numbers above as literal output.
+economics_commentary: 4-5 sentences. RECAP LATEST READINGS FIRST: recent_macro_prints is a list of {indicator, actual, prior, as_of} carrying the ACTUAL figures — open by recapping the 1-2 most important entries (prioritise Core PCE, GDP, ISM Manufacturing/Services, jobless claims, CPI, payrolls), citing indicator + actual + prior and interpreting the beat/miss vs prior. PREVIEW→RECAP LINKAGE: if prior_scenario_event names the catalyst the prior session flagged (e.g. "CPI Inflation Report") and a matching entry now appears in recent_macro_prints, LEAD with that release — the reader was told to watch it, so do not skip it; cite its actual vs prior and the market's read. A fresh JOLTS Job Openings print (a labor-demand gauge) is market-relevant — feature it when present. PHRASING: weekly jobless claims may be called "the latest weekly jobless claims (215k vs 210k prior)"; monthly/quarterly series MUST be referred to as "the latest [indicator] reading" (e.g. "the latest Core PCE reading at 3.3% YoY vs 3.2% prior") — do NOT assert a specific release weekday for them, because the payload gives the observation period, not the publication date. NUMBER SOURCE (non-negotiable): cite macro figures ONLY from recent_macro_prints — NEVER invent or round a number outside that list (the prior report fabricated "211k in line with 211k prior"; the real value was 215k vs 210k). If recent_macro_prints is empty, cite no specific macro figure. Never frame a past reading as an upcoming release. After the recap, give macro-cycle context (soft landing, slowdown, re-acceleration) and the Fed rate-trajectory implication. Do NOT reproduce the example numbers above as literal output.
   DATE GUARD (critical): If todays_economic_events is EMPTY there is NO release scheduled today — do NOT write that any report is "scheduled today", "due this morning", or "at 8:30 AM ET today", and do NOT invent a release that is not in todays_economic_events or week_ahead_econ_events. Refer to any upcoming release by its WEEKDAY (e.g., "Thursday's GDP report"), and anchor the paragraph in the macro cycle rather than a fictitious same-day calendar.
   RELEVANCE GUARD (critical): The recap MUST center on the most market-relevant U.S. macro releases in recent_macro_prints. Do NOT lead with, or feature, a minor or foreign data point (e.g., a foreign government's quarterly spending, an overseas survey) — if it is not in recent_macro_prints it does not belong in the recap at all. Do NOT open economics_commentary with an event that is still UPCOMING today (e.g., a JOLTS or ADP print due later today) framed as if it already printed; upcoming releases belong in watch_today as forward catalysts, not in the recap.
 
@@ -4528,6 +4569,15 @@ def _check_risk_polarity_inversion(data: dict, snapshot: dict) -> list[str]:
                     if regime == "off" and risk_on_session:
                         violations.append(f"{field}: a 'risk-off environment/regime' asserted on a "
                                           f"risk-ON day (S&P up) — \"{sent.strip()[:90]}\"")
+                        break
+                    # Flat/mixed tape: the rules say call it a "mixed session", not assert a hard
+                    # risk regime. 2026-07-02: currencies asserted a "risk-off regime" on a -0.22%
+                    # S&P while the report's own spotlight framed a risk-ON rotation — the label
+                    # contradicts the session's own characterization. Flag either regime on a flat day.
+                    if spx is not None and abs(spx) < 0.3:
+                        violations.append(f"{field}: a hard 'risk-{regime} environment/regime' asserted on a "
+                                          f"FLAT/mixed tape (S&P {spx:+.2f}% — call it a mixed session, not a "
+                                          f"regime) — \"{sent.strip()[:90]}\"")
                         break
                 if _RISK_SKIP_RE.search(sent):
                     continue  # concessive / regime fading — coherent, not an inversion
