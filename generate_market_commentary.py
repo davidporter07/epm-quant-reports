@@ -1879,6 +1879,38 @@ def build_geopolitical_context(existing_headlines: list[str] | None = None,
     }
 
 
+# The narrative generation and the sanitize-time scrubber run in separate passes, so the geo
+# direction is handed off through a tiny dated sidecar (mirrors how the yield-bp corrector reads
+# the arbitrated curve). direction is None when there was no grounded read (no storyline in the
+# corpus or the fresh fetch was empty) — which, like "unclear", means the scrubber should drop
+# any geo causal clause the model invented.
+_GEO_SIDECAR = "geopolitical_context.json"
+
+
+def _write_geo_sidecar(ctx: dict | None) -> None:
+    """Persist today's geo direction for the sanitize-time scrubber. Non-fatal."""
+    try:
+        (DATA_DIR / _GEO_SIDECAR).write_text(json.dumps({
+            "date": datetime.today().strftime("%Y-%m-%d"),
+            "direction": (ctx or {}).get("direction"),  # easing | escalating | unclear | None
+        }), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _read_geo_direction() -> str | None:
+    """Today's grounded geo direction, or 'absent' when there is no fresh grounded read.
+    Returns the sentinel 'stale' when the sidecar is missing/old so callers can no-op safely."""
+    try:
+        sc = json.loads((DATA_DIR / _GEO_SIDECAR).read_text(encoding="utf-8"))
+    except Exception:
+        return "stale"
+    if str(sc.get("date", ""))[:10] != datetime.today().strftime("%Y-%m-%d"):
+        return "stale"
+    d = sc.get("direction")
+    return d if d in ("easing", "escalating", "unclear") else "absent"
+
+
 # --- global central-bank decision feeds (official RSS) ------------------------
 # Authoritative, free, no-key source for foreign CB DECISIONS — the timely layer the
 # news wire and the US-only econ calendar both miss (EPM missed the BOJ hike on 6/18 &
@@ -3742,6 +3774,7 @@ def call_ollama(payload: dict, snapshot: dict) -> dict:
     # Always-on geopolitical grounding: fetch a FRESH read of the Iran/Middle-East storyline
     # and pin its direction so the narrative can't invert it off a stale headline (2026-07-02).
     _geo_ctx = build_geopolitical_context(flat_headlines)
+    _write_geo_sidecar(_geo_ctx)  # so the sanitize-time scrubber knows whether to drop geo causation
 
     narrative_payload = {
         "date":                     payload.get("date"),
@@ -4768,6 +4801,73 @@ def _check_risk_polarity_inversion(data: dict, snapshot: dict) -> list[str]:
     return violations[:4]
 
 
+# --- flat-tape risk-regime scrub (forces what the retry-check only nudges) -----
+# _check_risk_polarity_inversion flags a hard "risk-on/off <regime>" label on a flat tape but
+# only feeds it back as a retry hint; when the model is stubborn (2026-07-02: "broader risk-off
+# sentiment" in the Commodities outlook survived all 4 retries) it ships anyway. On a flat tape
+# (|S&P| < 0.3%) the session is a "mixed" one — rewrite the hard label deterministically.
+# international_section is exempt (foreign markets have their own direction).
+_RISK_REGIME_NOUN_RE = re.compile(
+    r"\brisk-(on|off)\s+(regime|environment|sentiment|backdrop|tone|mood|mode|conditions?|theme)\b",
+    re.IGNORECASE)
+
+
+def _scrub_flat_tape_risk_regime(data: dict, snapshot: dict | None = None) -> int:
+    """On a flat tape rewrite a hard 'risk-on/off <noun>' label to 'mixed'. Skips fading
+    contexts and international_section. Mutates data; returns fix count."""
+    snap = snapshot or {}
+    spx = (snap.get("S&P 500") or {}).get("pct_change")
+    if spx is None or abs(spx) >= 0.3:
+        return 0
+
+    def _repl(m):
+        noun = m.group(2).lower()
+        rep = "mixed session" if noun == "regime" else f"mixed {noun}"
+        return rep[0].upper() + rep[1:] if m.group(0)[:1].isupper() else rep
+
+    def _fix(text: str) -> tuple[str, int]:
+        n = 0
+        out = []
+        for sent in re.split(r"(?<=[.!?])\s+", text):
+            if _RISK_REGIME_NOUN_RE.search(sent) and not _RISK_FADING_RE.search(sent):
+                sent, k = _RISK_REGIME_NOUN_RE.subn(_repl, sent)
+                n += k
+            out.append(sent)
+        return " ".join(out), n
+
+    fixes = 0
+    for field in ("equities_commentary", "commodities_commentary", "fixed_income_commentary",
+                  "currencies_commentary", "economics_commentary", "cross_asset_synthesis",
+                  "market_outlook_rationale", "session_recap"):
+        v = data.get(field)
+        if isinstance(v, str) and v:
+            nv, k = _fix(v)
+            if k:
+                data[field] = nv
+                fixes += k
+        elif isinstance(v, list):
+            new, ch = [], 0
+            for it in v:
+                if isinstance(it, str):
+                    ni, k = _fix(it)
+                    new.append(ni)
+                    ch += k
+                else:
+                    new.append(it)
+            if ch:
+                data[field] = new
+                fixes += ch
+    aco = data.get("asset_class_outlooks")
+    if isinstance(aco, dict):
+        for av in aco.values():
+            if isinstance(av, dict) and isinstance(av.get("rationale"), str):
+                nv, k = _fix(av["rationale"])
+                if k:
+                    av["rationale"] = nv
+                    fixes += k
+    return fixes
+
+
 # --- peace/ceasefire narrative-coherence guard --------------------------------
 # 2026-07-01: the report framed the SAME US-Iran situation two opposite ways at once —
 # "peace deal hopes lifted markets" (recap/synthesis/spotlight) beside "fading hopes for a
@@ -5365,6 +5465,114 @@ def _correct_yield_pct_to_bp(data: dict, snapshot: dict) -> int:
                         asset_val["rationale"] = new_r
                         fixes += 1
 
+    return fixes
+
+
+# --- yield bp-magnitude correction (prose vs the authoritative curve) --------
+# 2026-07-02: the reconciled curve carried 30Y +5 bp but the model wrote "the 30-year
+# yield climbed 10 bp", and labelled a POSITIVE +32 bp 2s10s spread a "curve inversion".
+# The bp figure is the one number the reader trusts, so force each tenor's stated bp move
+# to match the arbitrated (YCharts) curve, and fix the inverted/positive-spread mislabel.
+_YLD_MOVE_VERB = (r"(?:rose|fell|climbed|increased|decreased|declined|dropped|jumped|"
+                  r"slipped|gained|added|shed|advanced|retreated|edged\s+\w+|ticked\s+\w+|"
+                  r"moved|up|down|higher|lower)")
+
+_TENOR_BP_RES = {
+    "2-Year Yield":  re.compile(r"(2[-\s]?(?:year|yr)\b[^.;]{0,32}?" + _YLD_MOVE_VERB +
+                                r"\s+(?:by\s+)?)(\d+(?:\.\d+)?)(\s*bps?\b)", re.IGNORECASE),
+    "10-Year Yield": re.compile(r"(10[-\s]?(?:year|yr)\b[^.;]{0,32}?" + _YLD_MOVE_VERB +
+                                r"\s+(?:by\s+)?)(\d+(?:\.\d+)?)(\s*bps?\b)", re.IGNORECASE),
+    "30-Year Yield": re.compile(r"(30[-\s]?(?:year|yr)\b[^.;]{0,32}?" + _YLD_MOVE_VERB +
+                                r"\s+(?:by\s+)?)(\d+(?:\.\d+)?)(\s*bps?\b)", re.IGNORECASE),
+}
+# 2s10s mislabelled "inverted" while positive: narrow, high-confidence phrase swaps.
+_INVERSION_PHRASES = (
+    (re.compile(r"\bcurve inversion\b", re.IGNORECASE), "positive curve slope"),
+    (re.compile(r"\b(remains?|stays?|still)\s+inverted\b", re.IGNORECASE), r"\1 positively sloped"),
+    (re.compile(r"\bthe\s+inverted\s+(yield\s+)?curve\b", re.IGNORECASE), r"the positively sloped \1curve"),
+    (re.compile(r"\bcurve\s+remains\s+inverted\b", re.IGNORECASE), "curve remains positively sloped"),
+)
+
+_YIELD_BP_FIELDS = ("fixed_income_commentary", "market_outlook_rationale",
+                    "cross_asset_synthesis", "economics_commentary")
+
+
+def _correct_yield_bp_magnitude(data: dict, snapshot: dict | None = None) -> int:
+    """Force each tenor's stated bp move to match the authoritative arbitrated (YCharts)
+    curve, and fix a 2s10s spread mislabelled 'inverted' when it is positive. Reads
+    data/market_data_arbitrated.json (gated on today). Mutates data; returns fix count."""
+    try:
+        arb = json.loads((DATA_DIR / "market_data_arbitrated.json").read_text(encoding="utf-8"))
+    except Exception:
+        return 0
+    if str((arb or {}).get("arbitrated_date", ""))[:10] != datetime.today().strftime("%Y-%m-%d"):
+        return 0
+    curve = (arb or {}).get("yield_curve") or {}
+
+    # Correct bp per tenor (rounded); tolerate a 1 bp rounding gap.
+    tenor_bp: dict[str, int] = {}
+    for tenor in _TENOR_BP_RES:
+        chg = (curve.get(tenor) or {}).get("change")
+        try:
+            tenor_bp[tenor] = int(round(abs(float(chg)) * 100))
+        except (TypeError, ValueError):
+            continue
+
+    # 2s10s sign — for the inversion-label fix.
+    try:
+        y2 = float((curve.get("2-Year Yield") or {}).get("level"))
+        y10 = float((curve.get("10-Year Yield") or {}).get("level"))
+        spread_positive = (y10 - y2) > 0.03  # >3 bp clearly not inverted
+    except (TypeError, ValueError):
+        spread_positive = False
+
+    def _fix_text(text: str) -> tuple[str, int]:
+        n = 0
+        for tenor, correct in tenor_bp.items():
+            rx = _TENOR_BP_RES[tenor]
+
+            def _sub(m):
+                nonlocal n
+                try:
+                    cur = float(m.group(2))
+                except ValueError:
+                    return m.group(0)
+                if abs(cur - correct) < 1.5:
+                    return m.group(0)  # already matches within rounding
+                n += 1
+                return f"{m.group(1)}{correct}{m.group(3)}"
+            text = rx.sub(_sub, text)
+        if spread_positive:
+            for rx, repl in _INVERSION_PHRASES:
+                text, k = rx.subn(repl, text)
+                n += k
+        return text, n
+
+    fixes = 0
+    for field in _YIELD_BP_FIELDS:
+        val = data.get(field)
+        if isinstance(val, str) and val:
+            new, k = _fix_text(val)
+            if k:
+                data[field] = new
+                fixes += k
+    # session_recap (list) + asset_class_outlooks[*].rationale (nested)
+    recap = data.get("session_recap")
+    if isinstance(recap, list):
+        for i, item in enumerate(recap):
+            if isinstance(item, str) and item:
+                new, k = _fix_text(item)
+                if k:
+                    recap[i] = new
+                    fixes += k
+    aco = data.get("asset_class_outlooks")
+    if isinstance(aco, dict):
+        for row in aco.values():
+            if isinstance(row, dict) and isinstance(row.get("rationale"), str):
+                new, k = _fix_text(row["rationale"])
+                if k:
+                    row["rationale"] = new
+                    fixes += k
     return fixes
 
 
@@ -6152,6 +6360,76 @@ def _scrub_offnarrative_geopolitics(data: dict, source_text: str) -> int:
             if isinstance(av, dict) and isinstance(av.get("rationale"), str) and _present(av["rationale"]):
                 kept = [cs for sent in re.split(r"(?<=[.!?])\s+", av["rationale"])
                         if (cs := _clean_sentence(sent))]
+                nv = " ".join(kept).strip()
+                if nv != av["rationale"]:
+                    av["rationale"] = nv
+                    fixes += 1
+    return fixes
+
+
+# --- ungrounded Iran/Middle-East causal-clause scrub -----------------------
+# 2026-07-02: even with the "drop geo causation when unclear" prompt rule, the model leaked
+# "fading ceasefire hopes... drove the commodity divergence" into secondary sections. When the
+# fresh geo read is unclear or absent (see build_geopolitical_context + the dated sidecar), no
+# market move may be attributed to the storyline — strip the geo causal clause, or drop the
+# sentence when the storyline is its main subject. The prompt rule nudges; this FORCES it.
+_GEO_STORY_RE = re.compile(
+    r"\b(iran|iranian|tehran|hormuz|houthi|persian\s+gulf|strait\s+of\s+hormuz|"
+    r"cease-?fire|truce|peace\s+(?:deal|talks|hopes|negotiat\w*|process|plan)|"
+    r"middle[\s-]east(?:ern)?)\b", re.IGNORECASE)
+
+
+def _scrub_ungrounded_geo_causation(data: dict) -> int:
+    """Strip Iran/Middle-East causal clauses when the fresh geo read is unclear/absent (per the
+    geo sidecar). Mirrors _scrub_offnarrative_geopolitics' clause removal. Returns fix count."""
+    if _read_geo_direction() not in ("unclear", "absent"):
+        return 0  # grounded (easing/escalating), or no fresh read (stale) → leave prose alone
+
+    def _clean_sentence(sent: str):
+        if not _GEO_STORY_RE.search(sent):
+            return sent
+        best = None
+        for m in _GEO_CLAUSE_BOUNDARY_RE.finditer(sent):
+            head, tail = sent[:m.start()], sent[m.start():]
+            if _GEO_STORY_RE.search(tail) and not _GEO_STORY_RE.search(head) and len(head.strip()) > 15:
+                best = m.start()
+        if best is not None:
+            h = sent[:best].rstrip(" ,;:")
+            if h and h[-1] not in ".!?":
+                h += "."
+            return h
+        return None  # storyline is the main subject → drop the sentence
+
+    fixes = 0
+    for field in _ALL_PROSE_FIELDS:
+        v = data.get(field)
+        if not isinstance(v, str) or not v or not _GEO_STORY_RE.search(v):
+            continue
+        kept = [cs for sent in re.split(r"(?<=[.!?])\s+", v) if (cs := _clean_sentence(sent))]
+        nv = " ".join(kept).strip()
+        if nv != v:
+            data[field] = nv
+            fixes += 1
+    for field in _ALL_PROSE_LISTS:
+        lst = data.get(field)
+        if not isinstance(lst, list):
+            continue
+        new, ch = [], False
+        for it in lst:
+            if isinstance(it, str) and _GEO_STORY_RE.search(it):
+                ch = True
+                if (cs := _clean_sentence(it)):
+                    new.append(cs)
+            else:
+                new.append(it)
+        if ch:
+            data[field] = new
+            fixes += 1
+    aco = data.get("asset_class_outlooks")
+    if isinstance(aco, dict):
+        for av in aco.values():
+            if isinstance(av, dict) and isinstance(av.get("rationale"), str) and _GEO_STORY_RE.search(av["rationale"]):
+                kept = [cs for sent in re.split(r"(?<=[.!?])\s+", av["rationale"]) if (cs := _clean_sentence(sent))]
                 nv = " ".join(kept).strip()
                 if nv != av["rationale"]:
                     av["rationale"] = nv
@@ -7258,6 +7536,9 @@ def sanitize_commentary(data: dict, snapshot: dict | None = None, source_text: s
         total += _correct_direction_words(data, snapshot)
         total += _correct_dollar_direction(data, snapshot)
         total += _scrub_false_weekly_claims(data, snapshot)
+        total += _scrub_flat_tape_risk_regime(data, snapshot)  # force 'mixed' on a flat tape
+    total += _correct_yield_bp_magnitude(data)   # force tenor bp moves to the arbitrated curve
+    total += _scrub_ungrounded_geo_causation(data)  # drop Iran causal clauses when geo read is unclear/absent
     total += _scrub_degenerate_repetition(data)
     total += _correct_fed_hike_language(data)
     total += _scrub_fabricated_corporate_actions(data)

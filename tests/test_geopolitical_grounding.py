@@ -94,3 +94,71 @@ def test_build_context_none_never_raises_on_fetch_error():
         raise RuntimeError("network down")
     # Fetch errors must fail soft to None, never propagate into the pipeline.
     assert gmc.build_geopolitical_context(["Iran tensions"], fetch_fn=_boom) is None
+
+
+# --- the sanitize-time scrubber (drops leaked geo causation) -------------------
+import json
+from datetime import datetime
+
+
+def _set_sidecar(tmp_path, monkeypatch, direction, date=None):
+    (tmp_path / "geopolitical_context.json").write_text(json.dumps({
+        "date": date or datetime.today().strftime("%Y-%m-%d"),
+        "direction": direction,
+    }), encoding="utf-8")
+    monkeypatch.setattr(gmc, "DATA_DIR", tmp_path)
+
+
+def test_scrub_removes_leaked_geo_subordinate_clause(tmp_path, monkeypatch):
+    _set_sidecar(tmp_path, monkeypatch, "unclear")
+    data = {"commodities_commentary":
+            "WTI Crude fell -1.32% to $68.58 as fading ceasefire hopes and supply fears drove the divergence. "
+            "Gold gained 0.6% on safe-haven flows."}
+    n = gmc._scrub_ungrounded_geo_causation(data)
+    assert n == 1
+    assert "ceasefire" not in data["commodities_commentary"].lower()
+    assert "WTI Crude fell -1.32% to $68.58." in data["commodities_commentary"]
+    assert "Gold gained 0.6%" in data["commodities_commentary"]
+
+
+def test_scrub_drops_sentence_when_geo_is_main_subject(tmp_path, monkeypatch):
+    _set_sidecar(tmp_path, monkeypatch, "absent")
+    data = {"cross_asset_synthesis":
+            "Equities slipped on soft data. The Iran peace deal weighed on sentiment across risk assets."}
+    n = gmc._scrub_ungrounded_geo_causation(data)
+    assert n == 1
+    assert "iran" not in data["cross_asset_synthesis"].lower()
+    assert "Equities slipped on soft data." in data["cross_asset_synthesis"]
+
+
+def test_scrub_noop_when_direction_grounded(tmp_path, monkeypatch):
+    _set_sidecar(tmp_path, monkeypatch, "easing")
+    text = "WTI fell as easing Iran tensions drained the oil-supply premium."
+    data = {"commodities_commentary": text}
+    assert gmc._scrub_ungrounded_geo_causation(data) == 0
+    assert data["commodities_commentary"] == text
+
+
+def test_scrub_noop_when_sidecar_stale(tmp_path, monkeypatch):
+    _set_sidecar(tmp_path, monkeypatch, "unclear", date="2020-01-01")
+    text = "WTI fell as fading ceasefire hopes weighed."
+    data = {"commodities_commentary": text}
+    assert gmc._scrub_ungrounded_geo_causation(data) == 0
+    assert data["commodities_commentary"] == text
+
+
+def test_scrub_leaves_nongeo_prose_untouched(tmp_path, monkeypatch):
+    _set_sidecar(tmp_path, monkeypatch, "unclear")
+    text = "The dollar rose 0.2% as firmer US data supported the greenback."
+    data = {"currencies_commentary": text}
+    assert gmc._scrub_ungrounded_geo_causation(data) == 0
+    assert data["currencies_commentary"] == text
+
+
+def test_scrub_keeps_neutral_geopolitical_backdrop_mention(tmp_path, monkeypatch):
+    # "unclear geopolitical backdrop" is a neutral acknowledgement, not a causal attribution to
+    # the storyline — no iran/ceasefire token → must not be scrubbed.
+    _set_sidecar(tmp_path, monkeypatch, "unclear")
+    text = "Gold gained 0.6%, supported by safe-haven flows despite the unclear geopolitical backdrop."
+    data = {"commodities_commentary": text}
+    assert gmc._scrub_ungrounded_geo_causation(data) == 0

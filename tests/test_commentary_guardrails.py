@@ -2138,6 +2138,40 @@ def test_international_section_global_riskoff_on_flat_us_tape_is_clean():
     assert gmc._check_risk_polarity_inversion(data, _FLAT_SNAP) == []
 
 
+# --- 2026-07-02: flat-tape risk-regime SCRUB (forces what the retry-check only nudges) --------
+def test_flat_tape_scrub_rewrites_stubborn_riskoff_in_outlook():
+    # The Commodities outlook that survived all 4 retries — the scrub forces it to 'mixed'.
+    data = {"asset_class_outlooks": {"Commodities": {"rationale":
+            "Gold's 0.6% rise is a lagging safe-haven bid that fails to offset the broader risk-off sentiment."}}}
+    n = gmc._scrub_flat_tape_risk_regime(data, _FLAT_SNAP)
+    assert n == 1
+    r = data["asset_class_outlooks"]["Commodities"]["rationale"]
+    assert "risk-off" not in r.lower()
+    assert "mixed sentiment" in r
+
+
+def test_flat_tape_scrub_regime_becomes_mixed_session_with_case():
+    data = {"currencies_commentary": "Risk-off regime dominated as safe-haven flows firmed the dollar."}
+    assert gmc._scrub_flat_tape_risk_regime(data, _FLAT_SNAP) == 1
+    assert data["currencies_commentary"].startswith("Mixed session")
+
+
+def test_flat_tape_scrub_exempts_international_section():
+    data = {"international_section": "European equities fell, reflecting a global risk-off tone."}
+    assert gmc._scrub_flat_tape_risk_regime(data, _FLAT_SNAP) == 0
+
+
+def test_flat_tape_scrub_skips_fading_context():
+    data = {"commodities_commentary": "Gold firmed as the risk-off environment faded into the close."}
+    assert gmc._scrub_flat_tape_risk_regime(data, _FLAT_SNAP) == 0
+
+
+def test_flat_tape_scrub_noop_on_trend_day():
+    # On a clear down day, a "risk-off environment" label is legitimate → don't scrub.
+    data = {"currencies_commentary": "The dollar rose in a risk-off environment as equities sold off."}
+    assert gmc._scrub_flat_tape_risk_regime(data, {"S&P 500": {"pct_change": -0.8}}) == 0
+
+
 # --- 2026-06-23: "interest rate hike" compound must reframe grammatically -----
 # The bare `rate hikes?` rule stripped only "rate hike" and orphaned "interest", shipping the
 # ungrammatical "...Federal Reserve interest higher-for-longer rates in December".
