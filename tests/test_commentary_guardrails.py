@@ -823,7 +823,9 @@ def _fund_df():
 
 
 def test_tactical_factor_read_no_contradiction_under_risk_off():
-    out = gmc.build_tactical_positioning(_fund_df(), _RISK_OFF_SECTORS, 16.0)
+    # Elevated VIX (>=20) so the tape reads as a genuine "Risk-off" label; the subdued-VIX
+    # softening to "Defensive rotation" is covered in test_commentary_eval_0706_fixes.py.
+    out = gmc.build_tactical_positioning(_fund_df(), _RISK_OFF_SECTORS, 26.0)
     assert out["stance"].startswith("Risk-off"), out["stance"]
     fr = out["factor_read"]
     assert "counter to today's defensive rotation" in fr, fr

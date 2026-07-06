@@ -1251,7 +1251,18 @@ def build_tactical_positioning(
         if cyc_top >= 2 and def_bot >= 1:
             stance = "Risk-on, pro-cyclical"
         elif def_top >= 2 and cyc_bot >= 1:
-            stance = "Risk-off, defensive bid"
+            # "Risk-off" implies fear; only assert it when VIX corroborates. On a
+            # subdued VIX the same defensive sector tilt is a rotation, not risk
+            # aversion. 2026-07-06: labeled "Risk-off, defensive bid" beside VIX 15.99
+            # (-11.8% vs 20d) — Sevens correctly read the same tape as calendar/quarter-
+            # end rotation, not fear. Reserve "risk-off" for VIX >= 20 (the fear line).
+            _vix_calm = False
+            if vix_level is not None:
+                try:
+                    _vix_calm = float(vix_level) < 20.0
+                except Exception:
+                    _vix_calm = False
+            stance = "Defensive rotation" if _vix_calm else "Risk-off, defensive bid"
         elif cyc_top >= 2:
             stance = "Pro-cyclical lean"
         elif def_top >= 2:
@@ -6895,7 +6906,23 @@ def _correct_future_econ_event_weekday(data: dict) -> int:
         return 0
 
     wd_rx = re.compile(r"\b(" + "|".join(_WEEKDAY_NAMES) + r")(['’]s)\b", re.IGNORECASE)
-    ev_items = [(re.compile(re.escape(nm), re.IGNORECASE), cwd) for (cwd, nm) in ev_correct.values()]
+
+    def _name_variants(nm: str) -> list[str]:
+        # The calendar name and the prose phrasing often differ by an agency prefix
+        # (2026-07-06: calendar 'Fed FOMC Minutes' vs prose "Thursday's FOMC minutes"
+        # slipped the exact-substring match). Register a prefix-stripped core variant
+        # so the possessive weekday still binds to the event.
+        out = [nm]
+        core = re.sub(r"^(?:the\s+|u\.?s\.?\s+|fed\s+)+", "", nm, flags=re.IGNORECASE).strip()
+        if core and core.lower() != nm.lower() and len(core) >= 4:
+            out.append(core)
+        return out
+
+    ev_items = [
+        (re.compile(re.escape(var), re.IGNORECASE), cwd)
+        for (cwd, nm) in ev_correct.values()
+        for var in _name_variants(nm)
+    ]
 
     def _fix(text: str) -> str:
         if not wd_rx.search(text):
@@ -7519,6 +7546,66 @@ def _scrub_fabricated_kinetic_detail(data: dict, source_text: str) -> int:
     return fixes
 
 
+# --- inverted yield-causality guard (2026-07-06) ------------------------------
+# A yield RISE attributed to a SOFT/DOVISH/MISS data print is economically backwards:
+# a data miss or cooling print is disinflationary and should push yields DOWN, not up.
+# 2026-07-06 shipped "the 10-year yield rose 4 bp to 4.49% driven by the ISM Manufacturing
+# PMI miss" (3x), inverting the day's key macro insight — the Sevens' lead feature was
+# precisely that yields rose DESPITE soft data (a structural-inflation / rate-hike-cycle
+# signal). We can't assert the true driver deterministically, so we EXCISE the inverted
+# causal clause and leave the factual move. A yield rise paired with a HAWKISH driver
+# ("strong jobs", "sticky inflation", "higher-for-longer") is deliberately left untouched.
+_YIELD_NOUN_RE = re.compile(
+    r"\b(?:\d{1,2}[\s-]?(?:year|yr)\b[\w\s-]{0,18}?yield|treasury\s+yield|bond\s+yields?|yields?\b)",
+    re.IGNORECASE)
+_YIELD_UP_RE = re.compile(
+    r"\b(rose|rise|rises|rising|risen|climb\w*|jump\w*|gain\w*|advanc\w*|"
+    r"spik\w*|higher|upward|firmer|lurch\w*)\b", re.IGNORECASE)
+# Soft/dovish/miss drivers that should LOWER yields — pairing them as the CAUSE of a rise
+# is the inversion. Hawkish drivers (strong/hot/sticky/robust) are deliberately absent so
+# a correctly-attributed rise survives.
+_SOFT_DRIVER_RE = re.compile(
+    r"\b(miss(?:ed|es)?|soft(?:er)?|weak(?:er)?|cool(?:ing|er|ed)?|disappoint\w*|"
+    r"downside|below[\s-]?(?:consensus|expectations|forecast)|dovish|slow(?:down|ing|er)?|"
+    r"contraction|contracting|easing\s+inflation|falling\s+inflation|receding\s+inflation)\b",
+    re.IGNORECASE)
+_YIELD_CAUSE_CONNECTOR_RE = re.compile(
+    r"[,\s]*\b(?:driven\s+by|on\s+the\s+back\s+of|owing\s+to|due\s+to|because\s+of|"
+    r"thanks\s+to|led\s+by|fuel\w+\s+by|powered\s+by|reflecting|amid|following|after|as|on)\b",
+    re.IGNORECASE)
+
+
+def _scrub_inverted_yield_causation(data: dict) -> int:
+    """Excise an inverted causal clause that attributes a yield RISE to a soft/dovish/miss
+    data print (2026-07-06). Cuts the connector-to-clause-end tail (these clauses are
+    sentence-terminal in practice), leaving the factual move. Hawkish drivers untouched."""
+    def _fix(text: str) -> str:
+        if not isinstance(text, str) or not text:
+            return text
+        out = []
+        for sent in re.split(r"(?<=[.!?])\s+", text):
+            m_up = _YIELD_UP_RE.search(sent)
+            if not (m_up and _YIELD_NOUN_RE.search(sent)):
+                out.append(sent)
+                continue
+            cut = None
+            for cm in _YIELD_CAUSE_CONNECTOR_RE.finditer(sent, m_up.end()):
+                clause = re.split(r"[.;]", sent[cm.end():cm.end() + 90], 1)[0]
+                if _SOFT_DRIVER_RE.search(clause):
+                    cut = cm.start()
+                    break
+            if cut is None:
+                out.append(sent)
+                continue
+            head = sent[:cut].rstrip(" ,")
+            term = re.search(r"[.!?]+$", sent)
+            if head and head[-1] not in ".!?":
+                head += term.group(0) if term else "."
+            out.append(head)
+        return " ".join(out)
+    return _map_all_prose(data, _fix)
+
+
 def sanitize_commentary(data: dict, snapshot: dict | None = None, source_text: str = "") -> int:
     """Run the full deterministic corrector/scrubber pass over a commentary dict.
 
@@ -7538,6 +7625,7 @@ def sanitize_commentary(data: dict, snapshot: dict | None = None, source_text: s
         total += _scrub_false_weekly_claims(data, snapshot)
         total += _scrub_flat_tape_risk_regime(data, snapshot)  # force 'mixed' on a flat tape
     total += _correct_yield_bp_magnitude(data)   # force tenor bp moves to the arbitrated curve
+    total += _scrub_inverted_yield_causation(data)  # drop 'yield rose driven by soft data' inversions
     total += _scrub_ungrounded_geo_causation(data)  # drop Iran causal clauses when geo read is unclear/absent
     total += _scrub_degenerate_repetition(data)
     total += _correct_fed_hike_language(data)
