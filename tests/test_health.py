@@ -304,7 +304,7 @@ def test_data_freshness_enforce_on_critical_fail_market_open_degrades(monkeypatc
     monkeypatch.setattr("app.DATA_DIR", tmp_path)
     # Force market open
     import app as _app
-    monkeypatch.setattr(_app, "mkt_open", True, raising=False)
+    monkeypatch.setattr(_app, "_market_open_today", lambda *a, **k: True)
     client = _client_with_mocks(monkeypatch)
     body = client.get("/api/health").json()
     assert "data_freshness:ycharts_scrape" in body["reasons"]
@@ -366,7 +366,7 @@ def test_email_send_all_ok_not_degraded(monkeypatch, tmp_path):
     )
     monkeypatch.setattr("app.DATA_DIR", tmp_path)
     import app as _app
-    monkeypatch.setattr(_app, "mkt_open", True, raising=False)
+    monkeypatch.setattr(_app, "_market_open_today", lambda *a, **k: True)
     client = _client_with_mocks(monkeypatch)
     body = client.get("/api/health").json()
     assert not any("email_send" in r for r in body["reasons"])
@@ -381,7 +381,7 @@ def test_email_send_failed_gt_0_degrades(monkeypatch, tmp_path):
     )
     monkeypatch.setattr("app.DATA_DIR", tmp_path)
     import app as _app
-    monkeypatch.setattr(_app, "mkt_open", True, raising=False)
+    monkeypatch.setattr(_app, "_market_open_today", lambda *a, **k: True)
     client = _client_with_mocks(monkeypatch)
     body = client.get("/api/health").json()
     assert "email_send:partial_failure" in body["reasons"]
@@ -396,7 +396,7 @@ def test_email_send_internal_failed_degrades(monkeypatch, tmp_path):
     )
     monkeypatch.setattr("app.DATA_DIR", tmp_path)
     import app as _app
-    monkeypatch.setattr(_app, "mkt_open", True, raising=False)
+    monkeypatch.setattr(_app, "_market_open_today", lambda *a, **k: True)
     client = _client_with_mocks(monkeypatch)
     body = client.get("/api/health").json()
     assert "email_send:internal_failed" in body["reasons"]
@@ -411,7 +411,7 @@ def test_email_send_fetch_failed_degrades(monkeypatch, tmp_path):
     )
     monkeypatch.setattr("app.DATA_DIR", tmp_path)
     import app as _app
-    monkeypatch.setattr(_app, "mkt_open", True, raising=False)
+    monkeypatch.setattr(_app, "_market_open_today", lambda *a, **k: True)
     client = _client_with_mocks(monkeypatch)
     body = client.get("/api/health").json()
     assert "email_send:subscriber_fetch_failed" in body["reasons"]
@@ -425,7 +425,7 @@ def test_email_send_yesterday_summary_not_degraded(monkeypatch, tmp_path):
     )
     monkeypatch.setattr("app.DATA_DIR", tmp_path)
     import app as _app
-    monkeypatch.setattr(_app, "mkt_open", True, raising=False)
+    monkeypatch.setattr(_app, "_market_open_today", lambda *a, **k: True)
     client = _client_with_mocks(monkeypatch)
     body = client.get("/api/health").json()
     assert not any("email_send" in r for r in body["reasons"])
@@ -440,7 +440,7 @@ def test_email_send_fallback_and_pdf_info_only(monkeypatch, tmp_path):
     )
     monkeypatch.setattr("app.DATA_DIR", tmp_path)
     import app as _app
-    monkeypatch.setattr(_app, "mkt_open", True, raising=False)
+    monkeypatch.setattr(_app, "_market_open_today", lambda *a, **k: True)
     client = _client_with_mocks(monkeypatch)
     body = client.get("/api/health").json()
     assert not any("email_send" in r for r in body["reasons"])
@@ -582,3 +582,62 @@ def test_email_send_response_contains_no_email_addresses(monkeypatch, tmp_path):
     client = _client_with_mocks(monkeypatch)
     text = client.get("/api/health").text
     assert "@" not in text
+
+
+# ---------------------------------------------------------------------------
+# _market_open_today helper (PR H commit C0)
+#
+# The health degradation gates (commentary freshness, data_freshness,
+# email_send) only fire on market days. Before C0 this was an inline local in
+# health() that tests could not patch, so the email_send/data_freshness
+# degradation tests silently skipped their asserts on weekends and holidays.
+# ---------------------------------------------------------------------------
+
+def test_market_open_today_weekday_is_open():
+    import datetime as _dt
+    import app as _app
+    assert _app._market_open_today(_dt.date(2026, 7, 7)) is True   # Tuesday
+    assert _app._market_open_today(_dt.date(2026, 7, 6)) is True   # Monday
+
+
+def test_market_open_today_weekend_is_closed():
+    import datetime as _dt
+    import app as _app
+    assert _app._market_open_today(_dt.date(2026, 7, 4)) is False  # Saturday
+    assert _app._market_open_today(_dt.date(2026, 7, 5)) is False  # Sunday
+
+
+def test_market_open_today_holiday_is_closed():
+    import datetime as _dt
+    import app as _app
+    assert _app._market_open_today(_dt.date(2026, 1, 1)) is False   # New Year's Day (Thu)
+    assert _app._market_open_today(_dt.date(2026, 11, 26)) is False # Thanksgiving (Thu)
+
+
+def test_market_open_today_observed_holiday_is_closed():
+    """July 4 2026 falls on Saturday; the observed holiday is Friday July 3."""
+    import datetime as _dt
+    import app as _app
+    assert _app._market_open_today(_dt.date(2026, 7, 3)) is False
+
+
+def test_market_open_today_defaults_to_today():
+    """With no argument the helper evaluates the real current date and returns a bool."""
+    import app as _app
+    assert _app._market_open_today() in (True, False)
+
+
+def test_health_degradation_gates_are_patchable_closed(monkeypatch, tmp_path):
+    """Forcing market CLOSED must suppress the email_send degradation even with a
+    failing summary — proves the helper (not an unused module attr) is the gate."""
+    import datetime as _dt
+    import app as _app
+    today = _dt.date.today().isoformat()
+    (tmp_path / "email_send_summary.json").write_text(
+        _es_summary(date_str=today, failed=1), encoding="utf-8"
+    )
+    monkeypatch.setattr("app.DATA_DIR", tmp_path)
+    monkeypatch.setattr(_app, "_market_open_today", lambda *a, **k: False)
+    client = _client_with_mocks(monkeypatch)
+    body = client.get("/api/health").json()
+    assert not any("email_send" in r for r in body["reasons"])

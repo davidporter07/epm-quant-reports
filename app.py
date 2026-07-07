@@ -1515,6 +1515,24 @@ def _prev_market_day(d, *, _us_holidays=None):
     return prev
 
 
+def _market_open_today(today=None) -> bool:
+    """True if `today` (default: date.today()) is a U.S. market day: a weekday
+    that is not a U.S. holiday. Falls back to weekday-only when the `holidays`
+    package is unavailable. Module-level (not inline in health()) so tests can
+    monkeypatch it — the health degradation gates for commentary freshness,
+    data_freshness, and email_send only fire on market days.
+    """
+    from datetime import date as _date
+    td = today if today is not None else _date.today()
+    if td.weekday() >= 5:
+        return False
+    try:
+        import holidays as _hol
+        return td not in _hol.US()
+    except Exception:
+        return True
+
+
 @app.get("/api/health")
 def health() -> dict:
     """Operational health for monitoring. Aggregates lightweight checks and never
@@ -1537,14 +1555,7 @@ def health() -> dict:
             today_s = _dt.now(_ZI("America/Chicago")).strftime("%Y-%m-%d")
         except Exception:
             today_s = _date.today().isoformat()
-        _td = _date.today()
-        mkt_open = _td.weekday() < 5
-        if mkt_open:
-            try:
-                import holidays as _hol
-                mkt_open = _td not in _hol.US()
-            except Exception:
-                pass
+        mkt_open = _market_open_today()
         cpath = DATA_DIR / "latest_commentary.json"
         _c_doc, _c_status = read_json_artifact(cpath)
         if _c_status == "malformed":
