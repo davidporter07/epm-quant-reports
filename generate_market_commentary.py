@@ -6924,21 +6924,49 @@ def _correct_future_econ_event_weekday(data: dict) -> int:
         for var in _name_variants(nm)
     ]
 
+    # Plain (non-possessive) weekday, for the weekday-AFTER-event form; excludes the
+    # possessive so a token is handled by exactly one pass.
+    wd_plain_rx = re.compile(r"\b(" + "|".join(_WEEKDAY_NAMES) + r")\b(?![’'`]s)", re.IGNORECASE)
+    # The gap between an event name and a trailing weekday must be ONLY scheduling filler
+    # ("... scheduled for Thursday", "... is due Thursday", "... on Thursday") — this gates
+    # the after-event pass so an unrelated later weekday is never rewritten.
+    _SCHED_GAP_RE = re.compile(
+        r"^[\s,]*(?:is\s+|are\s+|will\s+be\s+|be\s+)?"
+        r"(?:scheduled|slated|set|planned|due|expected|coming(?:\s+up)?|out|held|"
+        r"released|reported|happening)?[\s,]*(?:for|on|out|this|next)?[\s,]*$",
+        re.IGNORECASE)
+
     def _fix(text: str) -> str:
-        if not wd_rx.search(text):
+        ev_occ = [(m.start(), m.end(), cwd) for rx, cwd in ev_items for m in rx.finditer(text)]
+        if not ev_occ:
             return text
-        targets = [(m.start(), cwd) for rx, cwd in ev_items for m in rx.finditer(text)]
-        if not targets:
-            return text
-        out, last = [], 0
+        fixes: list[tuple[int, int, str]] = []
+        # Pass A — possessive weekday BEFORE the event ("Thursday's FOMC minutes").
         for m in wd_rx.finditer(text):
-            correct = next((cwd for (s, cwd) in targets if m.end() <= s <= m.end() + 25), None)
-            if correct is None or m.group(1).lower() == correct:
-                continue
-            repl = (correct.capitalize() if m.group(1)[:1].isupper() else correct) + m.group(2)
-            out.append(text[last:m.start()])
+            correct = next((cwd for (s, e, cwd) in ev_occ if m.end() <= s <= m.end() + 25), None)
+            if correct and m.group(1).lower() != correct:
+                repl = (correct.capitalize() if m.group(1)[:1].isupper() else correct) + m.group(2)
+                fixes.append((m.start(), m.end(), repl))
+        # Pass B — plain weekday AFTER the event, linked by a scheduling phrase
+        #   ("Fed FOMC Minutes scheduled for Thursday"). 2026-07-07 blind spot.
+        for m in wd_plain_rx.finditer(text):
+            correct = next(
+                (cwd for (s, e, cwd) in ev_occ
+                 if e <= m.start() <= e + 40 and _SCHED_GAP_RE.match(text[e:m.start()])),
+                None)
+            if correct and m.group(1).lower() != correct:
+                repl = correct.capitalize() if m.group(1)[:1].isupper() else correct
+                fixes.append((m.start(), m.end(), repl))
+        if not fixes:
+            return text
+        fixes.sort()
+        out, last = [], 0
+        for s, e, repl in fixes:
+            if s < last:
+                continue  # overlap guard
+            out.append(text[last:s])
             out.append(repl)
-            last = m.end()
+            last = e
         out.append(text[last:])
         return "".join(out)
 
@@ -7606,6 +7634,62 @@ def _scrub_inverted_yield_causation(data: dict) -> int:
     return _map_all_prose(data, _fix)
 
 
+# --- econ-print direction guard (2026-07-07) ----------------------------------
+# An economic print whose directional VERB contradicts its own month-over-month numbers.
+# 2026-07-07 shipped "Nonfarm Payrolls surged to 57k vs 129k prior" — 57k < 129k, so the
+# series FELL; "surged" is inverted (the email had it right: "fell 72k to 57k"). Only
+# past-tense verbs, only against an explicit prior/previous baseline, only when both numbers
+# parse in matching units — so an actual-vs-expectation beat ("beat 50k vs 45k expected") and
+# unit-mismatched phrases are left alone.
+_ECON_UP_PAST = ("surged", "jumped", "soared", "climbed", "rose", "spiked", "gained",
+                 "accelerated", "rebounded", "increased", "grew", "advanced", "rallied")
+_ECON_DOWN_PAST = ("fell", "dropped", "plunged", "slumped", "tumbled", "declined", "slid",
+                   "sank", "cooled", "eased", "decreased", "shrank", "contracted",
+                   "slipped", "retreated")
+_ECON_UNIT_SCALE = {"": 1.0, "k": 1e3, "thousand": 1e3, "m": 1e6, "million": 1e6,
+                    "bn": 1e9, "b": 1e9, "billion": 1e9, "%": 1.0, "pt": 1.0, "pts": 1.0}
+_ECON_DIR_RE = re.compile(
+    r"\b(?P<verb>" + "|".join(_ECON_UP_PAST + _ECON_DOWN_PAST) + r")\b"
+    r"(?:\s+\w+){0,3}?\s+to\s+\$?(?P<a>\d+(?:\.\d+)?)\s*(?P<au>k|m|bn|b|%|thousand|million|billion|pts?)?"
+    r"[^.;]{0,40}?\b(?:vs\.?|versus|from|against|compared\s+(?:with|to))\s+"
+    r"\$?(?P<b>\d+(?:\.\d+)?)\s*(?P<bu>k|m|bn|b|%|thousand|million|billion|pts?)?"
+    r"[^.;]{0,20}?\b(?:prior|previous|last\s+month|a\s+month\s+earlier|earlier|the\s+prior\s+reading)\b",
+    re.IGNORECASE)
+
+
+def _correct_econ_print_direction(data: dict) -> int:
+    """Flip an econ print's directional verb when it contradicts its own MoM numbers
+    (2026-07-07: "payrolls surged to 57k vs 129k prior"). Case-preserving; conservative."""
+    def _scale(unit: str | None) -> float | None:
+        return _ECON_UNIT_SCALE.get((unit or "").lower())
+
+    def _fix(text: str) -> str:
+        def _sub(m: "re.Match") -> str:
+            au, bu = _scale(m.group("au")), _scale(m.group("bu"))
+            if au is None or bu is None or au != bu:
+                return m.group(0)  # unknown/mismatched units — don't touch
+            try:
+                a = float(m.group("a")) * au
+                b = float(m.group("b")) * bu
+            except ValueError:
+                return m.group(0)
+            if a == b:
+                return m.group(0)
+            verb = m.group("verb")
+            is_up = verb.lower() in _ECON_UP_PAST
+            wrong = (is_up and a < b) or ((not is_up) and a > b)
+            if not wrong:
+                return m.group(0)
+            repl = "fell" if is_up else "rose"
+            if verb[:1].isupper():
+                repl = repl.capitalize()
+            return m.group(0)[:m.start("verb") - m.start(0)] + repl + \
+                m.group(0)[m.end("verb") - m.start(0):]
+        return _ECON_DIR_RE.sub(_sub, text)
+
+    return _map_all_prose(data, _fix)
+
+
 def sanitize_commentary(data: dict, snapshot: dict | None = None, source_text: str = "") -> int:
     """Run the full deterministic corrector/scrubber pass over a commentary dict.
 
@@ -7626,6 +7710,7 @@ def sanitize_commentary(data: dict, snapshot: dict | None = None, source_text: s
         total += _scrub_flat_tape_risk_regime(data, snapshot)  # force 'mixed' on a flat tape
     total += _correct_yield_bp_magnitude(data)   # force tenor bp moves to the arbitrated curve
     total += _scrub_inverted_yield_causation(data)  # drop 'yield rose driven by soft data' inversions
+    total += _correct_econ_print_direction(data)  # flip econ verb that contradicts its MoM numbers
     total += _scrub_ungrounded_geo_causation(data)  # drop Iran causal clauses when geo read is unclear/absent
     total += _scrub_degenerate_repetition(data)
     total += _correct_fed_hike_language(data)
