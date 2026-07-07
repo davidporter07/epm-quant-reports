@@ -2225,6 +2225,19 @@ def _postprocess_snapshot_metadata(snapshot: dict, ticker: str) -> dict:
 
 
 
+def _api_error(handler: str, exc: Exception, status_code: int, public_detail: str) -> HTTPException:
+    """Log the real exception server-side; return a controlled HTTPException.
+
+    Blanket `except Exception` handlers on data endpoints must not leak raw
+    exception text (yfinance errors, file paths, provider internals) to API
+    clients. The full repr goes to the service journal via stdout; the client
+    sees only `public_detail`, under the existing {"detail": ...} envelope and
+    the caller's original status code. Callers `raise _api_error(...)`.
+    """
+    print(f"[api_error] handler={handler} exception={exc!r}", flush=True)
+    return HTTPException(status_code=status_code, detail=public_detail)
+
+
 @app.get("/api/snapshot")
 def get_snapshot(ticker: str = Query(..., min_length=1, max_length=15), include_news: bool = True) -> dict:
     try:
