@@ -7856,8 +7856,45 @@ def _backfill_watch_panel(data: dict, watch_fallback: list | None,
     return len(filled)
 
 
+def _backfill_winners_panel(data: dict, winners_fallback: list | None,
+                            known_tickers: set | None) -> int:
+    """Fill portfolio_spotlight_winners from the authoritative input top performers when the
+    model omits it, so the "Top Performers" panel never renders "No data available"
+    (2026-07-06→08: empty 3 days running while JFNIX +12%, IXJ +6.8% sat in the fund metrics).
+    Only positive 1M returns qualify. Mirror of _backfill_watch_panel. Deterministic."""
+    if data.get("portfolio_spotlight_winners") or not winners_fallback:
+        return 0
+    filled = []
+    for entry in winners_fallback:
+        if not isinstance(entry, dict) or not entry.get("ticker"):
+            continue
+        try:
+            if float(entry.get("return_1m") or 0) <= 0:
+                continue  # "Top Performers" = positive 1M only
+        except (TypeError, ValueError):
+            continue
+        tk = str(entry["ticker"]).upper()
+        if known_tickers and tk not in known_tickers:
+            continue
+        desc = str(entry.get("description") or "").strip().rstrip(".")
+        metric = str(entry.get("metric_label") or "recent 1-month return").strip()
+        note = (f"Leading the portfolio on {metric}; monitor whether the "
+                f"outperformance persists or fades.")
+        filled.append({
+            "ticker": tk,
+            "metric_label": entry.get("metric_label") or "",
+            "commentary": (f"{desc}. {note}" if desc else note)[:400],
+        })
+    if filled:
+        data["portfolio_spotlight_winners"] = filled
+        print(f"[VALIDATE] Backfilled {len(filled)} top-performer entr(ies) from input winners "
+              f"(model omitted or off-universe).")
+    return len(filled)
+
+
 def validate_commentary(data: dict, known_tickers: set = None, snapshot: dict = None,
-                        watch_fallback: list | None = None) -> bool:
+                        watch_fallback: list | None = None,
+                        winners_fallback: list | None = None) -> bool:
     if not isinstance(data, dict):
         return False
     # commodities_commentary and economics_commentary are optional  model reliably omits them when
@@ -7968,6 +8005,11 @@ def validate_commentary(data: dict, known_tickers: set = None, snapshot: dict = 
     # laggards — XLG -4.7%, RLY -6.0% — sat right there in the fund metrics). Runs AFTER the
     # strip so it also recovers the case where the model returned off-universe tickers.
     _backfill_watch_panel(data, watch_fallback, known_tickers)
+    # Same for the "Top Performers" panel (2026-07-06→08: empty 3 days running while positive
+    # -return funds — JFNIX +12%, IXJ +6.8% — sat in the metrics table). The bearish-ticker
+    # strip below keys on MAG7 top_bullets, and the winners fallback holds portfolio FUNDS
+    # (never MAG7 names) gated to positive 1M, so that strip cannot re-empty this panel.
+    _backfill_winners_panel(data, winners_fallback, known_tickers)
 
     # Remove bearish tickers from spotlight winners (contradiction guard)
     bearish_tickers: set[str] = set()
@@ -9173,7 +9215,7 @@ def main() -> int:
         commentary, known_tickers = call_ollama(payload, snapshot)
         commentary = scrub_banned_phrases(commentary)
         if validate_commentary(commentary, known_tickers=known_tickers, snapshot=snapshot,
-                               watch_fallback=watch):
+                               watch_fallback=watch, winners_fallback=winners):
             banned = find_banned_phrases(commentary)
             if banned:
                 print(f"[WARN] Commentary still contains banned phrases after scrub: {banned}")
