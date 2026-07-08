@@ -298,6 +298,80 @@ _DEGENERATE_FRAC = 0.60
 # Sanity cap on a FRED-derived daily change (50 bp/day) — anything larger is a data
 # artefact (par-yield vs Treasury level mismatch, bad obs) and is not applied.
 _MAX_DAILY_YIELD_CHG = 0.50
+# Prior-session fallback: dated history of our OWN yield LEVELS, used as the day-change
+# baseline when BOTH YCharts-prev and FRED are degenerate (FRED's DGS* daily series
+# publishes ~1 trading day late, so on a T+1 morning it can't supply day-T's move —
+# but we already stored day-(T-1)'s close ourselves). 2026-07-08: 11/11 tenors printed
+# +0.00 bp and FRED "agreed flat" while the 10Y had actually risen ~5 bp on the oil shock.
+YIELD_HISTORY = DATA_DIR / "yield_level_history.json"
+# Don't diff against a stored session older than this many calendar days (covers a normal
+# weekend/holiday gap); beyond it the "daily" change would silently span a pipeline outage.
+_MAX_PRIOR_SESSION_GAP_DAYS = 5
+
+
+def _load_yield_history() -> dict:
+    try:
+        return _load_json(YIELD_HISTORY) or {}
+    except Exception:
+        return {}
+
+
+def _persist_yield_levels(curve: dict, run_date: str) -> None:
+    """Append this run's yield LEVELS to the dated history sidecar (keep ~10 dates).
+    Never raises. Provides the prior-session baseline for _repair_from_prior_session."""
+    try:
+        levels = {lbl: e["level"] for lbl, e in (curve or {}).items()
+                  if isinstance(e, dict) and e.get("level") is not None}
+        if not levels:
+            return
+        hist = _load_yield_history()
+        hist[run_date] = levels
+        for d in sorted(hist)[:-10]:   # keep the 10 most-recent run dates
+            hist.pop(d, None)
+        YIELD_HISTORY.write_text(json.dumps(hist, indent=2), encoding="utf-8")
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"[Arbiter] (yield-history persist failed: {exc})")
+
+
+def _repair_from_prior_session(flat: list, run_date: str) -> int:
+    """Recompute still-flat tenor day-changes from OUR OWN most-recent prior-session
+    levels. Fires when FRED can't disambiguate (its daily series lags a day). Keeps the
+    displayed level; fills only the change. Re-run-safe (ignores a same-day entry) and
+    outage-safe (skips a gap > _MAX_PRIOR_SESSION_GAP_DAYS). Non-failing."""
+    hist = _load_yield_history()
+    prior_dates = [d for d in hist if d < run_date]   # strictly before → excludes a re-run
+    if not prior_dates:
+        return 0
+    prior_date = max(prior_dates)
+    try:
+        from datetime import date as _date
+        gap = (_date.fromisoformat(run_date) - _date.fromisoformat(prior_date)).days
+    except Exception:
+        return 0
+    if gap <= 0 or gap > _MAX_PRIOR_SESSION_GAP_DAYS:
+        return 0
+    prior_levels = hist.get(prior_date, {})
+    repaired = 0
+    for lbl, entry in flat:
+        pv = prior_levels.get(lbl)
+        if pv is None:
+            continue
+        try:
+            level = float(entry["level"])
+            chg = round(level - float(pv), 4)
+        except (TypeError, ValueError):
+            continue
+        if abs(chg) < _FLAT_EPS or abs(chg) > _MAX_DAILY_YIELD_CHG:
+            continue
+        entry["change"]      = chg
+        entry["prev_value"]  = round(float(pv), 4)
+        entry["pct_change"]  = round(chg / level * 100, 2) if level else None
+        entry["change_source"] = "prior_session"
+        repaired += 1
+    if repaired:
+        print(f"[Arbiter] Recomputed {repaired} tenor change(s) from prior session "
+              f"{prior_date} (FRED lagged; used our own last close).")
+    return repaired
 
 
 def _repair_degenerate_yield_curve(curve: dict) -> int:
@@ -330,39 +404,44 @@ def _repair_degenerate_yield_curve(curve: dict) -> int:
 
     print(f"[Arbiter] Degenerate yield-curve change column "
           f"({len(flat)}/{len(present)} tenors flat/missing) — cross-checking FRED.")
-    fred = _fetch_fred_yield_curve()
-    if not fred:
-        print("[Arbiter] FRED unavailable — leaving curve as-is (cannot confirm staleness).")
-        return 0
-
-    yc_for_label = {report: yc for yc, report in _YIELD_LABEL_MAP.items()}
     repaired = 0
-    for lbl, entry in flat:
-        fred_entry = fred.get(yc_for_label.get(lbl, ""))
-        if not fred_entry:
-            continue
-        fv, pv = fred_entry.get("value"), fred_entry.get("prev_value")
-        if fv is None or pv is None:
-            continue
-        try:
-            fred_chg = round(float(fv) - float(pv), 4)
-        except (TypeError, ValueError):
-            continue
-        # Only act when FRED disagrees (a real move) and the move is sane.
-        if abs(fred_chg) < _FLAT_EPS or abs(fred_chg) > _MAX_DAILY_YIELD_CHG:
-            continue
-        level = float(entry["level"])
-        entry["change"]     = fred_chg
-        entry["prev_value"] = round(level - fred_chg, 4)
-        entry["pct_change"] = round(fred_chg / level * 100, 2) if level else None
-        entry["change_source"] = "fred_recompute"
-        repaired += 1
-
-    if repaired:
-        print(f"[Arbiter] Recomputed {repaired} stale tenor change(s) from FRED "
-              f"(YCharts prev was a non-distinct observation).")
+    fred = _fetch_fred_yield_curve()
+    if fred:
+        yc_for_label = {report: yc for yc, report in _YIELD_LABEL_MAP.items()}
+        for lbl, entry in flat:
+            fred_entry = fred.get(yc_for_label.get(lbl, ""))
+            if not fred_entry:
+                continue
+            fv, pv = fred_entry.get("value"), fred_entry.get("prev_value")
+            if fv is None or pv is None:
+                continue
+            try:
+                fred_chg = round(float(fv) - float(pv), 4)
+            except (TypeError, ValueError):
+                continue
+            # Only act when FRED disagrees (a real move) and the move is sane.
+            if abs(fred_chg) < _FLAT_EPS or abs(fred_chg) > _MAX_DAILY_YIELD_CHG:
+                continue
+            level = float(entry["level"])
+            entry["change"]     = fred_chg
+            entry["prev_value"] = round(level - fred_chg, 4)
+            entry["pct_change"] = round(fred_chg / level * 100, 2) if level else None
+            entry["change_source"] = "fred_recompute"
+            repaired += 1
+        if repaired:
+            print(f"[Arbiter] Recomputed {repaired} stale tenor change(s) from FRED "
+                  f"(YCharts prev was a non-distinct observation).")
     else:
-        print("[Arbiter] FRED agrees the curve was flat — no repair needed.")
+        print("[Arbiter] FRED unavailable — falling back to our own prior session.")
+
+    # Tenors STILL flat (FRED lagged a day or agreed flat) → recompute from our own last
+    # stored close. This is what catches the T+1-morning case FRED structurally cannot.
+    still_flat = [(lbl, e) for lbl, e in flat if _is_flat(e)]
+    if still_flat:
+        repaired += _repair_from_prior_session(still_flat, TODAY_STR)
+
+    if not repaired:
+        print("[Arbiter] FRED + prior session agree the curve was flat — no repair needed.")
     return repaired
 
 
@@ -523,6 +602,9 @@ def run_arbitration(yf_commentary: dict | None = None) -> dict:
     # drives a bogus "yields held 0 bp" narrative. Cross-check against FRED's distinct
     # two-point series; recompute only the changes FRED proves are real (levels untouched).
     _repair_degenerate_yield_curve(arbitrated["yield_curve"])
+    # Persist this run's LEVELS so the next session has a prior-close baseline even when
+    # both YCharts-prev and FRED are degenerate (see _repair_from_prior_session).
+    _persist_yield_levels(arbitrated["yield_curve"], TODAY_STR)
 
     # Build features CSV from scraper funds data. Fund risk metrics (Sharpe/alpha/beta/
     # MaxDD) come ONLY from YCharts, so there is no fallback — but if the scrape is stale
