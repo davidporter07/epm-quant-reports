@@ -614,3 +614,82 @@ Pure code — no flags, no data migrations, no artifacts, no .env changes:
 trivially safe); C2–C4 are delegations whose reverts restore the inlined logic
 verbatim. D1 deltas are env-edge-cases only; prod .env files use 0/1, so no
 operator action on revert either.
+
+## PR H — D2 error-detail leak cleanup (IMPLEMENTED 2026-07-08, pending release review + deploy approval)
+
+Commits: C0 `8f3b65b` (market-open test patchability) → C1 `c8a1ebe` (_api_error
+helper, no callers) → C2 `9d517dc` (migrate the 8 leak sites, ratchet 13→5) →
+C3 (this doc). Closes decision **D2** (deferred 2026-06-11 at PR G).
+
+### What it does
+
+**Public-message / server-log split.** The 8 blanket `except Exception`
+handlers on data endpoints used to return `detail=str(exc)` — raw yfinance
+errors, file paths, and provider internals reached API clients. Each site now
+raises via `_api_error(handler, exc, status, public_msg)` in app.py, which:
+
+- prints `[api_error] handler=<name> exception=<repr>` (flush=True) — the FULL
+  exception repr stays available to ops in the service journal
+  (`journalctl -u epm.service | grep api_error`);
+- returns an HTTPException with the SAME status code as before and a fixed,
+  generic public message under the unchanged `{"detail": ...}` envelope.
+
+Migrated sites (status codes unchanged): `/api/snapshot` 400, `/api/chart` 400,
+`/api/fund-page` 400, `/api/home` 400, `/api/markets` 400, `/api/portfolios`
+400, `/api/quotes` 500, `/api/commentary` 500.
+
+Preserved specificity: `get_chart` pre-validates the period against
+`snapshot_engine.PERIOD_DAY_MAP` (same lower/strip normalization) and returns
+the byte-identical "Unsupported period: <p>" message clients have always seen.
+
+Kept unchanged BY DESIGN: the 5 remaining `detail=str(exc)` sites are
+AuthError pass-throughs (login/register/reset/change-username/token-decode)
+whose messages are authored in services/ and are user-facing; chat and
+deep-analysis controlled messages untouched. Frontend audit (2026-06-11):
+static/js shows `data.detail` verbatim only for auth/chat/deep — the 8 data
+sites surface via generic throw fallbacks, so this change is invisible or
+better for users.
+
+**Ratchet**: tests/test_error_detail_inventory.py EXPECTED_COUNT 13 → 5, plus
+a new lint asserting every surviving site sits in an `except AuthError` block.
+Planted-string tests (tests/test_api_error_leaks.py) prove per endpoint that
+internals reach the journal but never the response.
+
+**C0 (test infrastructure)**: health() used to compute `mkt_open` as an inline
+local, so the email_send/data_freshness degradation tests monkeypatched an
+UNUSED module attribute and silently skipped their asserts on weekends and
+holidays. `_market_open_today()` is now a module-level, patchable helper with
+identical behavior (weekday + holidays.US(), weekday-only fallback); fixed
+2026-date tests pin weekday/weekend/holiday/observed-holiday. Weekend and
+holiday CI runs are now trustworthy.
+
+### Verification after deploy
+
+```bash
+# 1. Health unchanged: status ok, reasons [], deploy.commit == new HEAD.
+curl.exe -fsS https://epm-market-intelligence.com/api/health
+
+# 2. Invalid-period message preserved (specific, controlled):
+curl.exe -s "https://epm-market-intelligence.com/api/chart?ticker=SPY&period=bogus"
+# expect: {"detail":"Unsupported period: bogus"}
+
+# 3. Normal data endpoints unaffected (200s):
+#    /api/home, /api/markets, /api/quotes, /api/commentary, /api/snapshot?ticker=SPY
+
+# 4. Journal shows [api_error] lines ONLY when a data endpoint actually fails:
+ssh -i ~/.ssh/epm_server dporter02@100.101.63.65 \
+  "journalctl -u epm.service --since '1 hour ago' | grep api_error"
+```
+
+### Rollback
+
+`git revert` C2 (restores the old leaking details — functional, just leaky);
+C1/C0 are inert without C2 (helper unused; test helper is behavior-identical).
+No flags, no schema, no artifacts involved.
+
+### Non-goals honored
+
+No UI/frontend, prompt/model, report/PDF, validator-rule, auth-business-logic,
+rate-limit, data-freshness, send-ledger, runtime-config, or deploy-mechanism
+changes. D3 (profile_color/avatar validation) and D4 (dotted deep tickers)
+remain deferred. yfinance crumb-noise cleanup remains a separate follow-up.
