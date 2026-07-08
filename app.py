@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from snapshot_engine import TickerSnapshotEngine
+from snapshot_engine import PERIOD_DAY_MAP, TickerSnapshotEngine
 from services.market_board_service import MarketBoardService
 from services.ticker_page_service import TickerPageService
 from services.auth_service import (
@@ -2245,15 +2245,23 @@ def get_snapshot(ticker: str = Query(..., min_length=1, max_length=15), include_
         snapshot = _enrich_snapshot(snapshot, ticker)
         return {"ok": True, "snapshot": snapshot}
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise _api_error("get_snapshot", exc, 400,
+                         "Snapshot data is unavailable for this ticker right now.")
 
 
 @app.get("/api/chart")
 def get_chart(ticker: str = Query(..., min_length=1, max_length=15), period: str = Query("1y")) -> dict:
+    # Pre-validate the period so the client keeps the SPECIFIC message it has
+    # always seen for a bad period (byte-identical to the snapshot_engine
+    # ValueError text that used to pass straight through to the client).
+    period_key = str(period).lower().strip()
+    if period_key not in PERIOD_DAY_MAP:
+        raise HTTPException(status_code=400, detail=f"Unsupported period: {period_key}")
     try:
         return {"ok": True, "chart": engine.build_chart_payload(ticker=ticker, period=period)}
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise _api_error("get_chart", exc, 400,
+                         "Chart data is unavailable for this ticker right now.")
 
 
 @app.get("/api/fund-page")
@@ -2275,7 +2283,8 @@ def get_fund_page_payload(ticker: str = Query(..., min_length=1, max_length=15),
         payload["raw_snapshot"] = enriched_snapshot
         return {"ok": True, "payload": payload}
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise _api_error("get_fund_page_payload", exc, 400,
+                         "Fund page data is unavailable for this ticker right now.")
 
 
 @app.get("/api/home")
@@ -2291,7 +2300,8 @@ def get_home_payload(request: Request, featured: str = Query("", max_length=300)
             payload["universe"]["featured"] = custom_tickers
         return {"ok": True, "payload": payload}
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise _api_error("get_home_payload", exc, 400,
+                         "Home board data is temporarily unavailable.")
 
 
 @app.get("/api/markets")
@@ -2299,7 +2309,8 @@ def get_markets_payload() -> dict:
     try:
         return {"ok": True, "payload": market_board_service.get_markets_payload()}
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise _api_error("get_markets_payload", exc, 400,
+                         "Markets board data is temporarily unavailable.")
 
 
 @app.get("/api/portfolios")
@@ -2307,7 +2318,8 @@ def get_portfolios_payload() -> dict:
     try:
         return {"ok": True, "payload": market_board_service.get_portfolios_payload()}
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise _api_error("get_portfolios_payload", exc, 400,
+                         "Portfolios board data is temporarily unavailable.")
 
 
 # ---------------------------------------------------------------------------
@@ -2369,7 +2381,8 @@ def get_live_quotes() -> dict:
         _quotes_cache["ts"] = now
         return {"ok": True, "payload": result, "cached": False}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise _api_error("get_live_quotes", exc, 500,
+                         "Live quotes are temporarily unavailable.")
 
 
 MAG7_NAMES = {
@@ -2440,7 +2453,8 @@ def get_commentary() -> dict:
             commentary = json.load(fh)
         return {"ok": True, "commentary": commentary}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise _api_error("get_commentary", exc, 500,
+                         "Commentary is temporarily unavailable.")
 
 
 @app.get("/api/enrichment")
