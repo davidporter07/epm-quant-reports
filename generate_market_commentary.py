@@ -5103,48 +5103,67 @@ def _check_numeric_consistency(data: dict, snapshot: dict) -> list[str]:
     # crude language ("selloff"/"collapse") kept tripping the old field-global word-set check —
     # words the flip map didn't cover and that weren't adjacent to a "crude" keyword — forcing a
     # deterministic fallback and a blocked send.
-    _BEARISH_STRONG = {"selloff", "sell-off", "plunged", "plunge", "collapsed", "collapse",
-                       "tumbled", "tumble"}
-    _BULLISH_STRONG = {"surged", "surge", "soared", "soar", "skyrocketed"}
+    _BEARISH_STRONG = {"selloff", "sell-off", "selling", "plunged", "plunge", "plunging",
+                       "collapsed", "collapse", "collapsing", "tumbled", "tumble", "tumbling"}
+    _BULLISH_STRONG = {"surged", "surge", "surging", "soared", "soar", "soaring",
+                       "skyrocketed", "skyrocketing"}
     _FIELD_ASSET = {
         "equities_commentary":     "S&P 500",
         "commodities_commentary":  "WTI Crude",
         "currencies_commentary":   "U.S. Dollar (DXY)",
         "fixed_income_commentary": "10-Yr Yield",
     }
-    # Substrings that anchor a sentence to the mapped asset (case-insensitive).
-    _FIELD_ASSET_KW = {
-        "equities_commentary":     ("s&p", "500", "equit", "stock", "index", "benchmark"),
-        "commodities_commentary":  ("wti", "crude", "oil"),
-        "currencies_commentary":   ("dollar", "dxy", "greenback"),
-        "fixed_income_commentary": ("10-year", "10-yr", "10 year", "treasur", "yield", "note", "bond"),
+    # Substrings that anchor a sentence to a given asset (case-insensitive).
+    _ASSET_ANCHOR = {
+        "S&P 500":            ("s&p", "500", "equit", "stock", "index", "benchmark"),
+        "WTI Crude":          ("wti", "crude", "oil"),
+        "U.S. Dollar (DXY)":  ("dollar", "dxy", "greenback"),
+        "10-Yr Yield":        ("10-year", "10-yr", "10 year", "treasur", "yield", "note", "bond"),
     }
-    for narrative_key, snap_key in _FIELD_ASSET.items():
-        snap = (snapshot or {}).get(snap_key) or {}
-        truth_pct = snap.get("pct_change")
-        if truth_pct is None:
-            continue
-        prose = data.get(narrative_key, "")
-        prose_str = prose if isinstance(prose, str) else " ".join(prose or [])
-        anchors = _FIELD_ASSET_KW.get(narrative_key, ())
-        wrong = _BEARISH_STRONG if truth_pct > 0.3 else (_BULLISH_STRONG if truth_pct < -0.3 else set())
+    # Synthesis fields discuss several assets at once, so scan them against EVERY asset
+    # (still sentence-scoped). 2026-07-09: the shipped "Market Synthesis" said "tumbling WTI
+    # crude (+4.37%)" — a pre-modifier gerund in market_outlook_rationale, a field the old
+    # check never scanned, so nothing flagged it.
+    _SYNTH_FIELDS = ("cross_asset_synthesis", "market_outlook_rationale")
+
+    def _strong_word_hit(prose_str: str, snap_key: str) -> bool:
+        truth = ((snapshot or {}).get(snap_key) or {}).get("pct_change")
+        if truth is None:
+            return False
+        wrong = _BEARISH_STRONG if truth > 0.3 else (_BULLISH_STRONG if truth < -0.3 else set())
         if not wrong:
-            continue
-        hit = False
+            return False
+        anchors = _ASSET_ANCHOR.get(snap_key, ())
         for sent in re.split(r"(?<=[.!?])\s+", prose_str):
             sl = sent.lower()
             if anchors and not any(a in sl for a in anchors):
                 continue
-            toks = {w.strip(".,;:!?\"'()[]") for w in sl.split()}
-            if toks & wrong:
-                hit = True
-                break
-        if hit:
-            polarity = "positive" if truth_pct > 0 else "negative"
-            kind = "bearish" if truth_pct > 0 else "bullish"
-            violations.append(
-                f"{snap_key}: snapshot {truth_pct:+.2f}% ({polarity}) but narrative uses strongly {kind} language"
-            )
+            if {w.strip(".,;:!?\"'()[]") for w in sl.split()} & wrong:
+                return True
+        return False
+
+    def _flag(snap_key: str) -> None:
+        truth = ((snapshot or {}).get(snap_key) or {}).get("pct_change")
+        polarity = "positive" if truth > 0 else "negative"
+        kind = "bearish" if truth > 0 else "bullish"
+        msg = f"{snap_key}: snapshot {truth:+.2f}% ({polarity}) but narrative uses strongly {kind} language"
+        if msg not in violations:
+            violations.append(msg)
+
+    for narrative_key, snap_key in _FIELD_ASSET.items():
+        prose = data.get(narrative_key, "")
+        prose_str = prose if isinstance(prose, str) else " ".join(prose or [])
+        if _strong_word_hit(prose_str, snap_key):
+            _flag(snap_key)
+
+    for narrative_key in _SYNTH_FIELDS:
+        prose = data.get(narrative_key, "")
+        prose_str = prose if isinstance(prose, str) else " ".join(prose or [])
+        if not prose_str:
+            continue
+        for snap_key in _ASSET_ANCHOR:
+            if _strong_word_hit(prose_str, snap_key):
+                _flag(snap_key)
 
     # pre_market_bullets: each bullet that names a known asset and cites a % must match sign.
     _ASSET_KW = {
@@ -5635,7 +5654,7 @@ _DIR_DOWN_TO_UP = {
     "tumbled": "surged", "tumble": "surge", "tumbles": "surges", "tumbling": "surging",
     "plunged": "soared", "plunge": "soar", "plunges": "soars", "plunging": "soaring",
     "collapsed": "surged", "collapse": "surge", "collapses": "surges", "collapsing": "surging",
-    "sold off": "rallied", "selloff": "rally", "sell-off": "rally",
+    "sold off": "rallied", "selling off": "rallying", "selloff": "rally", "sell-off": "rally",
 }
 _DIR_UP_TO_DOWN = {
     "rose": "fell", "rise": "fall", "rises": "falls", "rising": "falling", "risen": "fallen",
@@ -5660,10 +5679,22 @@ _DIR_CLAUSE_BOUNDARY_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Every directional word we know how to flip, either direction. Used (direction-agnostic) to
+# recognise an asset's ADJACENT pre-modifier ("tumbling WTI") so one asset's forward scope
+# does not swallow — and mis-flip — the directional word attached to the NEXT asset's noun.
+_DIR_ALL_WORDS = sorted(set(_DIR_DOWN_TO_UP) | set(_DIR_UP_TO_DOWN), key=len, reverse=True)
+# Optional -ly adverb ("sharply") + a directional word, immediately before end-of-string.
+_DIR_PREMOD_RE = re.compile(
+    r"(?:\b\w+ly\s+)?\b(?:" + "|".join(re.escape(w) for w in _DIR_ALL_WORDS) + r")\s*$",
+    re.IGNORECASE,
+)
+
 
 def _dir_scope_len(tail: str, snap_key: str) -> int:
     """Length of the rewrite scope inside `tail` (which starts at an asset keyword):
-    capped at the first causal/driver conjunction or the next *different* asset keyword."""
+    capped at the first causal/driver conjunction or the next *different* asset keyword —
+    and, when it caps at another asset, backed off further to leave that asset's own
+    adjacent directional pre-modifier ('... surging WTI') to it, not this asset."""
     tl = tail.lower()
     cut = len(tail)
     m = _DIR_CLAUSE_BOUNDARY_RE.search(tail, 1)
@@ -5674,7 +5705,8 @@ def _dir_scope_len(tail: str, snap_key: str) -> int:
             continue
         p = tl.find(okw, 1)
         if p != -1:
-            cut = min(cut, p)
+            pm = _DIR_PREMOD_RE.search(tail[:p])
+            cut = min(cut, pm.start() if pm else p)
     return cut
 
 
@@ -5791,8 +5823,18 @@ def _correct_direction_words(data: dict, snapshot: dict) -> int:
                 head, tail = new_sent[:idx], new_sent[idx:]
                 cut = _dir_scope_len(tail, snap_key)
                 scope, rest = tail[:cut], tail[cut:]
-                scope2, changed = _flip_direction_words(scope, truth_pct)
-                if changed:
+                scope2, changed_fwd = _flip_direction_words(scope, truth_pct)
+                # Backward pass: a directional word can PRE-modify the asset noun
+                # ("tumbling WTI crude"), which the forward scope never reaches. Flip only
+                # an adjacent pre-modifier (optional -ly adverb + one directional word) so a
+                # prior asset's clause ("the S&P's decline ... and WTI") is left untouched.
+                changed_pre = False
+                pm = _DIR_PREMOD_RE.search(head)
+                if pm:
+                    seg2, changed_pre = _flip_direction_words(head[pm.start():], truth_pct)
+                    if changed_pre:
+                        head = head[:pm.start()] + seg2
+                if changed_fwd or changed_pre:
                     new_sent = head + scope2 + rest
                     handled.add(snap_key)
                     fixes += 1

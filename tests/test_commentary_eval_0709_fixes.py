@@ -62,3 +62,48 @@ def test_full_correct_then_validate_passes_on_crude_selloff():
     gmc._correct_direction_words(data, _snap())
     viols = gmc._check_numeric_consistency(data, _snap())
     assert not [v for v in viols if "WTI" in v], (data["commodities_commentary"], viols)
+
+
+# --- 2026-07-09 email defect: gerund PRE-modifier of the asset noun -----------------
+# Shipped synthesis said "a bearish regime where tumbling WTI crude (+4.37%)" while the
+# commodities page said crude "surged". The gerund "tumbling" (a) wasn't in the validator's
+# strong-word set and (b) sits BEFORE the "WTI" keyword, which the forward-only corrector
+# never reached.
+
+def test_validator_catches_gerund_premodifier():
+    data = {"market_outlook_rationale":
+            "A bearish regime where tumbling WTI crude compresses growth-name multiples."}
+    viols = gmc._check_numeric_consistency(data, _snap())
+    assert any("WTI" in v and "bearish" in v for v in viols), viols
+
+
+def test_corrector_flips_gerund_premodifier():
+    data = {"market_outlook_rationale":
+            "A bearish regime where tumbling WTI crude compresses growth-name multiples."}
+    gmc._correct_direction_words(data, _snap())
+    assert "tumbling" not in data["market_outlook_rationale"].lower()
+    assert "surging" in data["market_outlook_rationale"].lower()
+    assert not [v for v in gmc._check_numeric_consistency(data, _snap()) if "WTI" in v]
+
+
+def test_premodifier_fix_preserves_prior_down_asset_in_same_sentence():
+    # The exact shipped sentence: S&P is DOWN (-0.28%, "decline" is correct) and WTI is UP
+    # (+4.37%, "tumbling" is wrong). Fixing crude must NOT flip the S&P's "decline".
+    sent = ("The S&P 500's 0.28% decline reflects a bearish regime where tumbling WTI crude "
+            "(+4.37%) and rising 10-year yields compress growth-name multiples.")
+    data = {"market_outlook_rationale": sent}
+    gmc._correct_direction_words(data, _snap())
+    out = data["market_outlook_rationale"].lower()
+    assert "surging wti crude" in out          # crude pre-modifier flipped
+    assert "decline" in out                    # S&P's own move untouched
+    assert "advance" not in out                # decline NOT flipped to advance
+    assert not [v for v in gmc._check_numeric_consistency(data, _snap()) if "WTI" in v]
+
+
+def test_premodifier_does_not_touch_other_asset_verb():
+    # "S&P 500 fell and WTI crude jumped" — both coherent; crude's backward pass must not
+    # reach across "and" to flip the S&P's "fell".
+    data = {"equities_commentary": "The S&P 500 fell and WTI crude jumped on supply fears."}
+    n = gmc._correct_direction_words(data, _snap())
+    assert "fell" in data["equities_commentary"].lower()
+    assert "jumped" in data["equities_commentary"].lower()
