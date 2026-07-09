@@ -693,3 +693,91 @@ No UI/frontend, prompt/model, report/PDF, validator-rule, auth-business-logic,
 rate-limit, data-freshness, send-ledger, runtime-config, or deploy-mechanism
 changes. D3 (profile_color/avatar validation) and D4 (dotted deep tickers)
 remain deferred. yfinance crumb-noise cleanup remains a separate follow-up.
+
+## PR I — Production logging integrity (stdout hijack fix) (DEPLOYED 2026-07-09 via recovery run)
+
+Commits: C1+C2 `46ebc4d` (fix + 12 regression tests; committed during the 7/9
+email-recovery to clear the dirty guard) → C3 (this doc). Deployed 2026-07-09
+15:35 UTC as part of the recovery re-run (deploy stamp `da6b7f9d735c`).
+
+### Root cause
+
+`providers/openbb_provider.py:_suppress_yf_call` wrapped every yfinance call in
+`contextlib` redirect-stdout/-stderr against a shared StringIO, INSIDE
+ThreadPoolExecutor workers. Those context managers swap the PROCESS-GLOBAL
+stdout/stderr and are not thread-safe: with the app fanning out yfinance calls
+across 8-worker request pools, interleaved enter/exit pairs (and workers
+abandoned by the 30s timeout) restored stale stream objects, leaving the
+process's stdout permanently bound to a dead StringIO shortly after every
+service start.
+
+**Never wrap worker-thread code in contextlib stream redirection.** It mutates
+global interpreter state; any concurrency makes restoration order undefined.
+
+### Impact period
+
+Since the initial commit — which means the ENTIRE PR F warn-only window
+(2026-06-11 → 2026-07-08) collected zero valid observations: every
+`[rate_limit][WARN] would-429` line, every PR H `[api_error]` line, and all
+deep-worker print() output was silently swallowed (journal shows 0 such lines
+EVER, while uvicorn logging — which captured a direct stderr reference at
+startup — kept working). Discovered 2026-07-08 when a threshold-crossing
+auth_login probe produced 17 origin 401s and zero warn lines, then a forced
+[api_error] (garbage-ticker /api/chart) also never reached the journal.
+
+### The fix
+
+- `_suppress_yf_call` keeps its ThreadPoolExecutor + hard timeout + returns
+  None on timeout/error — behavior identical for all callers.
+- yfinance noise (Invalid-Crumb 401s etc.) is silenced at its LOGGER instead:
+  module-level `logging.getLogger("yfinance").setLevel(logging.CRITICAL)`.
+  Scoped: application, uvicorn, watchdog, rate-limit, deep-worker, and
+  api_error output are untouched; the root logger is not reconfigured.
+- `tests/test_provider_logging_integrity.py` pins: stream identity after
+  normal/concurrent/timed-out provider calls; print observability afterwards
+  (incl. representative [api_error] and would-429 lines); timeout/fallback
+  semantics; yfinance-only logger scoping; and a structural lint banning
+  stream redirection from the module.
+
+### Canonical post-deploy probes (run after any deploy touching this path)
+
+```bash
+# 1. Positive control — force one [api_error] line, then confirm it lands:
+curl.exe -s "https://epm-market-intelligence.com/api/chart?ticker=ZZZZZZZZZZ&period=1y"
+ssh -i ~/.ssh/epm_server dporter02@100.101.63.65 \
+  "journalctl -u epm.service --since '10 min ago' | grep api_error"
+# expect: [api_error] handler=get_chart exception=ValueError(...)
+
+# 2. Rate-limit warn channel — 17 junk POSTs cross auth_login 15/300s:
+for i in $(seq 1 17); do
+  curl -s -o /dev/null -X POST \
+    https://epm-market-intelligence.com/api/auth/login \
+    -H 'Content-Type: application/json' \
+    -d '{"username":"rl-probe","password":"x","remember_me":false}'
+done
+ssh -i ~/.ssh/epm_server dporter02@100.101.63.65 \
+  "journalctl -u epm.service --since '10 min ago' | grep rate_limit"
+# expect: would-429 bucket=auth_login lines; ip= must be the real public IP,
+# NOT 127.0.0.1. All 17 requests still return 401 (warn-only).
+
+# 3. Uvicorn INFO + watchdog lines still present in the journal.
+```
+
+If probe 1 or 2 stays silent after this fix, do NOT trust any journal-absence
+conclusion — treat print observability as broken and investigate before using
+warn data.
+
+### Rollback
+
+`git revert 46ebc4d` + redeploy restores the old suppression (functional but
+re-breaks print observability and re-silences the warn channel). No flags or
+artifacts involved. The yfinance journal noise returning is the visible sign
+of a rollback.
+
+### Warn-window requirement
+
+The pre-2026-07-09 warn window is VOID. RATE_LIMIT_ENFORCE stays 0 until a new
+3–7 day observation window passes with the probes above proving the channel
+works and no false-positive would-429 lines from legitimate browsing.
+SEND_REQUIRE_PDF stays 0 until ≥5 consecutive verified pdf_ok:true runs
+(streak: 7/6, 7/7, 7/8, 7/9 = 4 as of this doc).
