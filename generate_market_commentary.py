@@ -2741,7 +2741,7 @@ def _recent_calendar_release_names(cutoff) -> list[str]:
         return []
 
 
-def load_recent_macro_prints(lookback_days: int = 10) -> list[dict]:
+def load_recent_macro_prints(lookback_days: int = 10, recent_only: bool = False) -> list[dict]:
     """Return recently-released macro prints with actual + prior values for the
     economics recap. Reads data/market_data_arbitrated.json (written by
     data_arbiter.py). Supplies the ACTUAL figures so economics_commentary recaps
@@ -2823,6 +2823,12 @@ def load_recent_macro_prints(lookback_days: int = 10) -> list[dict]:
         })
     # Recent releases first, then by indicator order already established.
     out.sort(key=lambda r: (not r["recent"],))
+    # recent_only honours this loader's contract for the LLM payload: a monthly/quarterly
+    # series whose observation is stale AND that was not released within the window is DROPPED
+    # rather than handed to the model, which otherwise recaps a 39-day-old PCE as if it were
+    # current inflation (2026-07-09: "inflation remains sticky at 4.1% YoY" cited a 5/31 PCE).
+    if recent_only:
+        out = [r for r in out if r["recent"]]
     return out
 
 
@@ -5549,6 +5555,51 @@ _INVERSION_PHRASES = (
     (re.compile(r"\bcurve\s+remains\s+inverted\b", re.IGNORECASE), "curve remains positively sloped"),
 )
 
+# 10s-2s slope DIRECTION vs the authoritative curve. 2026-07-09: the model wrote "narrowing
+# the 10s-2s spread by 1 bp to 35 bps" while 10Y rose 7 bp vs 2Y +6 bp — the spread WIDENED
+# (steepened) by 1 bp. The spread's own arbitrated `change` field is degenerate (0.0), so the
+# true direction is recomputed from the tenor deltas (10Y_chg - 2Y_chg). Only the verb is
+# flipped (the "1 bp"/"35 bps" figures are left intact); tense/case preserved. Gated to
+# sentences naming the curve/2s10s and never a "credit spread" clause.
+_SPREAD_CTX_RE = re.compile(r"10s[-\s]?2s|2s[-\s]?10s|yield\s+curve|\bthe\s+curve\b", re.IGNORECASE)
+_SPREAD_NARROW_TO_WIDEN = {
+    "narrowed": "widened", "narrowing": "widening", "narrows": "widens", "narrow": "widen",
+    "flattened": "steepened", "flattening": "steepening", "flattens": "steepens", "flatten": "steepen",
+    "tightened": "widened", "tightening": "widening", "tightens": "widens", "tighten": "widen",
+}
+_SPREAD_WIDEN_TO_NARROW = {
+    "widened": "narrowed", "widening": "narrowing", "widens": "narrows", "widen": "narrow",
+    "steepened": "flattened", "steepening": "flattening", "steepens": "flattens", "steepen": "flatten",
+}
+_SPREAD_NARROW_RE = re.compile(
+    r"\b(" + "|".join(sorted(_SPREAD_NARROW_TO_WIDEN, key=len, reverse=True)) + r")\b", re.IGNORECASE)
+_SPREAD_WIDEN_RE = re.compile(
+    r"\b(" + "|".join(sorted(_SPREAD_WIDEN_TO_NARROW, key=len, reverse=True)) + r")\b", re.IGNORECASE)
+
+
+def _fix_spread_direction(text: str, spread_chg_bp: float | None) -> tuple[str, int]:
+    """Flip a 10s-2s slope verb (narrow/flatten/tighten <-> widen/steepen) that contradicts
+    the recomputed spread change. Per-sentence, gated to curve context, credit-spread safe."""
+    if spread_chg_bp is None or abs(spread_chg_bp) < 0.5:
+        return text, 0
+    mapping = _SPREAD_NARROW_TO_WIDEN if spread_chg_bp > 0 else _SPREAD_WIDEN_TO_NARROW
+    rx = _SPREAD_NARROW_RE if spread_chg_bp > 0 else _SPREAD_WIDEN_RE
+    n = 0
+    out = []
+    for sent in re.split(r"(?<=[.!?])\s+", text):
+        if _SPREAD_CTX_RE.search(sent) and "credit" not in sent.lower():
+            def _sub(m):
+                nonlocal n
+                w = m.group(1)
+                repl = mapping.get(w.lower())
+                if not repl:
+                    return w
+                n += 1
+                return repl[0].upper() + repl[1:] if w[:1].isupper() else repl
+            sent = rx.sub(_sub, sent)
+        out.append(sent)
+    return " ".join(out), n
+
 _YIELD_BP_FIELDS = ("fixed_income_commentary", "market_outlook_rationale",
                     "cross_asset_synthesis", "economics_commentary")
 
@@ -5582,6 +5633,15 @@ def _correct_yield_bp_magnitude(data: dict, snapshot: dict | None = None) -> int
     except (TypeError, ValueError):
         spread_positive = False
 
+    # 2s10s slope CHANGE (bp) recomputed from the tenor deltas — the spread's own arbitrated
+    # `change` is often degenerate (0.0), so derive direction from 10Y_chg - 2Y_chg.
+    try:
+        y2c = float((curve.get("2-Year Yield") or {}).get("change"))
+        y10c = float((curve.get("10-Year Yield") or {}).get("change"))
+        spread_chg_bp = round((y10c - y2c) * 100, 1)
+    except (TypeError, ValueError):
+        spread_chg_bp = None
+
     def _fix_text(text: str) -> tuple[str, int]:
         n = 0
         for tenor, correct in tenor_bp.items():
@@ -5602,6 +5662,8 @@ def _correct_yield_bp_magnitude(data: dict, snapshot: dict | None = None) -> int
             for rx, repl in _INVERSION_PHRASES:
                 text, k = rx.subn(repl, text)
                 n += k
+        text, k = _fix_spread_direction(text, spread_chg_bp)
+        n += k
         return text, n
 
     fixes = 0
@@ -9173,7 +9235,7 @@ def main() -> int:
         "earnings_calendar":         _top_earnings,
         "news_sentiment_summary":    sent_summary,
         "recent_earnings_actuals":   load_recent_earnings_actuals(),
-        "recent_macro_prints":       load_recent_macro_prints(),
+        "recent_macro_prints":       load_recent_macro_prints(recent_only=True),
         "sector_performance":        sector_perf,
         # item #8: prior-day continuity for outlook call
         "prior_day_label":           _prev.get("market_outlook_label"),
