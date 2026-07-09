@@ -5096,7 +5096,15 @@ def _check_numeric_consistency(data: dict, snapshot: dict) -> list[str]:
             )
 
     # Direction-word check: strong directional words that contradict the snapshot sign.
-    _BEARISH_STRONG = {"selloff", "plunged", "plunge", "collapsed", "collapse", "tumbled", "tumble"}
+    # Scoped to the ASSET'S OWN SENTENCE (must share a clause with an asset keyword) so a
+    # commodities field that says "gold plunged" on a down-gold day is not mis-flagged as a
+    # WTI contradiction, and so the validator only demands what the scoped _correct_direction_words
+    # corrector can actually deliver. 2026-07-09: WTI +4.37% on the Iran spike but the LLM's
+    # crude language ("selloff"/"collapse") kept tripping the old field-global word-set check —
+    # words the flip map didn't cover and that weren't adjacent to a "crude" keyword — forcing a
+    # deterministic fallback and a blocked send.
+    _BEARISH_STRONG = {"selloff", "sell-off", "plunged", "plunge", "collapsed", "collapse",
+                       "tumbled", "tumble"}
     _BULLISH_STRONG = {"surged", "surge", "soared", "soar", "skyrocketed"}
     _FIELD_ASSET = {
         "equities_commentary":     "S&P 500",
@@ -5104,20 +5112,38 @@ def _check_numeric_consistency(data: dict, snapshot: dict) -> list[str]:
         "currencies_commentary":   "U.S. Dollar (DXY)",
         "fixed_income_commentary": "10-Yr Yield",
     }
+    # Substrings that anchor a sentence to the mapped asset (case-insensitive).
+    _FIELD_ASSET_KW = {
+        "equities_commentary":     ("s&p", "500", "equit", "stock", "index", "benchmark"),
+        "commodities_commentary":  ("wti", "crude", "oil"),
+        "currencies_commentary":   ("dollar", "dxy", "greenback"),
+        "fixed_income_commentary": ("10-year", "10-yr", "10 year", "treasur", "yield", "note", "bond"),
+    }
     for narrative_key, snap_key in _FIELD_ASSET.items():
         snap = (snapshot or {}).get(snap_key) or {}
         truth_pct = snap.get("pct_change")
         if truth_pct is None:
             continue
         prose = data.get(narrative_key, "")
-        words = set((prose if isinstance(prose, str) else " ".join(prose or [])).lower().split())
-        if truth_pct > 0.3 and words & _BEARISH_STRONG:
+        prose_str = prose if isinstance(prose, str) else " ".join(prose or [])
+        anchors = _FIELD_ASSET_KW.get(narrative_key, ())
+        wrong = _BEARISH_STRONG if truth_pct > 0.3 else (_BULLISH_STRONG if truth_pct < -0.3 else set())
+        if not wrong:
+            continue
+        hit = False
+        for sent in re.split(r"(?<=[.!?])\s+", prose_str):
+            sl = sent.lower()
+            if anchors and not any(a in sl for a in anchors):
+                continue
+            toks = {w.strip(".,;:!?\"'()[]") for w in sl.split()}
+            if toks & wrong:
+                hit = True
+                break
+        if hit:
+            polarity = "positive" if truth_pct > 0 else "negative"
+            kind = "bearish" if truth_pct > 0 else "bullish"
             violations.append(
-                f"{snap_key}: snapshot {truth_pct:+.2f}% (positive) but narrative uses strongly bearish language"
-            )
-        elif truth_pct < -0.3 and words & _BULLISH_STRONG:
-            violations.append(
-                f"{snap_key}: snapshot {truth_pct:+.2f}% (negative) but narrative uses strongly bullish language"
+                f"{snap_key}: snapshot {truth_pct:+.2f}% ({polarity}) but narrative uses strongly {kind} language"
             )
 
     # pre_market_bullets: each bullet that names a known asset and cites a % must match sign.
@@ -5608,7 +5634,8 @@ _DIR_DOWN_TO_UP = {
     "softened": "firmed", "soften": "firm", "softens": "firms", "softening": "firming",
     "tumbled": "surged", "tumble": "surge", "tumbles": "surges", "tumbling": "surging",
     "plunged": "soared", "plunge": "soar", "plunges": "soars", "plunging": "soaring",
-    "sold off": "rallied",
+    "collapsed": "surged", "collapse": "surge", "collapses": "surges", "collapsing": "surging",
+    "sold off": "rallied", "selloff": "rally", "sell-off": "rally",
 }
 _DIR_UP_TO_DOWN = {
     "rose": "fell", "rise": "fall", "rises": "falls", "rising": "falling", "risen": "fallen",
@@ -5618,6 +5645,7 @@ _DIR_UP_TO_DOWN = {
     "jumped": "dropped", "jump": "drop", "jumps": "drops", "jumping": "dropping",
     "surged": "tumbled", "surge": "tumble", "surges": "tumbles", "surging": "tumbling",
     "soared": "plunged", "soar": "plunge", "soars": "plunges", "soaring": "plunging",
+    "skyrocketed": "collapsed",
     "rallied": "sold off", "rallies": "sold off", "rallying": "selling off",
     "firmed": "eased", "firm": "ease", "firms": "eases", "firming": "easing",
     "strengthened": "weakened", "strengthen": "weaken",
