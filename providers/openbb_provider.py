@@ -1,15 +1,24 @@
 from __future__ import annotations
 
-from contextlib import redirect_stderr, redirect_stdout
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
-from io import StringIO
 from threading import RLock
 from time import time
+import logging
 import re
 from typing import Any
 
 import pandas as pd
+
+# yfinance noise (Invalid-Crumb 401s, decode warnings) is suppressed at its
+# LOGGER — scoped to the "yfinance" logger only, so application/uvicorn/
+# watchdog/rate-limit/api_error output is untouched. NEVER suppress via
+# contextlib redirect-stdout/-stderr here: those swap the process-global
+# stdout/stderr streams and are not thread-safe — under the app's request
+# ThreadPools they left production stdout permanently bound to a dead
+# StringIO, silently swallowing every print() in the process (found 2026-07-08;
+# see docs/ops/production-hardening-notes.md, PR I).
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 
 @dataclass
@@ -321,16 +330,14 @@ class OpenBBProvider:
 
     @staticmethod
     def _suppress_yf_call(fn, timeout: float = 30.0):
-        """Run fn() with suppressed output and a hard timeout.
-        Returns None if the call hangs (e.g. Yahoo rate-limit) instead of blocking forever."""
-        sink = StringIO()
+        """Run fn() with a hard timeout; returns None on timeout or error.
 
-        def _run():
-            with redirect_stdout(sink), redirect_stderr(sink):
-                return fn()
-
+        Output suppression happens at the module-level yfinance logger config,
+        NOT here. This function must never touch the global stdout/stderr
+        streams — the old contextlib redirect-stdout/-stderr wrapper corrupted
+        them process-wide under concurrency (2026-07-08 incident)."""
         with ThreadPoolExecutor(max_workers=1) as _ex:
-            _fut = _ex.submit(_run)
+            _fut = _ex.submit(fn)
             try:
                 return _fut.result(timeout=timeout)
             except FuturesTimeoutError:
