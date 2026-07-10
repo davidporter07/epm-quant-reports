@@ -80,18 +80,20 @@ def _write_econ(tmp_path, monkeypatch, econ):
 
 
 def test_recent_only_drops_stale_monthly(tmp_path, monkeypatch):
+    # Uses PPI (a stale NON-inflation-anchor series) so the drop is tested independently of the
+    # 2026-07-10 inflation-anchor exception (which retains one CPI/PCE gauge — see the 0710 file).
     today = date.today()
     fresh = (today - timedelta(days=2)).strftime("%Y-%m-%d")     # weekly claims, recent
-    stale = (today - timedelta(days=39)).strftime("%Y-%m-%d")    # PCE ~39d old, not recent
+    stale = (today - timedelta(days=39)).strftime("%Y-%m-%d")    # PPI ~39d old, not recent
     _write_econ(tmp_path, monkeypatch, {
         "Initial Jobless Claims": {"value": 215000, "prev_value": 210000, "date": fresh},
-        "PCE (YoY)":              {"value": 0.041,  "prev_value": 0.041,  "date": stale},
+        "PPI (YoY)":              {"value": 0.065,  "prev_value": 0.065,  "date": stale},
     })
     monkeypatch.setattr(gmc, "_recent_calendar_release_names", lambda cutoff: set())
 
     all_rows = {r["indicator"] for r in gmc.load_recent_macro_prints()}
-    assert "PCE (YoY)" in all_rows                       # default keeps it (contract intact)
+    assert "PPI (YoY)" in all_rows                       # default keeps it (contract intact)
 
     recent_rows = {r["indicator"] for r in gmc.load_recent_macro_prints(recent_only=True)}
     assert "Initial Jobless Claims" in recent_rows
-    assert "PCE (YoY)" not in recent_rows                # recent_only drops the stale print
+    assert "PPI (YoY)" not in recent_rows                # recent_only drops the stale non-anchor print

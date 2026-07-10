@@ -2741,6 +2741,11 @@ def _recent_calendar_release_names(cutoff) -> list[str]:
         return []
 
 
+# In recent_only mode, one of these is retained as inflation context even when stale
+# (preference order — the richest core gauge first).
+_INFLATION_ANCHORS = ("Core PCE (YoY)", "PCE (YoY)", "Core CPI (YoY)", "CPI (YoY)")
+
+
 def load_recent_macro_prints(lookback_days: int = 10, recent_only: bool = False) -> list[dict]:
     """Return recently-released macro prints with actual + prior values for the
     economics recap. Reads data/market_data_arbitrated.json (written by
@@ -2827,8 +2832,18 @@ def load_recent_macro_prints(lookback_days: int = 10, recent_only: bool = False)
     # series whose observation is stale AND that was not released within the window is DROPPED
     # rather than handed to the model, which otherwise recaps a 39-day-old PCE as if it were
     # current inflation (2026-07-09: "inflation remains sticky at 4.1% YoY" cited a 5/31 PCE).
+    # Exception: retain ONE inflation gauge as context so the recap isn't left bland when no
+    # inflation print is fresh (2026-07-10: economics went generic with zero figures) — the
+    # single latest YoY reading is legitimate context, framed by the prompt as "the latest".
     if recent_only:
-        out = [r for r in out if r["recent"]]
+        kept = [r for r in out if r["recent"]]
+        if not any(r["indicator"] in _INFLATION_ANCHORS for r in kept):
+            for pref in _INFLATION_ANCHORS:
+                anchor = next((r for r in out if r["indicator"] == pref), None)
+                if anchor:
+                    kept.append(anchor)
+                    break
+        out = kept
     return out
 
 
@@ -5600,6 +5615,117 @@ def _fix_spread_direction(text: str, spread_chg_bp: float | None) -> tuple[str, 
         out.append(sent)
     return " ".join(out), n
 
+
+# --- adjacent duplicate-word scrub -------------------------------------------
+# 2026-07-10: session_recap shipped "priced in higher higher-for-longer rate path risks".
+# Collapse an immediately-repeated identical word, restricted to a safelist of function words
+# and directional modifiers so a legitimate repeat is never touched.
+_DUP_WORD_RE = re.compile(
+    r"\b(higher|lower|further|sharply|slightly|modestly|steadily|broadly|materially|"
+    r"significantly|marginally|notably|the|a|to|of|in|on|and)\s+\1\b",
+    re.IGNORECASE)
+
+
+def _dedup_repeated_words(data: dict) -> int:
+    return _map_all_prose(data, lambda t: _DUP_WORD_RE.sub(lambda m: m.group(1), t))
+
+
+# --- yield DIRECTION (verb/noun) vs the authoritative curve sign --------------
+# 2026-07-10: cross_asset_synthesis wrote "the 10-year yield's 1 bp fall" while the 10Y ROSE
+# +1 bp (arbitrated/snapshot/fixed_income/recap all say rose), and fixed_income said "the
+# 30-year yield slipped 1 bp" against a +1 bp arbitrated move. Yields are deliberately excluded
+# from _correct_direction_words (a yield's level != its pct_change), so an inverted yield VERB
+# or trailing NOUN ("...'s 1 bp fall") had no guard. This flips it to agree with the curve.
+# Yield-specific vocabulary (no FX "firmed/strengthened"); verb + noun forms.
+_YIELD_DIR_DOWN_TO_UP = {
+    "fell": "rose", "fall": "rise", "falls": "rises", "falling": "rising",
+    "slipped": "rose", "slip": "rise", "slips": "rises", "slipping": "rising",
+    "slid": "rose", "slide": "rise", "sliding": "rising",
+    "eased": "rose", "ease": "rise", "eases": "rises", "easing": "rising",
+    "declined": "climbed", "decline": "gain", "declines": "gains", "declining": "climbing",
+    "dropped": "climbed", "drop": "gain", "drops": "gains", "dropping": "climbing",
+    "dipped": "climbed", "dip": "gain", "dips": "gains", "dipping": "climbing",
+    "retreated": "climbed", "retreat": "gain", "retreats": "gains", "retreating": "climbing",
+    "sank": "jumped", "sink": "jump", "sinking": "jumping",
+}
+_YIELD_DIR_UP_TO_DOWN = {
+    "rose": "fell", "rise": "fall", "rises": "falls", "rising": "falling",
+    "climbed": "slipped", "climb": "slip", "climbs": "slips", "climbing": "slipping",
+    "jumped": "dropped", "jump": "drop", "jumps": "drops", "jumping": "dropping",
+    "gained": "declined", "gain": "decline", "gains": "declines", "gaining": "declining",
+    "advanced": "declined", "advance": "decline", "advances": "declines", "advancing": "declining",
+    "increased": "decreased", "increase": "decrease",
+    "surged": "sank", "spiked": "dropped", "spike": "drop",
+}
+_YIELD_TENOR_RES = [
+    (re.compile(r"\b2[-\s]?(?:year|yr)\b", re.IGNORECASE),  "2-Year Yield"),
+    (re.compile(r"\b10[-\s]?(?:year|yr)\b", re.IGNORECASE), "10-Year Yield"),
+    (re.compile(r"\b30[-\s]?(?:year|yr)\b", re.IGNORECASE), "30-Year Yield"),
+]
+_YIELD_DIR_DOWN_RE = re.compile(
+    r"\b(" + "|".join(sorted(_YIELD_DIR_DOWN_TO_UP, key=len, reverse=True)) + r")\b", re.IGNORECASE)
+_YIELD_DIR_UP_RE = re.compile(
+    r"\b(" + "|".join(sorted(_YIELD_DIR_UP_TO_DOWN, key=len, reverse=True)) + r")\b", re.IGNORECASE)
+
+
+def _yield_dir_scope(text: str, start: int, self_tenor: str) -> int:
+    """End index of the direction-rewrite scope for a tenor keyword at `start`: capped at the
+    first causal/driver conjunction, the next DIFFERENT tenor keyword, a comma/semicolon/colon,
+    or 80 chars — so one tenor's fix never reaches another's clause or a driver clause."""
+    end = len(text)
+    m = _DIR_CLAUSE_BOUNDARY_RE.search(text[start:], 1)
+    if m:
+        end = min(end, start + m.start())
+    for rx, ten in _YIELD_TENOR_RES:
+        if ten == self_tenor:
+            continue
+        mm = rx.search(text, start + 1)
+        if mm:
+            end = min(end, mm.start())
+    for b in (",", ";", ":"):
+        p = text.find(b, start + 1)
+        if p != -1:
+            end = min(end, p)
+    return min(end, start + 80)
+
+
+def _fix_yield_direction(text: str, tenor_chg: dict) -> tuple[str, int]:
+    """Flip a yield's directional verb/noun to agree with the arbitrated tenor change sign.
+    Scoped per-tenor to that tenor's own clause. Sub-0.5bp (~flat) tenors are left alone."""
+    if not isinstance(text, str) or not text or not tenor_chg:
+        return text, 0
+    n = 0
+    for rx, tenor in _YIELD_TENOR_RES:
+        chg = tenor_chg.get(tenor)
+        if chg is None or abs(chg) < 0.005:
+            continue
+        up = chg > 0
+        mp = _YIELD_DIR_DOWN_TO_UP if up else _YIELD_DIR_UP_TO_DOWN
+        flip_rx = _YIELD_DIR_DOWN_RE if up else _YIELD_DIR_UP_RE
+        search_from = 0
+        while True:
+            m = rx.search(text, search_from)
+            if not m:
+                break
+            s = m.start()
+            e = _yield_dir_scope(text, s, tenor)
+
+            def _sub(mm):
+                nonlocal n
+                w = mm.group(1)
+                repl = mp.get(w.lower())
+                if not repl:
+                    return w
+                n += 1
+                return repl[0].upper() + repl[1:] if w[:1].isupper() else repl
+
+            seg2 = flip_rx.sub(_sub, text[s:e])
+            if seg2 != text[s:e]:
+                text = text[:s] + seg2 + text[e:]
+                e = s + len(seg2)
+            search_from = max(e, s + 1)
+    return text, n
+
 _YIELD_BP_FIELDS = ("fixed_income_commentary", "market_outlook_rationale",
                     "cross_asset_synthesis", "economics_commentary")
 
@@ -5642,6 +5768,14 @@ def _correct_yield_bp_magnitude(data: dict, snapshot: dict | None = None) -> int
     except (TypeError, ValueError):
         spread_chg_bp = None
 
+    # Signed tenor changes for the yield-DIRECTION corrector (verb/noun vs the curve sign).
+    tenor_chg: dict[str, float] = {}
+    for _t in ("2-Year Yield", "10-Year Yield", "30-Year Yield"):
+        try:
+            tenor_chg[_t] = float((curve.get(_t) or {}).get("change"))
+        except (TypeError, ValueError):
+            pass
+
     def _fix_text(text: str) -> tuple[str, int]:
         n = 0
         for tenor, correct in tenor_bp.items():
@@ -5663,6 +5797,8 @@ def _correct_yield_bp_magnitude(data: dict, snapshot: dict | None = None) -> int
                 text, k = rx.subn(repl, text)
                 n += k
         text, k = _fix_spread_direction(text, spread_chg_bp)
+        n += k
+        text, k = _fix_yield_direction(text, tenor_chg)
         n += k
         return text, n
 
@@ -7048,6 +7184,13 @@ def _correct_future_econ_event_weekday(data: dict) -> int:
         core = re.sub(r"^(?:the\s+|u\.?s\.?\s+|fed\s+)+", "", nm, flags=re.IGNORECASE).strip()
         if core and core.lower() != nm.lower() and len(core) >= 4:
             out.append(core)
+        # Leading acronym: prose abbreviates a report to its acronym ("CPI Inflation Report"
+        # -> "Thursday's CPI print"), which neither the full name nor the prefix-stripped core
+        # substring-matches. Register a 3-6 char leading acronym so the possessive weekday
+        # still binds (2026-07-10: "Thursday's CPI" survived while CPI was Tuesday).
+        acro = re.match(r"^([A-Z]{3,6})\b", nm)
+        if acro:
+            out.append(acro.group(1))
         return out
 
     ev_items = [
@@ -7840,8 +7983,9 @@ def sanitize_commentary(data: dict, snapshot: dict | None = None, source_text: s
         total += _correct_dollar_direction(data, snapshot)
         total += _scrub_false_weekly_claims(data, snapshot)
         total += _scrub_flat_tape_risk_regime(data, snapshot)  # force 'mixed' on a flat tape
-    total += _correct_yield_bp_magnitude(data)   # force tenor bp moves to the arbitrated curve
+    total += _correct_yield_bp_magnitude(data)   # force tenor bp moves + slope/direction to the arbitrated curve
     total += _scrub_inverted_yield_causation(data)  # drop 'yield rose driven by soft data' inversions
+    total += _dedup_repeated_words(data)          # collapse "higher higher-for-longer" style repeats
     total += _correct_econ_print_direction(data)  # flip econ verb that contradicts its MoM numbers
     total += _scrub_ungrounded_geo_causation(data)  # drop Iran causal clauses when geo read is unclear/absent
     total += _scrub_degenerate_repetition(data)
