@@ -1220,6 +1220,10 @@ def build_portfolio_spotlight(df: pd.DataFrame) -> tuple[list, list]:
 # tactical-positioning stance. These are sector ETF tickers, not single stocks.
 _CYC_SECTORS: frozenset[str] = frozenset({"XLK", "XLY", "XLI", "XLC", "XLF", "XLB"})
 _DEF_SECTORS: frozenset[str] = frozenset({"XLP", "XLU", "XLV", "XLRE"})
+# Growth bellwethers — a clean "risk-on" tape is led by these, not by value/late-cycle
+# cyclicals (Materials/Financials/Industrials). Used to demote a value-led tape that also has a
+# defensive co-leading to "Mixed" rather than a full risk-on label.
+_GROWTH_SECTORS: frozenset[str] = frozenset({"XLK", "XLY"})
 
 
 def build_tactical_positioning(
@@ -1249,7 +1253,13 @@ def build_tactical_positioning(
         cyc_bot = sum(1 for s in bot3 if s["ticker"] in _CYC_SECTORS)
         def_bot = sum(1 for s in bot3 if s["ticker"] in _DEF_SECTORS)
         if cyc_top >= 2 and def_bot >= 1:
-            stance = "Risk-on, pro-cyclical"
+            # A clean risk-on tape is GROWTH-led (Tech/Discretionary). When the cyclical
+            # leaders are only value/late-cycle names (Materials/Financials/Industrials),
+            # growth lags, AND a defensive co-leads the top3, the tape is rotational/mixed —
+            # not a full "risk-on" (2026-07-13: Materials+Staples+Comm led, Tech/Fins lagged,
+            # yet stance read "Risk-on, pro-cyclical" beside a "Defensive Rotation" spotlight).
+            _growth_top = any(s["ticker"] in _GROWTH_SECTORS for s in top3)
+            stance = "Mixed signals" if (not _growth_top and def_top >= 1) else "Risk-on, pro-cyclical"
         elif def_top >= 2 and cyc_bot >= 1:
             # "Risk-off" implies fear; only assert it when VIX corroborates. On a
             # subdued VIX the same defensive sector tilt is a rotation, not risk
@@ -5647,6 +5657,9 @@ _YIELD_DIR_DOWN_TO_UP = {
     "dipped": "climbed", "dip": "gain", "dips": "gains", "dipping": "climbing",
     "retreated": "climbed", "retreat": "gain", "retreats": "gains", "retreating": "climbing",
     "sank": "jumped", "sink": "jump", "sinking": "jumping",
+    # adverbial two-word moves (2026-07-13: 30Y "edged up 1 bp" while it fell)
+    "edged down": "edged up", "ticked down": "ticked up", "inched down": "inched up",
+    "moved lower": "moved higher", "backed down": "backed up",
 }
 _YIELD_DIR_UP_TO_DOWN = {
     "rose": "fell", "rise": "fall", "rises": "falls", "rising": "falling",
@@ -5656,6 +5669,8 @@ _YIELD_DIR_UP_TO_DOWN = {
     "advanced": "declined", "advance": "decline", "advances": "declines", "advancing": "declining",
     "increased": "decreased", "increase": "decrease",
     "surged": "sank", "spiked": "dropped", "spike": "drop",
+    "edged up": "edged down", "ticked up": "ticked down", "inched up": "inched down",
+    "moved higher": "moved lower", "backed up": "backed down",
 }
 _YIELD_TENOR_RES = [
     (re.compile(r"\b2[-\s]?(?:year|yr)\b", re.IGNORECASE),  "2-Year Yield"),
@@ -6716,6 +6731,126 @@ def _scrub_ungrounded_geo_causation(data: dict) -> int:
     return fixes
 
 
+# --- oil-decline-attributed-to-escalation inversion --------------------------
+# 2026-07-13: the geo grounding was correctly "escalating" (weekend Hormuz closure + US
+# strikes), but it was applied to the FRIDAY recap where oil actually FELL on de-escalation,
+# producing "WTI Crude fell -0.93% ... driven by reports that Iran closed the Strait of Hormuz
+# and expanded attacks" — a causal inversion (a supply-disruption/escalation RAISES oil, so a
+# DECLINE cannot be driven by it). Independent of geo direction: when oil fell on the day, strip
+# any causal clause that attributes the move to an escalation/supply-shock driver, keeping the
+# price fact. (Easing→oil-down is coherent and uses different keywords, so it is untouched.)
+_OIL_KW_RE = re.compile(r"\b(?:wti|crude|oil|brent)\b", re.IGNORECASE)
+_OIL_DOWN_RE = re.compile(
+    r"\b(?:fell|fall|falling|slipp\w*|dropp\w*|declin\w*|slid|slide|eas\w*|retreat\w*|"
+    r"sank|soften\w*|lower|down|-\d)\b", re.IGNORECASE)
+_ESCAL_DRIVER_RE = re.compile(
+    r"hormuz|strait|expand\w*\s+(?:attack|strike|conflict)|widen\w*\s+(?:attack|strike)|"
+    r"supply\s+(?:shock|disruption|fear|concern)|escalat\w*|renewed\s+(?:conflict|strike|war|"
+    r"tension)|military\s+(?:strike|action|campaign|escalat)|clos\w*\s+the\s+strait|"
+    r"attack\w*\s+on|missile\s+strike|supply\s+shock",
+    re.IGNORECASE)
+_OIL_CAUSAL_RE = re.compile(
+    r"\b(driven by|due to|because of|fueled by|fuelled by|on the back of|amid|reflecting|"
+    r"as reports|on reports|after reports|following)\b", re.IGNORECASE)
+
+
+def _scrub_oil_escalation_inversion(data: dict, snapshot: dict | None = None) -> int:
+    """When the day's oil actually fell, strip a causal clause blaming an escalation/supply-shock
+    driver (which would RAISE oil) — keep the price fact, drop the inverted causation."""
+    wti = (snapshot or {}).get("WTI Crude") or {}
+    try:
+        pct = float(wti.get("pct_change"))
+    except (TypeError, ValueError):
+        return 0
+    if pct >= -0.02:          # only fire when oil genuinely declined
+        return 0
+
+    def _fix(text: str) -> str:
+        if not isinstance(text, str) or not text:
+            return text
+        out = []
+        for sent in re.split(r"(?<=[.!?])\s+", text):
+            sl = sent.lower()
+            if not (_OIL_KW_RE.search(sl) and _OIL_DOWN_RE.search(sl) and _ESCAL_DRIVER_RE.search(sl)):
+                out.append(sent)
+                continue
+            cut = None
+            for m in _OIL_CAUSAL_RE.finditer(sent):
+                head, tail = sent[:m.start()], sent[m.start():]
+                if _ESCAL_DRIVER_RE.search(tail) and _OIL_KW_RE.search(head) and len(head.strip()) > 12:
+                    cut = m.start()
+                    break
+            if cut is not None:
+                h = sent[:cut].rstrip(" ,;:")
+                if h and h[-1] not in ".!?":
+                    h += "."
+                out.append(h)
+            else:
+                out.append(sent)   # can't cleanly cut → leave (never blank the fact)
+        return " ".join(out)
+
+    return _map_all_prose(data, _fix)
+
+
+# --- ungrounded earnings-driver scrub ----------------------------------------
+# 2026-07-13: the recap credited Friday's rally to "Nvidia and SanDisk delivered blockbuster
+# quarters" — NVDA last reported in May, neither reported that day (real driver: SK Hynix's
+# listing + META). Attributing a session move to a SPECIFIC earnings event the sources do not
+# ground is fabrication. Conservative: only recognised mega-cap names are checked; if NONE of
+# them is grounded (in the earnings calendar OR named with an earnings context in the news
+# corpus) the superlative-earnings CLAIM is softened to a neutral "led gains" (names kept, no
+# false earnings event) — unknown names are never touched, and the clause is never deleted.
+_EARN_NAME_TICKER = {
+    "nvidia": "NVDA", "sandisk": "SNDK", "western digital": "WDC", "microsoft": "MSFT",
+    "apple": "AAPL", "alphabet": "GOOGL", "google": "GOOGL", "amazon": "AMZN", "meta": "META",
+    "tesla": "TSLA", "broadcom": "AVGO", "micron": "MU", "amd": "AMD", "netflix": "NFLX",
+    "intel": "INTC", "qualcomm": "QCOM", "sk hynix": "HXSCL", "samsung": "SSNLF",
+}
+_EARN_CLAIM_RE = re.compile(
+    r"\b([A-Z][A-Za-z.&'’-]+(?:\s+(?:and|&)\s+[A-Z][A-Za-z.&'’-]+)*)\s+"
+    r"(?:delivered|reported|posted|announced|unveiled|notched|logged|put\s+up)\s+"
+    r"(?:a\s+|an\s+|another\s+|its\s+|their\s+)?"
+    r"(?:blockbuster|record|blowout|stellar|robust|strong|monster|standout|solid|impressive|blow-out)\s+"
+    r"(?:quarter\w*|earnings|results|numbers|report)",
+    re.IGNORECASE)
+
+
+def _scrub_ungrounded_earnings_driver(data: dict) -> int:
+    grounded_tk: set[str] = set()
+    news_blob = ""
+    try:
+        e = json.loads((DATA_DIR / "enrichment.json").read_text(encoding="utf-8"))
+        for r in (e.get("earnings_calendar") or []):
+            s = str(r.get("symbol", "")).upper().strip()
+            if s:
+                grounded_tk.add(s)
+        news_blob = (json.dumps(e.get("company_news") or []) +
+                     json.dumps(e.get("market_news") or [])).lower()
+    except Exception:
+        return 0
+
+    def _grounded(name: str, tk: str) -> bool:
+        if tk in grounded_tk:
+            return True
+        return bool(re.search(
+            re.escape(name) + r"[^.]{0,60}?(earnings|quarter|results|profit|revenue|beat|miss|eps)",
+            news_blob))
+
+    def _fix(text: str) -> str:
+        def _sub(m):
+            names = m.group(1)
+            rec = [(n, tk) for n, tk in _EARN_NAME_TICKER.items()
+                   if re.search(r"\b" + re.escape(n) + r"\b", names, re.IGNORECASE)]
+            if not rec:
+                return m.group(0)                       # unrecognised — cannot verify, leave it
+            if any(_grounded(n, tk) for n, tk in rec):
+                return m.group(0)                       # at least one is grounded — keep
+            return names + " led gains"                 # ungrounded earnings event → hedge
+        return _EARN_CLAIM_RE.sub(_sub, text)
+
+    return _map_all_prose(data, _fix)
+
+
 # --- Fed "rate hike" language correction -----------------------------------
 # The report has no rate-expectations feed, and in the current regime the Fed is not
 # expected to HIKE — the live debate is cuts vs. higher-for-longer. Regression 2026-06-02:
@@ -7246,6 +7381,118 @@ def _correct_future_econ_event_weekday(data: dict) -> int:
         return "".join(out)
 
     return _map_all_prose(data, _fix)
+
+
+# --- relative "next week" vs an event that is actually THIS week ---------------
+# 2026-07-13: watch_today said "...ahead of the CPI report next week" while CPI was TOMORROW
+# (Tuesday, this calendar week). The weekday corrector only rewrites weekday NAMES, not a
+# relative "next week". When a named calendar event falls within THIS calendar week (today →
+# the coming Sunday), rewrite an adjacent "next week" to "this week".
+def _correct_event_relative_week(data: dict) -> int:
+    from datetime import date as _date, timedelta as _td
+    try:
+        rd = str(data.get("report_date") or data.get("narrative_source_date") or "")[:10]
+        if not rd:
+            rd = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today_dt = _date.fromisoformat(rd)
+    except Exception:
+        return 0
+    week_end = today_dt + _td(days=(6 - today_dt.weekday()))   # coming Sunday
+    variants: list[str] = []
+    try:
+        cal_path = DATA_DIR / "economic_calendar.json"
+        if not cal_path.exists():
+            return 0
+        cal = json.loads(cal_path.read_text(encoding="utf-8"))
+        for ev in (cal.get("events") or []):
+            nm = str(ev.get("event", "")).strip()
+            d = str(ev.get("date", ""))[:10]
+            if len(nm) < 4 or not d:
+                continue
+            try:
+                dd = _date.fromisoformat(d)
+            except ValueError:
+                continue
+            if today_dt <= dd <= week_end:          # future, but still this calendar week
+                variants.append(nm)
+                acro = re.match(r"^([A-Z]{3,6})\b", nm)
+                if acro:
+                    variants.append(acro.group(1))
+    except Exception:
+        return 0
+    if not variants:
+        return 0
+    ev_rx = re.compile(
+        r"\b(?:" + "|".join(re.escape(v) for v in sorted(set(variants), key=len, reverse=True)) + r")\b",
+        re.IGNORECASE)
+    nxt_rx = re.compile(r"\bnext\s+week\b", re.IGNORECASE)
+
+    def _fix(text: str) -> str:
+        if not isinstance(text, str) or not text or not nxt_rx.search(text):
+            return text
+        out, last = [], 0
+        for m in nxt_rx.finditer(text):
+            s, e = m.start(), m.end()
+            window = text[max(0, s - 55):min(len(text), e + 55)]
+            if ev_rx.search(window):
+                out.append(text[last:s])
+                out.append("this week" if m.group(0)[:1].islower() else "This week")
+                last = e
+        out.append(text[last:])
+        return "".join(out)
+
+    return _map_all_prose(data, _fix)
+
+
+# --- gold Levels-to-Watch safe-haven polarity --------------------------------
+# 2026-07-13: gold significance read "a breach ABOVE indicates de-escalating inflation fears".
+# Gold is a safe-haven: a move ABOVE = safe-haven / inflation-fear bid ON (risk-off signal); a
+# move BELOW = that bid DRAINING (firmer dollar, easing fear). So an easing/de-escalation
+# sentiment on the ABOVE side — or a rising-fear / haven-demand sentiment on the BELOW side —
+# is inverted. Recurring (also 7/8, 7/9). Flip only the sentiment token, per side.
+_GOLD_ABOVE_CTX = re.compile(r"(?:break|breach|rise|reclaim|move|close|push|climb)\w*\s+above", re.IGNORECASE)
+_GOLD_BELOW_CTX = re.compile(r"(?:break|breach|drop|fall|move|close|slip|dip)\w*\s+below", re.IGNORECASE)
+# Easing-sentiment tokens (wrong on the gold-UP 'above' side) → "rising".
+_GOLD_EASE_TOK = re.compile(
+    r"\b(?:de-?escalat\w*|easing|fading|receding|draining|softening|cooling|abating)\b", re.IGNORECASE)
+# Rising-fear / haven-demand tokens (wrong on the gold-DOWN 'below' side) → "easing".
+_GOLD_RISE_TOK = re.compile(
+    r"\b(?:rising|escalat\w*|intensifying|mounting|surging|safe-haven\s+demand|haven\s+bid)\b", re.IGNORECASE)
+
+
+def _correct_gold_level_polarity(data: dict) -> int:
+    lw = data.get("levels_to_watch")
+    if not isinstance(lw, list):
+        return 0
+    fixes = 0
+    for entry in lw:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("asset", "")).strip().lower().split(" ")[0] != "gold":
+            continue
+        sig = entry.get("significance")
+        if not isinstance(sig, str) or not sig:
+            continue
+        # Split on clause delimiters (keeping them) so each half is classified above/below.
+        segs = re.split(r"(\bwhile\b|;)", sig)
+        changed = False
+        for i, seg in enumerate(segs):
+            if _GOLD_ABOVE_CTX.search(seg):
+                ns = _GOLD_EASE_TOK.sub("rising", seg)
+            elif _GOLD_BELOW_CTX.search(seg):
+                ns = _GOLD_RISE_TOK.sub(
+                    lambda m: "an easing safe-haven bid"
+                    if ("demand" in m.group(0).lower() or "bid" in m.group(0).lower())
+                    else "easing", seg)
+            else:
+                continue
+            if ns != seg:
+                segs[i] = ns
+                changed = True
+        if changed:
+            entry["significance"] = "".join(segs)
+            fixes += 1
+    return fixes
 
 
 # --- #3 belt-and-suspenders: same-day tactical stance vs multi-week outlook ----
@@ -7988,6 +8235,9 @@ def sanitize_commentary(data: dict, snapshot: dict | None = None, source_text: s
     total += _dedup_repeated_words(data)          # collapse "higher higher-for-longer" style repeats
     total += _correct_econ_print_direction(data)  # flip econ verb that contradicts its MoM numbers
     total += _scrub_ungrounded_geo_causation(data)  # drop Iran causal clauses when geo read is unclear/absent
+    total += _scrub_oil_escalation_inversion(data, snapshot)  # oil fell -> not 'driven by' escalation
+    total += _scrub_ungrounded_earnings_driver(data)  # 'X delivered a blockbuster quarter' not in sources
+    total += _correct_gold_level_polarity(data)       # gold above=fear ON, below=fear OFF
     total += _scrub_degenerate_repetition(data)
     total += _correct_fed_hike_language(data)
     total += _scrub_fabricated_corporate_actions(data)
@@ -7998,6 +8248,7 @@ def sanitize_commentary(data: dict, snapshot: dict | None = None, source_text: s
     total += _correct_event_day_slip(data)
     total += _correct_today_econ_event_weekday(data)
     total += _correct_future_econ_event_weekday(data)
+    total += _correct_event_relative_week(data)   # "CPI ... next week" when it's this week
     total += _reconcile_tactical_stance_with_outlook(data)
     total += _scrub_unreleased_econ_prints(data)
     total += _scrub_unreleased_event_attribution(data)
