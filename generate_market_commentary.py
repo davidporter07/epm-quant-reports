@@ -4730,11 +4730,26 @@ _RISK_ENV_RE = re.compile(
     r"\brisk[\s-]?(on|off)\s+(?:environment|regime|backdrop|conditions?|tone|mood|"
     r"sentiment|footing|tape|posture)\b",
     re.IGNORECASE)
-# The FADING carve-out, isolated from _RISK_SKIP_RE: a regime described as DECREASING
-# ("risk-off environment faded") is coherent even against the session sign.
+# Verbs that describe a risk regime as GONE — either DECREASING (fading/easing) or
+# NEGATED/ENDED (invalidated/reversed). Both read coherently against the session sign: the
+# sentence asserts the regime is NOT present, so "risk-on <verb>" on a risk-OFF day is fine.
+# 2026-07-14: the LLM wrote "This escalation invalidates the risk-on regime, forcing investors
+# to flee equities for safety" on a risk-OFF day — directionally correct, but the negation was
+# unrecognized, so it tripped the (D) regime check and burned all 4 Call-2 retries, dropping the
+# whole run to deterministic prose and blocking the 8am send. "invalidates" and its kin now
+# count as fading. Boundaries on end/break variants keep "endured/breakout" (persistence) out.
+_REGIME_GONE_VERBS = (
+    r"fad\w+|eas\w+|ebb\w+|reced\w+|unwind\w+|abat\w+|wan\w+|diminish\w+"
+    r"|invalidat\w+|nullif\w+|negat\w+|dismantl\w+|upend\w+|overturn\w+|revers\w+"
+    r"|undermin\w+|collaps\w+|dissolv\w+|evaporat\w+|shatter\w+"
+    r"|broke\b|broken\b|breaks\b|breaking\b|ends?\b|ended\b|ending\b"
+)
+# The FADING carve-out, isolated from _RISK_SKIP_RE: a regime described as DECREASING or
+# NEGATED ("risk-off environment faded", "escalation invalidates the risk-on regime") is
+# coherent even against the session sign.
 _RISK_FADING_RE = re.compile(
-    r"risk[\s-]?o(?:ff|n)\s+(?:\w+\s+){0,3}(?:fad\w+|eas\w+|ebb\w+|reced\w+|unwind\w+|abat\w+|wan\w+|diminish\w+)"
-    r"|(?:fad\w+|eas\w+|ebb\w+|reced\w+|unwind\w+|abat\w+|wan\w+|diminish\w+)\s+(?:the\s+)?risk[\s-]?o(?:ff|n)",
+    rf"risk[\s-]?o(?:ff|n)\s+(?:\w+\s+){{0,3}}(?:{_REGIME_GONE_VERBS})"
+    rf"|(?:{_REGIME_GONE_VERBS})\s+(?:the\s+)?risk[\s-]?o(?:ff|n)",
     re.IGNORECASE)
 # Skip sentences where the risk regime is framed as a CONTRAST (concessive) or as
 # DECREASING (fading/easing/unwinding) — "equities shrugged off risk-off positioning to
@@ -4743,8 +4758,8 @@ _RISK_SKIP_RE = re.compile(
     r"\b(?:despite|even\s+(?:as|though|after|with)|notwithstanding|regardless|"
     r"in\s+spite\s+of|shrug\w+|ignor\w+|brush\w*\s+aside|defy\w*|defied)\b"
     r"|\blook\w*\s+past\b"
-    r"|risk[\s-]?o(?:ff|n)\s+(?:\w+\s+){0,2}(?:fad\w+|eas\w+|ebb\w+|reced\w+|unwind\w+|abat\w+|wan\w+|diminish\w+)"
-    r"|(?:fad\w+|eas\w+|ebb\w+|reced\w+|unwind\w+|abat\w+|wan\w+|diminish\w+)\s+(?:the\s+)?risk[\s-]?o(?:ff|n)",
+    rf"|risk[\s-]?o(?:ff|n)\s+(?:\w+\s+){{0,2}}(?:{_REGIME_GONE_VERBS})"
+    rf"|(?:{_REGIME_GONE_VERBS})\s+(?:the\s+)?risk[\s-]?o(?:ff|n)",
     re.IGNORECASE)
 
 
@@ -6872,6 +6887,13 @@ _FED_HIKE_SUBS = [
      "higher-for-longer rate concerns"),
     (re.compile(r"\b(?:rate[\-\s]?hike|hike)\s+bias\b", re.IGNORECASE),
      "higher-for-longer bias"),
+    # Narrative/story framings ("sustains the rate-hike narrative") — 2026-07-14 leak. The
+    # HYPHENATED "rate-hike" evaded the bare catch-all (which required whitespace), and no
+    # rule covered the "...narrative/story/talk" suffix, so it shipped in What-to-Watch.
+    (re.compile(r"\b(?:rate[\-\s]?hike|fed[\-\s]?hike|hike)\s+"
+                r"(?:narrative|story|storyline|talk|chatter|rhetoric|drumbeat|theme|thesis)\b",
+                re.IGNORECASE),
+     "higher-for-longer narrative"),
     (re.compile(r"\bfed\s+rate\s+hikes?\b", re.IGNORECASE),
      "a higher-for-longer Fed stance"),
     # Split singular vs plural: the SINGULAR "rate hike" is a discrete event and usually
@@ -6880,9 +6902,9 @@ _FED_HIKE_SUBS = [
     # higher-for-longer rates", "the next scheduled higher-for-longer rates"). The singular
     # state-noun "rate path" reads cleanly under any determiner; reserve the plural for the
     # bare plural "rate hikes". (\b after "hike" keeps the singular rule off "hikes".)
-    (re.compile(r"\brate\s+hikes\b", re.IGNORECASE),
+    (re.compile(r"\brate[\-\s]?hikes\b", re.IGNORECASE),
      "higher-for-longer rates"),
-    (re.compile(r"\brate\s+hike\b", re.IGNORECASE),
+    (re.compile(r"\brate[\-\s]?hike\b", re.IGNORECASE),
      "higher-for-longer rate path"),
 ]
 
@@ -6899,7 +6921,30 @@ def _correct_fed_hike_language(data: dict) -> int:
                 return (r[0].upper() + r[1:]) if at_start else r
             text = rx.sub(_sub, text)
         return text
-    return _map_all_prose(data, _fix)
+    n = _map_all_prose(data, _fix)
+    # The scenario framework (scenarios[].{label,thesis,rates,equities,commodities}) and
+    # levels_to_watch[].significance are NESTED structures, not flat prose fields, so
+    # _map_all_prose never reached them — a rate-hike claim in a scenario's rates line shipped
+    # unrewritten (2026-07-14 Hot scenario: "inflation fears rekindle rate-hike expectations").
+    # Walk them here so the Fed-hike reframe covers the full report body.
+    for sc in (data.get("scenarios") or []):
+        if isinstance(sc, dict):
+            for k in ("label", "thesis", "rates", "equities", "commodities"):
+                v = sc.get(k)
+                if isinstance(v, str) and v:
+                    nv = _fix(v)
+                    if nv != v:
+                        sc[k] = nv
+                        n += 1
+    for lv in (data.get("levels_to_watch") or []):
+        if isinstance(lv, dict):
+            v = lv.get("significance")
+            if isinstance(v, str) and v:
+                nv = _fix(v)
+                if nv != v:
+                    lv["significance"] = nv
+                    n += 1
+    return n
 
 
 # --- foreign-macro trivia scrub (Fix: US econ recap polluted by foreign data) -
