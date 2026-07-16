@@ -63,6 +63,40 @@ def test_change_aligned_when_levels_agree():
     assert y30["_reconciled"] == "arbitrated_change"
 
 
+def test_sign_inverting_arbitrated_change_rejected():
+    # 2026-07-15 regression: levels agree (~4.58) but the arbitrated change (+6 bp, off a stale
+    # prev_value) INVERTS the sign vs Treasury.gov's own consecutive-row change (−4 bp, 4.62 →
+    # 4.58). Keep Treasury.gov's own change so the recap doesn't ship "10Y rose 6 bp" on a day it
+    # fell. Without the guard this shipped an inverted rates narrative to subscribers.
+    bonds = {"10-Year Yield": {"level": 4.58, "change": -0.04, "pct_change": -0.87}}
+    arb   = {"10-Year Yield": {"level": 4.58, "change": 0.06, "pct_change": 1.31}}
+    assert gmc._reconcile_bonds_with_arbitrated(bonds, arb) == 0
+    y10 = bonds["10-Year Yield"]
+    assert y10["change"] == -0.04                  # Treasury.gov's own (correct) change kept
+    assert y10["change"] < 0                        # direction preserved (fell)
+    assert "_reconciled" not in y10                 # arbitrated change was NOT adopted
+
+
+def test_same_sign_magnitude_gap_still_aligned():
+    # Guard must NOT regress the 2026-07-02 case: same sign (both up), magnitude differs
+    # (+11 vs +5) → still adopt the authoritative arbitrated change.
+    bonds = {"30-Year Yield": {"level": 4.97, "change": 0.11, "pct_change": 2.27}}
+    arb   = {"30-Year Yield": {"level": 4.97, "change": 0.05, "pct_change": 1.01}}
+    assert gmc._reconcile_bonds_with_arbitrated(bonds, arb) == 1
+    assert bonds["30-Year Yield"]["change"] == 0.05
+    assert bonds["30-Year Yield"]["_reconciled"] == "arbitrated_change"
+
+
+def test_sign_conflict_below_1bp_is_noise_not_blocked():
+    # A "sign conflict" where one side is sub-1 bp is just rounding noise around zero, not a
+    # real inversion — the guard should NOT trigger; normal adoption proceeds.
+    bonds = {"10-Year Yield": {"level": 4.58, "change": -0.004, "pct_change": -0.09}}
+    arb   = {"10-Year Yield": {"level": 4.58, "change": 0.03, "pct_change": 0.66}}
+    assert gmc._reconcile_bonds_with_arbitrated(bonds, arb) == 1
+    assert bonds["10-Year Yield"]["change"] == 0.03
+    assert bonds["10-Year Yield"]["_reconciled"] == "arbitrated_change"
+
+
 def test_change_not_touched_when_already_agrees():
     # Levels agree AND daily changes agree within rounding → no churn.
     bonds = {"10-Year Yield": {"level": 4.48, "change": 0.06, "pct_change": 1.34}}

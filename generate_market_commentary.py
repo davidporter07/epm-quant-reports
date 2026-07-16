@@ -788,6 +788,7 @@ def fetch_bonds_table() -> dict[str, dict]:
 _YIELD_RECON_TENORS = ("2-Year Yield", "10-Year Yield", "30-Year Yield")
 _YIELD_DIVERGE_BP = 0.02      # >2 bp gap ⇒ Treasury.gov is stale, not rounding noise
 _YIELD_MAX_DAILY  = 0.50      # >50 bp/day ⇒ artefact, don't apply
+_YIELD_SIGN_MIN   = 0.01      # ≥1 bp each side before a sign conflict is meaningful (not noise)
 
 
 def _adopt_arbitrated_change(bonds_tbl: dict, name: str, tsy: dict, arb: dict) -> bool:
@@ -806,6 +807,23 @@ def _adopt_arbitrated_change(bonds_tbl: dict, name: str, tsy: dict, arb: dict) -
         tsy_chg = None
     if tsy_chg is not None and abs(arb_chg - tsy_chg) <= _YIELD_DIVERGE_BP:
         return False  # changes already agree within rounding — leave it
+    # Sign-inversion guard (2026-07-15): this function only runs once the LEVELS agree, which
+    # means Treasury.gov's row is fresh and its own daily change — computed from consecutive
+    # official curve rows — is a definitionally-correct day-over-day move. The arbitrated
+    # (YCharts/data_arbiter) change depends on a prev_value that can go stale (observed:
+    # prev_value == value in ycharts_live.json); a stale prev INVERTS the sign. On 2026-07-15
+    # that overrode Treasury.gov's correct −4 bp (10Y 4.62 → 4.58) with a stale +6 bp, shipping
+    # "the 10-year yield rose 6 bp" when it actually fell, inverting the whole rates narrative.
+    # So when both changes are material and point in OPPOSITE directions, keep Treasury.gov's
+    # own change — two sources that agree on the level should never disagree on direction; when
+    # they do, the consecutive official rows are the more reliable baseline. (The 2026-07-02 30Y
+    # case this branch was built for was a SAME-sign magnitude gap, +11 vs +5, so it is unaffected.)
+    if (tsy_chg is not None and abs(tsy_chg) >= _YIELD_SIGN_MIN and abs(arb_chg) >= _YIELD_SIGN_MIN
+            and (tsy_chg > 0) != (arb_chg > 0)):
+        print(f"  [WARN] Yield change SIGN conflict on {name}: Treasury.gov {tsy_chg:+.3f} vs "
+              f"arbitrated {arb_chg:+.3f} at an agreed level ({tsy.get('level')}) — keeping "
+              f"Treasury.gov's consecutive-row change (arbitrated prev_value likely stale).")
+        return False
     new = dict(tsy)
     new["change"] = round(arb_chg, 3)
     try:
